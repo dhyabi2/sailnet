@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Sailnet mark: a sail cut from a single black square. Monochrome only. -->
+  <rect width="256" height="256" fill="#000"/>
+  <path d="M72 200 L72 56 L184 200 Z" fill="#fff"/>
+  <path d="M96 200 L96 128 L152 200 Z" fill="#000"/>
+  <rect x="56" y="208" width="144" height="12" fill="#fff"/>
+</svg>

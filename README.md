@@ -162,6 +162,31 @@ the Firefox build and, when the store credentials are set as repository
 secrets (see the workflow header), uploads to the Chrome Web Store and
 submits to addons.mozilla.org on every version tag.
 
+## Desktop apps
+
+`sail/cmd/sailgui` is the macOS and Windows client: one small window with
+connect, wallet (address, balance, where to get XNO), status and settings
+(hops, exit country, censored mode, bridges). It runs the same client as
+`sailnode client` and serves a SOCKS5 proxy on 127.0.0.1:1080 and DNS on
+127.0.0.1:5300 for browsers and the extension. Releases carry
+`Sailnet-macos-arm64.dmg`, `Sailnet-macos-amd64.dmg` and
+`Sailnet-windows-amd64.exe`.
+
+The `Desktop apps` workflow signs and notarizes when the certificates are in
+the repository secrets (Developer ID certificate and notarytool credentials
+for macOS, a code-signing PFX for Windows; see the workflow header). Without
+them the builds are unsigned: macOS needs right-click → Open the first time,
+Windows shows SmartScreen's "Run anyway".
+
+Build locally: `cd sail && go build ./cmd/sailgui` (needs a C compiler; on
+Windows, MSYS2/mingw-w64).
+
+## Website and brand
+
+`website/` is the static site, published by GitHub Pages from `main`.
+`brand/` holds the mark and wordmark (SVG) and the app icon, with the rules:
+black and white only, no gradients, no rounded corners.
+
 ## Build from source
 
 ```

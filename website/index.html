@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sailnet</title>
+<meta name="description" content="A rewarded privacy network paid in XNO. Run a relay and earn Nano; route your traffic through circuits that look like ordinary HTTPS.">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #fff; color: #000; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.4; }
+  a { color: #000; text-decoration: underline; text-underline-offset: 3px; }
+  a:hover { background: #000; color: #fff; text-decoration: none; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  header { border-bottom: 2px solid #000; }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+  .brand { display: flex; align-items: center; gap: 14px; font-weight: 700; letter-spacing: .28em; font-size: 18px; text-decoration: none; }
+  .brand:hover { background: none; color: #000; }
+  .brand img { width: 36px; height: 36px; display: block; }
+  nav a { margin-left: 28px; font-size: 14px; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; }
+  .hero { padding: 96px 0 72px; border-bottom: 2px solid #000; }
+  .hero h1 { font-size: clamp(40px, 8vw, 96px); font-weight: 700; line-height: .95; letter-spacing: -.02em; max-width: 14ch; }
+  .hero p { font-size: 20px; max-width: 56ch; margin-top: 28px; }
+  .cta { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-block; border: 2px solid #000; padding: 14px 22px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; font-size: 13px; text-decoration: none; }
+  .btn.solid { background: #000; color: #fff; }
+  .btn.solid:hover { background: #fff; color: #000; }
+  section { padding: 64px 0; border-bottom: 2px solid #000; }
+  h2 { font-size: 13px; letter-spacing: .28em; text-transform: uppercase; margin-bottom: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0; border-top: 1px solid #000; border-left: 1px solid #000; }
+  .cell { border-right: 1px solid #000; border-bottom: 1px solid #000; padding: 24px; }
+  .cell h3 { font-size: 18px; margin-bottom: 10px; }
+  .cell p { font-size: 15px; }
+  pre { background: #000; color: #fff; padding: 20px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin-top: 16px; }
+  .dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .dl a { border: 2px solid #000; padding: 18px; text-decoration: none; display: block; }
+  .dl a:hover { background: #000; color: #fff; }
+  .dl strong { display: block; letter-spacing: .12em; text-transform: uppercase; font-size: 12px; margin-bottom: 6px; }
+  footer { padding: 40px 0; font-size: 13px; }
+  footer code { font-family: Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="/"><img src="logo.svg" alt="">SAILNET</a>
+  <nav><a href="#run">Run a relay</a><a href="#use">Use it</a><a href="#how">How it works</a><a href="https://github.com/dhyabi2/sailnet">GitHub</a></nav>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <h1>Privacy that pays its own way.</h1>
+  <p>Sailnet is a relay network paid in XNO. Relays carry onion-routed circuits over ordinary-looking HTTPS and are paid per megabyte, directly, on the Nano ledger. No token, no accounts, no company in the middle.</p>
+  <div class="cta">
+    <a class="btn solid" href="https://github.com/dhyabi2/sailnet/releases/latest">Download</a>
+    <a class="btn" href="#run">Run a relay, earn XNO</a>
+  </div>
+</div></div>
+
+<section id="use"><div class="wrap">
+  <h2>Use it</h2>
+  <div class="dl">
+    <a href="https://github.com/dhyabi2/sailnet/releases/latest"><strong>Android</strong>Whole-device VPN. Funds itself with a few thousandths of an XNO.</a>
+    <a href="https://github.com/dhyabi2/sailnet/releases/latest"><strong>macOS</strong>Small menu-style app: connect, wallet, status.</a>
+    <a href="https://github.com/dhyabi2/sailnet/releases/latest"><strong>Windows</strong>The same app. SOCKS5 proxy for any browser.</a>
+    <a href="https://github.com/dhyabi2/sailnet/releases/latest"><strong>Chrome &amp; Firefox</strong>One-click proxy toggle with WebRTC leak guard.</a>
+  </div>
+</div></section>
+
+<section id="run"><div class="wrap">
+  <h2>Run a relay</h2>
+  <p>Any VPS or home PC. Earnings are swept every hour to a wallet you control.</p>
+<pre>docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/data \
+  ghcr.io/dhyabi2/sailnet relay --listen :443 --ip &lt;your IP&gt; --cc &lt;country&gt; \
+  --register --payout nano_your_wallet_address</pre>
+  <p style="margin-top:16px">Behind NAT, no port forwarding: <code>sailnode earn --home --payout nano_…</code></p>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <div class="grid">
+    <div class="cell"><h3>Circuits</h3><p>Three hops, one ChaCha20-Poly1305 layer per hop, fixed-size cells, replay windows. The entry sees you, the exit sees the site, nobody sees both.</p></div>
+    <div class="cell"><h3>Payment</h3><p>An XNO send to the entry relay is the circuit tag. Signed offline, published by the relay. Nobody extends credit, so there is nothing to ban.</p></div>
+    <div class="cell"><h3>Registry on the ledger</h3><p>Relays register in Nano state blocks. Public, verifiable, no server to seize. Signed gossip fills in when the ledger is out of reach.</p></div>
+    <div class="cell"><h3>Looks like HTTPS</h3><p>A Chrome ClientHello, a WebSocket upgrade, a decoy website for anyone else. Traffic shaping tuned against a TLS-in-TLS classifier on the live network.</p></div>
+    <div class="cell"><h3>Bridges</h3><p>Unlisted entries with secrets, handed out a few per invite, retired when burned.</p></div>
+    <div class="cell"><h3>Rewards</h3><p>Relays share 10 % of daily earnings with each other, 60 % by seniority and 40 % by bytes served. Cheaper relays get more traffic by construction.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <p>Open source. <a href="https://github.com/dhyabi2/sailnet">github.com/dhyabi2/sailnet</a></p>
+  <p style="margin-top:8px">Treasury <code>nano_1cexacexqrr51coik9eeqzebmfej7g6chrd1eygmzm9ad86qek84pnhpda1t</code></p>
+</div></footer>
+</body>
+</html>

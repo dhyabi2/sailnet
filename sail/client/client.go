@@ -1133,3 +1133,25 @@ func RequireLocalNode(nc *nano.Client, allowPublic bool) {
 		log.Printf("Nano node %s (%s): synced, %d blocks cemented", st.URL, st.Version, st.Cemented)
 	}
 }
+
+// ServeSOCKS listens on addr and serves SOCKS5 until the listener is closed.
+// The desktop app uses it; the CLI has its own loop in runClient.
+func (m *manager) ServeSOCKS(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go m.serveSocks(conn)
+		}
+	}()
+	return ln, nil
+}
+
+// ServeDNS answers DNS on addr by forwarding through the circuit to upstream.
+func (m *manager) ServeDNS(addr, upstream string) { m.serveDNS(addr, upstream) }
