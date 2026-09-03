@@ -1,9 +1,9 @@
 name: Desktop apps
 
-# macOS .app/.dmg and Windows .exe of the Sailnet desktop client, built with
+# macOS .dmg, Windows .exe and Linux .tar.xz of the Sailnet desktop client, built with
 # fyne, attached to the release on version tags. Signing happens when the
 # certificates are present as secrets; without them the artifacts are
-# unsigned and still run (macOS: right-click → Open; Windows: SmartScreen
+# unsigned and still run. Every artifact ships with a .sha256 next to it (macOS: right-click → Open; Windows: SmartScreen
 # "Run anyway").
 #
 # Secrets, all optional:
@@ -81,14 +81,16 @@ jobs:
             xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD" --wait
             xcrun stapler staple "$dmg"
           done
+      - name: Checksums
+        run: cd out && for f in *.dmg; do shasum -a 256 "$f" > "$f.sha256"; done && cat *.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: out/*.dmg
+          path: out/*
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          files: out/*.dmg
+          files: out/*
 
   windows:
     runs-on: windows-latest
@@ -119,11 +121,45 @@ jobs:
           [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:PFX))
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
           & $signtool.FullName sign /f cert.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 out\Sailnet-windows-amd64.exe
+      - name: Checksums
+        shell: bash
+        run: cd out && for f in *.exe; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: out/*.exe
+          path: out/*
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          files: out/*.exe
+          files: out/*
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sail/go.mod
+          cache-dependency-path: sail/go.sum
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
+          go install fyne.io/tools/cmd/fyne@latest
+      - name: Build (amd64)
+        working-directory: sail/cmd/sailgui
+        run: |
+          mkdir -p ../../../out
+          CGO_ENABLED=1 fyne package -os linux -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
+          mv Sailnet.tar.xz ../../../out/Sailnet-linux-amd64.tar.xz
+          CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o ../../../out/sailgui-linux-amd64 .
+      - name: Checksums
+        run: cd out && for f in Sailnet-linux-amd64.tar.xz sailgui-linux-amd64; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: out/*
