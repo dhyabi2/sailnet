@@ -129,9 +129,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal">
-                    <Button android:id="@+id/faucets" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Free faucets" />
-                    <Button android:id="@+id/binance" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Binance" />
-                    <Button android:id="@+id/kraken" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Kraken" />
+                    <Button android:id="@+id/faucets" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Free faucets" />
+                    <Button android:id="@+id/binance" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Binance" />
+                    <Button android:id="@+id/kraken" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Kraken" />
                 </LinearLayout>
                 <ImageView
                     android:id="@+id/qr"

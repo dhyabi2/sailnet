@@ -70,7 +70,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         toggle.setOnClickListener { if (SailVpnService.running) stopVpn() else prepareAndStart() }
         ui.post(refresh)
-        if (Prefs.nick(this).isEmpty()) askNickname() else if (Prefs.autoConnect(this) && !SailVpnService.running) prepareAndStart()
+        when {
+            Prefs.nick(this).isEmpty() -> askNickname()
+            Prefs.rpcUrl(this).isEmpty() -> askRpc()
+            Prefs.autoConnect(this) && !SailVpnService.running -> prepareAndStart()
+        }
     }
 
     /** First launch: a nickname that replaces the wallet address and device IPs in every log and screen. */
@@ -87,6 +91,34 @@ class MainActivity : AppCompatActivity() {
                 val n = input.text.toString().trim().ifEmpty { "Sailor" }
                 Prefs.setNick(this, n)
                 title = "Sailnet · $n"
+                if (Prefs.rpcUrl(this).isEmpty()) askRpc()
+            }
+            .show()
+    }
+
+    /** First launch: which Nano RPC to ask first, and the key for rpc.nano.to. Changeable later in Settings. */
+    private fun askRpc() {
+        val box = android.widget.LinearLayout(this)
+        box.orientation = android.widget.LinearLayout.VERTICAL
+        box.setPadding(48, 16, 48, 0)
+        val url = android.widget.EditText(this)
+        url.hint = "RPC endpoint"
+        url.setText("https://rpc.nano.to")
+        url.setSingleLine()
+        val key = android.widget.EditText(this)
+        key.hint = "rpc.nano.to API key (optional)"
+        key.setSingleLine()
+        key.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        box.addView(url)
+        box.addView(key)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Nano RPC")
+            .setMessage("The app reads the ledger through this endpoint (payments, relay list). Public fallbacks are used if it fails. A key from rpc.nano.to raises its rate limit and is sent only to that host.")
+            .setView(box)
+            .setCancelable(false)
+            .setPositiveButton("Save") { _, _ ->
+                Prefs.setRpc(this, url.text.toString().ifBlank { "https://rpc.nano.to" }, key.text.toString())
+                if (Prefs.autoConnect(this) && !SailVpnService.running) prepareAndStart()
             }
             .show()
     }

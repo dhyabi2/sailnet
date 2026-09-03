@@ -482,7 +482,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		}
 		names := make([]string, len(path))
 		for i, p := range path {
-			names[i] = fmt.Sprintf("%s(%s)", p.Country, p.Desc.IP)
+			names[i] = fmt.Sprintf("%s(%s)", p.Country, short(p.Account))
 		}
 		log.Printf("building circuit: %s", strings.Join(names, " → "))
 		t0 := time.Now()
@@ -829,7 +829,7 @@ func runFetch(args []string) {
 		log.Fatal(err)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	fmt.Printf("%s via %d hops (exit %s %s)\n%s\n", resp.Status, len(c.Path), c.Path[len(c.Path)-1].Country, c.Path[len(c.Path)-1].Desc.IP, strings.TrimSpace(string(body)))
+	fmt.Printf("%s via %d hops (exit %s %s)\n%s\n", resp.Status, len(c.Path), c.Path[len(c.Path)-1].Country, short(c.Path[len(c.Path)-1].Account), strings.TrimSpace(string(body)))
 	if q, err := c.QueryQuota(8 * time.Second); err == nil {
 		fmt.Printf("prepaid bytes remaining at entry: %d\n", q)
 	}
@@ -909,7 +909,7 @@ func (m *manager) gossipBootstrap() {
 		}
 	}
 	for _, r := range m.reg.All() {
-		KeepIP(r.Desc.IP.String()) // relays stay readable in redacted logs; only the user's own addresses are hidden
+		KeepIP(r.Desc.IP.String()) // a relay address that slips into a log reads "relay", never as the user's device
 	}
 	if added > 0 {
 		log.Printf("gossip: learned %d relay record(s) from %d relay(s); %d relays known", added, asked, len(m.reg.All()))
@@ -955,14 +955,14 @@ func (m *manager) measureRTT() {
 			m.mu.Lock()
 			m.mark(r.Account, false) // blocked or down from here: route around it
 			m.mu.Unlock()
-			log.Printf("relay %s (%s) unreachable from this network: %v", r.Country, r.Desc.IP, err)
+			log.Printf("relay %s (%s) unreachable from this network: %v", r.Country, short(r.Account), err)
 			continue
 		}
 		c.Close()
 		m.mu.Lock()
 		m.rtt[r.Account] = time.Since(t0)
 		m.mu.Unlock()
-		log.Printf("rtt %s (%s): %s", r.Country, r.Desc.IP, time.Since(t0).Round(time.Millisecond))
+		log.Printf("rtt %s (%s): %s", r.Country, short(r.Account), time.Since(t0).Round(time.Millisecond))
 	}
 }
 

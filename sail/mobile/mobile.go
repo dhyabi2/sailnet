@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dhyabi2/sail/client"
+	"github.com/dhyabi2/sail/nano"
 	"github.com/dhyabi2/sail/relay"
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -44,6 +45,8 @@ type Options struct {
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
 	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
 	Censored    bool   `json:"censored"`    // bridges only, no probes, never a direct ledger call
+	RPCURL      string `json:"rpcUrl"`      // Nano RPC endpoint tried first, default https://rpc.nano.to
+	RPCKey      string `json:"rpcKey"`      // API key for rpc.nano.to (sent to that host only)
 }
 
 var (
@@ -108,6 +111,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	}
 	os.Setenv("SAIL_HOME", home)
 	os.MkdirAll(home, 0o700)
+	nano.ConfigureRPC(o.RPCURL, o.RPCKey)
 	key0 := client.EnsureWallet()
 	client.SetNick(o.Nick, key0.Address)
 	log.SetOutput(client.RedactingWriter{W: io.MultiWriter(os.Stderr, logs)})

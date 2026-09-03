@@ -82,16 +82,23 @@ func (c *Client) Call(ctx context.Context, body map[string]any, out any) error {
 	if err := b.Wait(ctx, fmt.Sprint(body["action"])); err != nil {
 		return err
 	}
-	if c.APIKey != "" {
-		body["key"] = c.APIKey
-	}
 	raw, _ := json.Marshal(body)
 	var lastErr error
 	for _, u := range c.URLs {
 		if c.benched(u) {
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(raw))
+		payload := raw
+		if c.APIKey != "" && strings.Contains(u, "rpc.nano.to") {
+			// The key belongs to rpc.nano.to only; never hand it to a fallback.
+			keyed := map[string]any{}
+			for k, v := range body {
+				keyed[k] = v
+			}
+			keyed["key"] = c.APIKey
+			payload, _ = json.Marshal(keyed)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 		if err != nil {
 			return err
 		}
@@ -339,7 +346,7 @@ func (c *Client) WorkGenerate(ctx context.Context, rootHex string, threshold uin
 
 // callDirect posts to one endpoint, ignoring the cooldown list and the budget.
 func (c *Client) callDirect(ctx context.Context, u string, body map[string]any, out any) error {
-	if c.APIKey != "" {
+	if c.APIKey != "" && strings.Contains(u, "rpc.nano.to") {
 		body["key"] = c.APIKey
 	}
 	raw, _ := json.Marshal(body)
@@ -429,4 +436,28 @@ func isLocalURL(raw string) bool {
 // holds is cemented. A node still bootstrapping has a large gap.
 func (s NodeStatus) Synced() bool {
 	return s.Count > 0 && s.Cemented > 0 && s.Count-s.Cemented < 100000
+}
+
+// ConfigureRPC sets the endpoint list and key every later NewClient uses:
+// url first (if given), then the public defaults as fallbacks. The apps call
+// it from their settings; the CLI uses the NANO_RPC_URLS / NANO_RPC_KEY
+// environment directly.
+func ConfigureRPC(url, key string) {
+	url = strings.TrimSpace(url)
+	if url != "" {
+		urls := []string{url}
+		for _, u := range DefaultRPCs {
+			if u != url {
+				urls = append(urls, u)
+			}
+		}
+		os.Setenv("NANO_RPC_URLS", strings.Join(urls, ","))
+	} else {
+		os.Unsetenv("NANO_RPC_URLS")
+	}
+	if key = strings.TrimSpace(key); key != "" {
+		os.Setenv("NANO_RPC_KEY", key)
+	} else {
+		os.Unsetenv("NANO_RPC_KEY")
+	}
 }

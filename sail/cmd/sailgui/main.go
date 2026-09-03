@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/dhyabi2/sail/client"
+	"github.com/dhyabi2/sail/nano"
 )
 
 //go:embed Icon.png
@@ -35,6 +36,8 @@ type prefs struct {
 	Censored bool   `json:"censored"`
 	Bridges  string `json:"bridges"`
 	Nick     string `json:"nick"`
+	RPCURL   string `json:"rpcUrl"`
+	RPCKey   string `json:"rpcKey"`
 }
 
 type ring struct {
@@ -71,7 +74,7 @@ func home() string {
 }
 
 func loadPrefs() prefs {
-	p := prefs{Hops: 3, Socks: "127.0.0.1:1080"}
+	p := prefs{Hops: 3, Socks: "127.0.0.1:1080", RPCURL: "https://rpc.nano.to"}
 	if b, err := os.ReadFile(filepath.Join(home(), "gui.json")); err == nil {
 		json.Unmarshal(b, &p)
 	}
@@ -96,6 +99,7 @@ func main() {
 	logs := &ring{}
 	log.SetOutput(client.RedactingWriter{W: logs})
 	p := loadPrefs()
+	nano.ConfigureRPC(p.RPCURL, p.RPCKey)
 	key := client.EnsureWallet()
 	client.SetNick(p.Nick, key.Address)
 
@@ -210,6 +214,12 @@ func main() {
 	nick := widget.NewEntry()
 	nick.SetPlaceHolder("nickname shown instead of the wallet address")
 	nick.SetText(p.Nick)
+	rpcURL := widget.NewEntry()
+	rpcURL.SetPlaceHolder("Nano RPC endpoint, e.g. https://rpc.nano.to")
+	rpcURL.SetText(p.RPCURL)
+	rpcKey := widget.NewPasswordEntry()
+	rpcKey.SetPlaceHolder("rpc.nano.to API key (optional, sent only to that host)")
+	rpcKey.SetText(p.RPCKey)
 	censored := widget.NewCheck("Censored network: bridges only, no probes", nil)
 	censored.SetChecked(p.Censored)
 	bridges := widget.NewMultiLineEntry()
@@ -223,6 +233,9 @@ func main() {
 		p.Nick = strings.TrimSpace(nick.Text)
 		p.Censored = censored.Checked
 		p.Bridges = bridges.Text
+		p.RPCURL = strings.TrimSpace(rpcURL.Text)
+		p.RPCKey = strings.TrimSpace(rpcKey.Text)
+		nano.ConfigureRPC(p.RPCURL, p.RPCKey)
 		savePrefs(p)
 		client.SetNick(p.Nick, key.Address)
 		dialog.ShowInformation("Saved", "Settings apply to the next connection.", w)
@@ -230,7 +243,9 @@ func main() {
 	settings := container.NewVBox(
 		widget.NewLabelWithStyle("SETTINGS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewGridWithColumns(2, widget.NewLabel("Hops"), hops),
-		exit, socks, nick, censored, bridges, save,
+		exit, socks, nick, censored, bridges,
+		widget.NewLabelWithStyle("NANO RPC", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		rpcURL, rpcKey, save,
 	)
 
 	main := container.NewVBox(

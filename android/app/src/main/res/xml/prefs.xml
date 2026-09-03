@@ -40,6 +40,20 @@
             android:defaultValue="false" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Nano RPC">
+        <EditTextPreference
+            android:key="rpc_url"
+            android:title="RPC endpoint"
+            android:summary="Nano node the app asks first, e.g. https://rpc.nano.to. Public fallbacks are used when it fails. Applies to the next connection."
+            android:defaultValue="https://rpc.nano.to" />
+        <EditTextPreference
+            android:key="rpc_key"
+            android:title="RPC key"
+            android:summary="API key for rpc.nano.to (raises its rate limit). Sent only to that host."
+            android:inputType="textPassword"
+            android:defaultValue="" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Relays">
         <SwitchPreferenceCompat
             android:key="use_builtin_bridges"

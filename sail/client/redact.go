@@ -37,7 +37,8 @@ func Nick() string {
 	return nick
 }
 
-// KeepIP marks an address as a relay's, so it stays readable in logs.
+// KeepIP marks an address as a relay's, so it is logged as "relay" rather
+// than as the user's device. Relays are named by country and short account.
 func KeepIP(ip string) {
 	redMu.Lock()
 	relayIPs[ip] = true
@@ -63,8 +64,11 @@ func Redact(s string) string {
 		return a[:11] + "…" // other accounts (relays) stay recognisable but short
 	})
 	s = ipRe.ReplaceAllStringFunc(s, func(ip string) string {
-		if keep[ip] || strings.HasPrefix(ip, "127.") {
+		if strings.HasPrefix(ip, "127.") {
 			return ip
+		}
+		if keep[ip] {
+			return "relay"
 		}
 		return label + "'s device"
 	})
