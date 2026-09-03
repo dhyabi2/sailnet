@@ -90,7 +90,7 @@ func runRelay(args []string) {
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node (payments and peers are then disclosed to a third-party RPC provider)")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
 	payoutKeep := fs.String("payout-keep", "0.02", "XNO kept on the node as operating float for pools and the levy")
-	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default; see docs/REWARDS.md)")
+	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
 	certFile := fs.String("cert", "", "PEM certificate chain to present (e.g. Let's Encrypt for --host); default: a generated self-signed cert")
 	acme := fs.Bool("acme", false, "obtain and renew a real certificate for --host from Let's Encrypt automatically (the domain must point at this host; port 443 required)")
