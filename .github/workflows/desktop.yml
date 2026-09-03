@@ -144,7 +144,7 @@ jobs:
       - name: Toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev
+          sudo apt-get install -y -qq gcc libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev
           go install fyne.io/tools/cmd/fyne@latest
       - name: Build (amd64)
         working-directory: sail/cmd/sailgui
