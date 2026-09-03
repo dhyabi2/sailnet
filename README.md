@@ -71,6 +71,80 @@ capture, DNS through the circuit and the status endpoint for the browser
 extension. Android: install the APK from Releases; the app funds
 itself the same way and shows where to get XNO.
 
+## How it works
+
+**Circuits.** A client builds a telescoping three-hop circuit: CREATE to the
+entry, then EXTEND through each established hop, with an X25519 handshake per
+hop. Every cell is 1 024 bytes and carries one ChaCha20-Poly1305 layer per hop,
+peeled at each relay; nonces are per-hop, per-direction sequence numbers with a
+64-cell anti-replay window, so no relay can replay or reorder cells to tag
+traffic. The entry sees the client, the exit sees the destination, nobody sees
+both. Streams inside a circuit carry TCP, UDP (datagram streams, length-framed)
+and DNS to the exit.
+
+**Payment.** No token and no accounts: the client sends XNO to the entry relay
+and the send's block hash is the circuit tag. In stealth mode the client never
+contacts a Nano node; it signs the block offline from a cached chain state and
+hands it to the entry, which publishes and verifies it. Relays prepay the next
+hop from pooled sends and meter every cell against quota, so nobody extends
+credit and there is nothing to ban. Earnings are swept hourly to `--payout`.
+
+**Registry.** Relays register on the Nano ledger itself: REGISTER and
+DESCRIPTOR operations encoded in the representative field of state blocks
+sent to the treasury account, so the relay list is public, verifiable and
+needs no server. Relays also sign their own records and gossip them, so a
+client with a single bridge line and no ledger in reach still learns the
+network; forged records need the relay's private key.
+
+**Transport.** A relay is an HTTPS site. The client sends a current Chrome
+ClientHello (uTLS) with the relay's hostname as SNI, then a standard WebSocket
+upgrade whose path carries a daily token derived from the relay key; any other
+path gets the decoy website with an identical 404 for probes. Cells ride in
+real RFC 6455 frames, so a bridge can sit behind a WebSocket-aware CDN.
+`--acme` fetches Let's Encrypt certificates; the CREATED ack signs the SHA-256
+of the live TLS leaf with the relay's ledger key, so a forged certificate is
+caught inside the circuit handshake.
+
+**Traffic shaping, measured.** The tunnel writer batches cells asynchronously
+with quiet-gap coalescing (30 ms, capped at 250 ms or 16 KiB), writes
+full-size TLS records, holds back sub-record remainders, and replays the first
+records of a connection from a profile of real HTTPS. `sailtrace` taps the
+TCP stream under TLS, reconstructs records the way a DPI box does, trains a
+random forest over the published TLS-in-TLS feature set plus the
+encapsulated-handshake rule, and tunes the parameters against it on the live
+network. The shipped defaults are the measured ones.
+
+**Bridges.** `relay --unlisted` never touches the ledger and prints a bridge
+line with a secret; the token is derived from key and secret, so a prober who
+read the ledger still gets the decoy. Holders of a secret get a small free
+bootstrap circuit to fund themselves. `bridgedb` hands out a few bridges per
+invite code and retires burned ones from reports. A relay can serve on
+several ports; the extra ports are bridge lines.
+
+**Home nodes.** `sailnode earn --home` runs a relay on a PC behind NAT:
+NAT-PMP/PCP and UPnP with retransmits, a public-IP truth check against
+carrier-grade NAT, and when the PC cannot be reached, an outbound tunnel to a
+public relay (its harbour) that bridges circuits onto it, with the harbour's
+country in the registry so the ledger never says where the operator is.
+
+**Rewards.** Every relay owes 10 % of each day's earnings to the others, 60 %
+by age and 40 % by performance, paid peer to peer with epoch-tagged sends;
+clients recompute the table from the ledger and draw paths by a weighted
+lottery that excludes non-payers. Opt-in with `--levy`.
+
+**Clients.** Desktop: SOCKS5 with remote DNS, a DNS resolver that forwards
+through the circuit, optional whole-device capture (DNS sinkhole plus Host/SNI
+listeners), a status endpoint that only browser extensions may read, and a
+nickname that replaces the wallet address and device addresses in every log.
+Android: a VpnService with a userspace network stack routes all TCP and UDP
+through the circuit, and a kill switch keeps the tunnel as a black hole if the
+client fails to start. Chrome: a proxy toggle with a WebRTC guard.
+
+**Privacy limits, stated plainly.** Sailnet cannot hide the device's MAC
+address or hostname on the local network, or the funding graph of a wallet on
+the public ledger; fund relay and client wallets from an exchange if they must
+not be linkable to you.
+
 ## Build from source
 
 ```
