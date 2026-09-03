@@ -1,0 +1,38 @@
+# Three Sailnet relays in three "countries" + one client, no ledger needed.
+# Relays publish descriptors into the shared /registry volume; the client reads it.
+# FREE_TAG is a preauthorized payment tag (test mode only).
+x-relay: &relay
+  build: { context: .., dockerfile: docker/Dockerfile }
+  volumes: [ "registry:/registry" ]
+  networks: [ sailnet ]
+  environment:
+    FREE_TAG: ${FREE_TAG:-1111111111111111111111111111111111111111111111111111111111111111}
+
+services:
+  relay-nl:
+    <<: *relay
+    hostname: relay-nl
+    environment: { SEED: "${SEED_NL}" }
+    command: [ "relay", "--listen", ":443", "--cc", "NL", "--asn", "1", "--rate", "0.00002", "--pool", "0", "--registry-dir", "/registry", "--name", "relay-nl", "--free-tag", "${FREE_TAG:-1111111111111111111111111111111111111111111111111111111111111111}" ]
+  relay-sg:
+    <<: *relay
+    hostname: relay-sg
+    environment: { SEED: "${SEED_SG}" }
+    command: [ "relay", "--listen", ":443", "--cc", "SG", "--asn", "2", "--rate", "0.00002", "--pool", "0", "--registry-dir", "/registry", "--name", "relay-sg", "--free-tag", "${FREE_TAG:-1111111111111111111111111111111111111111111111111111111111111111}" ]
+  relay-us:
+    <<: *relay
+    hostname: relay-us
+    environment: { SEED: "${SEED_US}" }
+    command: [ "relay", "--listen", ":443", "--cc", "US", "--asn", "3", "--rate", "0.00002", "--pool", "0", "--registry-dir", "/registry", "--name", "relay-us", "--free-tag", "${FREE_TAG:-1111111111111111111111111111111111111111111111111111111111111111}" ]
+  client:
+    <<: *relay
+    hostname: client
+    depends_on: [ relay-nl, relay-sg, relay-us ]
+    environment: { SEED: "${SEED_CLIENT}" }
+    command: [ "client", "--socks", "0.0.0.0:1080", "--hops", "3", "--registry-dir", "/registry", "--free-tag", "${FREE_TAG:-1111111111111111111111111111111111111111111111111111111111111111}" ]
+    ports: [ "1080:1080" ]
+
+volumes:
+  registry: {}
+networks:
+  sailnet: {}

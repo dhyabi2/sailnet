@@ -1,0 +1,96 @@
+name: Android release
+
+# Builds the Go library with gomobile, then the signed APK, and attaches it to a
+# GitHub release whenever a tag like v0.3.0 is pushed. Manual runs produce a
+# downloadable artifact without a release.
+#
+# Secrets needed (Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_BASE64  base64 of the release keystore (.jks)
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without them the workflow falls back to the debug-signed universal APK.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # `secrets` cannot be read in a step's `if`; decide here instead.
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sail/go.mod
+          cache-dependency-path: sail/go.sum
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK + NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0 ndk;26.3.11579264"
+
+      - name: gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Bind Go library (arm64, arm, x86_64)
+        working-directory: sail
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
+        run: |
+          gomobile init
+          mkdir -p ../android/app/libs
+          gomobile bind -ldflags="-s -w" -target android/arm64,android/arm,android/amd64 -androidapi 24 \
+            -javapkg net.sailnet -o ../android/app/libs/sail.aar ./mobile
+
+      - name: Release keystore
+        id: keystore
+        if: env.HAS_KEYSTORE == 'true'
+        working-directory: android
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.jks
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: android
+        env:
+          SAIL_KEYSTORE: ${{ steps.keystore.outputs.present == 'true' && 'release.jks' || '' }}
+          SAIL_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SAIL_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SAIL_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [ -n "$SAIL_KEYSTORE" ]; then ./gradlew assembleRelease --no-daemon; else ./gradlew assembleDebug --no-daemon; fi
+          mkdir -p out
+          cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sailnet-apk
+          path: android/out/*.apk
+
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/out/*.apk
+          generate_release_notes: true

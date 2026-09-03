@@ -1,0 +1,23 @@
+# secrets: never commit wallets or seeds
+.wallet/
+deploy/wallets/
+docker/wallets/
+docker/.env
+**/wallet.json
+**/*-wallet.json
+release.jks
+# build output
+sail/bin/
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/app/libs/sail.aar
+android/app/libs/sail-sources.jar
+*.apk
+*.zip
+.DS_Store
+
+# operator identity and per-deploy records never go in git
+deploy/state/
+node_modules/

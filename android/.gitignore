@@ -1,0 +1,7 @@
+build/
+app/build/
+.gradle/
+local.properties
+*.apk
+app/libs/sail.aar
+app/libs/sail-sources.jar

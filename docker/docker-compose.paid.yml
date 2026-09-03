@@ -1,0 +1,11 @@
+# Paid mode: real XNO payments on Nano. Discovery still via the shared
+# registry volume (container IPs are private); no free tags, pools top up on-chain.
+services:
+  relay-nl:
+    command: [ "relay", "--listen", ":443", "--cc", "NL", "--asn", "1", "--rate", "0.00002", "--pool", "0.001", "--registry-dir", "/registry", "--name", "relay-nl" ]
+  relay-sg:
+    command: [ "relay", "--listen", ":443", "--cc", "SG", "--asn", "2", "--rate", "0.00002", "--pool", "0.001", "--registry-dir", "/registry", "--name", "relay-sg" ]
+  relay-us:
+    command: [ "relay", "--listen", ":443", "--cc", "US", "--asn", "3", "--rate", "0.00002", "--pool", "0.001", "--registry-dir", "/registry", "--name", "relay-us" ]
+  client:
+    command: [ "client", "--socks", "0.0.0.0:1080", "--hops", "3", "--registry-dir", "/registry", "--anchor", "0.0005", "--rate", "0.00005" ]

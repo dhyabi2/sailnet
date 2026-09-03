@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="hops_labels">
+        <item>2 hops (faster, entry sees the exit)</item>
+        <item>3 hops (recommended)</item>
+        <item>4 hops (slower)</item>
+    </string-array>
+    <string-array name="hops_values">
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+</resources>

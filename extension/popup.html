@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sailnet</title>
+<style>
+  :root { --ink:#18232b; --ink2:#4a5860; --line:#d5dcdb; --sail:#0e6f6a; --sailsoft:#dff1ee; --warn:#b3731a; --warnsoft:#f8ecd9; --bg:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#e6ecea; --ink2:#a3b0ac; --line:#2b373c; --sail:#5cc7bf; --sailsoft:#123a37; --warn:#e0a55a; --warnsoft:#3a2b14; --bg:#161f24; } }
+  body { margin:0; width:320px; font:14px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  .wrap { padding:16px; }
+  h1 { font-size:18px; margin:0 0 2px; }
+  .sub { color:var(--ink2); font-size:12px; margin-bottom:12px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .state { font-weight:600; }
+  .pill { font:11px monospace; padding:2px 8px; border-radius:999px; }
+  .on { background:var(--sailsoft); color:var(--sail); } .warn { background:var(--warnsoft); color:var(--warn); }
+  button { font:inherit; padding:8px 12px; border-radius:6px; border:1px solid var(--line); background:transparent; color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--sail); color:#fff; border-color:var(--sail); }
+  .kv { margin-top:12px; display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-size:12.5px; }
+  .kv b { color:var(--ink2); font-weight:500; }
+  .mono { font-family:ui-monospace, Menlo, monospace; word-break:break-all; }
+  details { margin-top:12px; border-top:1px solid var(--line); padding-top:8px; }
+  summary { cursor:pointer; color:var(--ink2); font-size:12px; }
+  label { display:block; font-size:12px; color:var(--ink2); margin-top:8px; }
+  input { width:100%; box-sizing:border-box; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--ink); }
+  .actions { margin-top:10px; display:flex; gap:8px; }
+  .hint { font-size:11.5px; color:var(--ink2); margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sailnet</h1>
+  <div class="sub">This browser through the circuit. SOCKS5 with remote DNS, WebRTC guarded.</div>
+  <div class="row">
+    <span class="state" id="state">Off</span>
+    <button class="primary" id="toggle">Turn on</button>
+  </div>
+  <div class="kv">
+    <b>Circuit</b><span class="mono" id="path">—</span>
+    <b>Balance</b><span id="balance">—</span>
+    <b>Traffic</b><span id="traffic">—</span>
+    <b>Wallet</b><span class="mono" id="address">—</span>
+  </div>
+  <div class="actions">
+    <button id="rebuild">New exit</button>
+    <button id="copy">Copy wallet</button>
+  </div>
+  <div class="hint" id="hint"></div>
+  <details>
+    <summary>Settings</summary>
+    <label>SOCKS5 host <input id="socksHost"></label>
+    <label>SOCKS5 port <input id="socksPort"></label>
+    <label>Status endpoint <input id="statusUrl"></label>
+    <div class="actions"><button id="save">Save</button></div>
+    <div class="hint">Run <span class="mono">sailnode client</span> on this computer. Defaults match it.</div>
+  </details>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
