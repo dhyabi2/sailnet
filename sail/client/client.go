@@ -575,7 +575,7 @@ func runClient(args []string) {
 	bridge := fs.String("bridge", "", "bridge line(s) of unlisted entry relays, comma-separated (also read from SAIL_HOME/bridges.txt); bridges are preferred as entry")
 	fs.Parse(args)
 	// SAIL_TRACE=<file> records every TLS record of the client's relay
-	// connections, as a censor on the path would see them (docs/SHAPING.md).
+	// connections, as a censor on the path would see them.
 	if tf := os.Getenv("SAIL_TRACE"); tf != "" {
 		sink, err := shape.Create(tf)
 		if err != nil {
@@ -657,7 +657,7 @@ func newStealthManager(hops int, exitCC, anchor, rate, freeTag string) *manager 
 	nc := newNano()
 	// Keep the connection to the RPC open between calls: every call on its
 	// own stream cost BEGIN, an inner TLS handshake, the request and END,
-	// a dozen cells of upstream per circuit that docs/SHAPING.md measured.
+	// a dozen cells of upstream per circuit that the shaping measurement found.
 	nc.HTTP = &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{DialContext: m.dialViaCircuit, TLSHandshakeTimeout: 20 * time.Second, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second}}
 	init := newManagerWith(m, nc, hops, exitCC, anchor, rate, "", freeTag)
 	log.Printf("stealth: Nano RPC only through the circuit; payments signed offline")
