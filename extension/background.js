@@ -9,19 +9,36 @@ async function settings() {
 
 // Chrome resolves hostnames at the SOCKS5 proxy itself for scheme "socks5",
 // so no DNS query leaves the machine for proxied traffic.
+const isFirefox = typeof navigator !== "undefined" && /Firefox/.test(navigator.userAgent);
+
 async function applyProxy(on) {
   const s = await settings();
   if (on) {
-    await chrome.proxy.settings.set({
-      value: {
-        mode: "fixed_servers",
-        rules: {
-          singleProxy: { scheme: "socks5", host: s.socksHost, port: Number(s.socksPort) },
-          bypassList: ["127.0.0.1", "localhost", "<-loopback>"]
-        }
-      },
-      scope: "regular"
-    });
+    if (isFirefox) {
+      // Firefox's proxy settings have their own shape; proxyDNS keeps name
+      // resolution at the SOCKS proxy, as Chrome's socks5 scheme does.
+      await chrome.proxy.settings.set({
+        value: {
+          proxyType: "manual",
+          socks: s.socksHost + ":" + Number(s.socksPort),
+          socksVersion: 5,
+          proxyDNS: true,
+          passthrough: "localhost, 127.0.0.1"
+        },
+        scope: "regular"
+      });
+    } else {
+      await chrome.proxy.settings.set({
+        value: {
+          mode: "fixed_servers",
+          rules: {
+            singleProxy: { scheme: "socks5", host: s.socksHost, port: Number(s.socksPort) },
+            bypassList: ["127.0.0.1", "localhost", "<-loopback>"]
+          }
+        },
+        scope: "regular"
+      });
+    }
     // WebRTC must not reveal the real address around the proxy.
     try { await chrome.privacy.network.webRTCIPHandlingPolicy.set({ value: "disable_non_proxied_udp" }); } catch (e) {}
   } else {

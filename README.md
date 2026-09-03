@@ -145,6 +145,23 @@ address or hostname on the local network, or the funding graph of a wallet on
 the public ledger; fund relay and client wallets from an exchange if they must
 not be linkable to you.
 
+## Browser extensions
+
+`extension/` is one code base for Chrome and Firefox: a proxy toggle that
+points the browser at the local client's SOCKS5 port with remote DNS, a
+WebRTC leak guard, and the live circuit status from the client's status
+endpoint. Releases carry `sailnet-chrome.zip` and `sailnet-firefox.zip`.
+
+- Chrome: `chrome://extensions`, Developer mode, "Load unpacked" on the
+  unzipped folder (or install from the Chrome Web Store once listed).
+- Firefox: `about:debugging`, "Load Temporary Add-on" on the zip (or install
+  from addons.mozilla.org once listed).
+
+`extension/build.sh` packages both. The `Browser extensions` workflow lints
+the Firefox build and, when the store credentials are set as repository
+secrets (see the workflow header), uploads to the Chrome Web Store and
+submits to addons.mozilla.org on every version tag.
+
 ## Build from source
 
 ```

@@ -1,3 +1,12 @@
+// setState renders "text [pill]" without innerHTML (store reviewers reject it).
+function setState(text, pill, cls) {
+  const el = document.getElementById("state");
+  el.textContent = text + " ";
+  const span = document.createElement("span");
+  span.className = "pill " + cls;
+  span.textContent = pill;
+  el.appendChild(span);
+}
 const $ = id => document.getElementById(id);
 const send = msg => new Promise(r => chrome.runtime.sendMessage(msg, r));
 
@@ -13,16 +22,16 @@ async function render() {
   const on = settings.enabled;
   $("toggle").textContent = on ? "Turn off" : "Turn on";
   if (!on) {
-    $("state").innerHTML = 'Off <span class="pill warn">direct</span>';
+    setState("Off", "direct", "warn");
     $("hint").textContent = "Pages load directly. Turn on to route Chrome through Sailnet.";
   } else if (status && status.path) {
-    $("state").innerHTML = 'On <span class="pill on">' + status.hops + " hops</span>";
+    setState("On", status.hops + " hops", "on");
     $("hint").textContent = "";
   } else if (status) {
-    $("state").innerHTML = 'Building circuit <span class="pill warn">wait</span>';
+    setState("Building circuit", "wait", "warn");
     $("hint").textContent = "Paying the entry relay and extending the circuit. Pages will load in a few seconds.";
   } else {
-    $("state").innerHTML = 'Client not running <span class="pill warn">blocked</span>';
+    setState("Client not running", "blocked", "warn");
     $("hint").textContent = "The proxy is fixed to the client's port, so nothing leaks: pages will not load until you start `sailnode client`.";
   }
   if (status) {

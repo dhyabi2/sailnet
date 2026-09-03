@@ -1,0 +1,59 @@
+name: Browser extensions
+
+# Packages the Chrome and Firefox extensions on every version tag and attaches
+# them to the release. When store credentials are present as secrets, it also
+# uploads to the Chrome Web Store and submits to addons.mozilla.org.
+#
+# Secrets (Settings → Secrets and variables → Actions), all optional:
+#   CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN
+#       Chrome Web Store: a developer account ($5 one-time), the extension
+#       created once by hand, and an OAuth client for the Web Store API.
+#   AMO_JWT_ISSUER, AMO_JWT_SECRET
+#       addons.mozilla.org: API credentials from the developer hub.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      HAS_CWS: ${{ secrets.CWS_REFRESH_TOKEN != '' }}
+      HAS_AMO: ${{ secrets.AMO_JWT_SECRET != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Package
+        run: extension/build.sh
+      - name: Lint for Firefox
+        run: npx --yes web-ext lint --source-dir extension/out/firefox --warnings-as-errors=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extensions
+          path: extension/out/*.zip
+      - name: Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension/out/*.zip
+      - name: Chrome Web Store upload + publish
+        if: env.HAS_CWS == 'true'
+        env:
+          EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: npx --yes chrome-webstore-upload-cli@3 upload --source extension/out/sailnet-chrome.zip --auto-publish
+      - name: Firefox Add-ons submit
+        if: env.HAS_AMO == 'true'
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: npx --yes web-ext sign --source-dir extension/out/firefox --channel listed --artifacts-dir extension/out/signed

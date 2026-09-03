@@ -22,3 +22,4 @@ android/app/libs/sail-sources.jar
 deploy/state/
 docs/research/deploy*.log
 docs/research/fund*.log
+extension/out/
