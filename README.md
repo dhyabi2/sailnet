@@ -71,6 +71,82 @@ capture, DNS through the circuit and the status endpoint for the browser
 extension. Android: install the APK from Releases; the app funds
 itself the same way and shows where to get XNO.
 
+## Built to be hard to censor
+
+Every one of these is in the code today, not a plan.
+
+- **Looks like a website.** A relay is an HTTPS server with a real decoy site.
+  The client sends a current Chrome ClientHello (uTLS) with the relay's
+  hostname as SNI, then a standard WebSocket upgrade; only a path carrying a
+  daily token derived from the relay key opens the tunnel. Any other request,
+  including active probes that replay or guess paths, gets the decoy page and
+  an identical 404.
+- **Real certificates.** `--acme` fetches Let's Encrypt certificates for a
+  real domain, so nothing is self-signed; the circuit handshake signs the
+  SHA-256 of the live leaf with the relay's ledger key, so a middlebox that
+  forges a certificate is caught inside the tunnel, not trusted.
+- **Real WebSocket framing.** Cells travel in RFC 6455 frames, so an inspector
+  that follows the handshake sees a well-formed WebSocket and a bridge can sit
+  behind a WebSocket-aware CDN or reverse proxy.
+- **Traffic shaping that was measured, not assumed.** The tunnel writer
+  batches cells with quiet-gap coalescing, writes full-size TLS records, holds
+  back sub-record remainders and replays the first records of a connection
+  from a profile of real HTTPS. `sailtrace` captures record-level traces under
+  TLS the way a DPI box sees them, trains a random forest over the published
+  TLS-in-TLS feature set plus the encapsulated-handshake rule, and the shipped
+  parameters are the ones tuned against it on the live network.
+- **No fixed rhythm.** Keepalives are jittered; there is no periodic pattern
+  to key on.
+- **Bridges with secrets.** `relay --unlisted` never touches the ledger and
+  hands out a bridge line with a 16-byte secret; the tunnel token is derived
+  from the key and the secret, so someone who read the ledger and has the
+  address still gets the decoy. Relays can listen on several ports; the extra
+  ports are bridge lines, so blocking one port is not enough.
+- **Metered bridge distribution.** `bridgedb` hands out a few bridges per
+  invite code from buckets; reports from three distinct invites retire a
+  bridge and refill the buckets, so an enumerator burns invites, not the
+  network.
+- **Bootstrap without any Nano node.** A client that holds a bridge secret
+  gets a small free circuit to reach the ledger through the bridge and fund
+  itself. In stealth mode the client never contacts a Nano node at all: it
+  signs its payment offline from a cached chain state and the entry relay
+  publishes it, and every later ledger call goes through the circuit's exit.
+- **Censored-network profile.** `--censored` (the app's switch): bridges are
+  the only entries, listed relays are never probed from the real address,
+  gossip is fetched only from bridges, and there is never a direct ledger call.
+- **No single list to block.** Relays register on the Nano ledger itself,
+  which cannot be taken down, and also gossip signed records to each other, so
+  a client with one working bridge learns the whole network without the
+  ledger. A forged record needs the relay's private key.
+- **DNS never leaves the device.** The client answers DNS locally and
+  forwards each query through the circuit to a resolver at the exit; the
+  Android app and whole-device capture sinkhole every name.
+- **Kill switch.** On Android the tunnel stays up as a black hole if the
+  client fails to start; nothing falls back to the open network.
+- **Home relays.** A PC behind NAT registers with its harbour's country and no
+  ASN, and reaches the harbour through an ingress circuit, so the ledger never
+  says where the operator is and there is a supply of residential entries.
+- **Payment that cannot be frozen.** No accounts, no token, no company: an XNO
+  send is the ticket, and anyone can run a relay and be paid.
+
+Nothing here has been measured from inside a censored network yet; the
+measurement rig and the bridge distribution service are what that will be
+done with.
+
+### macOS: "cannot be opened because the developer cannot be verified"
+
+That message is Gatekeeper reporting that the build is unsigned, which is the
+case until the repository has an Apple Developer ID certificate. Open it once
+with right-click → Open (or System Settings → Privacy & Security → Open
+Anyway); after that it launches normally. To make the warning disappear for
+everyone, join the Apple Developer Program (US$99/year, any legal entity or
+person; a domain such as sailnet.space is not enough on its own), create a
+*Developer ID Application* certificate and an app-specific password, and add
+`MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`,
+`APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` as repository secrets.
+The next tag is then signed and notarized automatically. Windows is the same
+story with a code-signing certificate in `WINDOWS_CERT_PFX_BASE64`.
+
 ## How it works
 
 **Circuits.** A client builds a telescoping three-hop circuit: CREATE to the

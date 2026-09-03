@@ -1,12 +1,22 @@
-// Renders brand/icon-1024.png from the same geometry as logo.svg, so the app
-// icon needs no SVG rasteriser and is pixel-exact monochrome.
+// Renders the Sailnet mark (the same geometry as brand/logo.svg) to a PNG:
+//
+//	go run ./cmd/brandicon out.png [size]
+//
+// Navy and light green only, no anti-aliasing tricks, pixel-exact at any size.
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
+)
+
+var (
+	navy   = color.NRGBA{0x0B, 0x1F, 0x3A, 255}
+	green  = color.NRGBA{0x9F, 0xE8, 0xB3, 255}
+	green2 = color.NRGBA{0xC8, 0xF5, 0xD3, 255} // the aft sail, a lighter green
 )
 
 func inTri(px, py, x1, y1, x2, y2, x3, y3 float64) bool {
@@ -18,31 +28,40 @@ func inTri(px, py, x1, y1, x2, y2, x3, y3 float64) bool {
 	return !(neg && pos)
 }
 
+func inQuad(px, py float64, q [8]float64) bool {
+	return inTri(px, py, q[0], q[1], q[2], q[3], q[4], q[5]) || inTri(px, py, q[0], q[1], q[4], q[5], q[6], q[7])
+}
+
 func main() {
-	const n = 1024
-	s := float64(n) / 256
-	img := image.NewGray(image.Rect(0, 0, n, n))
-	for y := 0; y < n; y++ {
-		for x := 0; x < n; x++ {
-			px, py := (float64(x)+0.5)/s, (float64(y)+0.5)/s
-			c := uint8(0)
-			if inTri(px, py, 72, 200, 72, 56, 184, 200) {
-				c = 255
-			}
-			if inTri(px, py, 96, 200, 96, 128, 152, 200) {
-				c = 0
-			}
-			if px >= 56 && px < 200 && py >= 208 && py < 220 {
-				c = 255
-			}
-			img.SetGray(x, y, color.Gray{c})
-		}
-	}
-	out := "icon-1024.png"
+	out, n := "icon-1024.png", 1024
 	if len(os.Args) > 1 {
 		out = os.Args[1]
 	}
-	f, _ := os.Create(out)
+	if len(os.Args) > 2 {
+		fmt.Sscan(os.Args[2], &n)
+	}
+	s := float64(n) / 48
+	img := image.NewNRGBA(image.Rect(0, 0, n, n))
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			px, py := (float64(x)+0.5)/s, (float64(y)+0.5)/s
+			c := navy
+			if inTri(px, py, 24, 4, 24, 30, 8, 30) {
+				c = green
+			}
+			if inTri(px, py, 27, 8, 27, 30, 40, 30) {
+				c = green2
+			}
+			if inQuad(px, py, [8]float64{6, 34, 42, 34, 38, 42, 10, 42}) {
+				c = green
+			}
+			img.SetNRGBA(x, y, c)
+		}
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		panic(err)
+	}
 	defer f.Close()
 	png.Encode(f, img)
 }

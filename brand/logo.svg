@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Sailnet mark: a sail cut from a single black square. Monochrome only. -->
-  <rect width="256" height="256" fill="#000"/>
-  <path d="M72 200 L72 56 L184 200 Z" fill="#fff"/>
-  <path d="M96 200 L96 128 L152 200 Z" fill="#000"/>
-  <rect x="56" y="208" width="144" height="12" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="256" height="256">
+  <!-- Sailnet mark: two sails and a hull. Navy #0B1F3A and light green #9FE8B3 only. -->
+  <rect width="48" height="48" fill="#0B1F3A"/>
+  <path d="M24 4 L24 30 L8 30 Z" fill="#9FE8B3"/>
+  <path d="M27 8 L27 30 L40 30 Z" fill="#C8F5D3"/>
+  <path d="M6 34 L42 34 L38 42 L10 42 Z" fill="#9FE8B3"/>
 </svg>

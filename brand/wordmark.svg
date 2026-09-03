@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 128" width="640" height="128">
-  <rect width="640" height="128" fill="#000"/>
-  <path d="M36 100 L36 28 L92 100 Z" fill="#fff"/>
-  <path d="M48 100 L48 64 L76 100 Z" fill="#000"/>
-  <rect x="28" y="104" width="72" height="6" fill="#fff"/>
-  <text x="128" y="88" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="10" fill="#fff">SAILNET</text>
+  <rect width="640" height="128" fill="#0B1F3A"/>
+  <g transform="translate(24,16) scale(2)">
+    <path d="M24 4 L24 30 L8 30 Z" fill="#9FE8B3"/>
+    <path d="M27 8 L27 30 L40 30 Z" fill="#C8F5D3"/>
+    <path d="M6 34 L42 34 L38 42 L10 42 Z" fill="#9FE8B3"/>
+  </g>
+  <text x="136" y="88" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="10" fill="#9FE8B3">SAILNET</text>
 </svg>

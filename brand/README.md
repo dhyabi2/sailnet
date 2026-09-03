@@ -1,11 +1,10 @@
 # Sailnet brand
 
-Stark monochrome. Black `#000000`, white `#FFFFFF`, nothing else; no
-gradients, no shadows, no rounded corners. Type is Helvetica Neue / Helvetica
-/ Arial, bold, tracked wide for the wordmark. The mark is a sail cut from a
-black square with a waterline under it; it must always sit on black or white
-and may be inverted, never recoloured.
+Two colours, flat: navy `#0B1F3A` and light green `#9FE8B3`. No gradients,
+no shadows, no rounded corners. Type is Helvetica Neue / Helvetica / Arial,
+bold, tracked wide for the wordmark. The mark is two sails and a hull; it is
+the same file everywhere (Android, desktop, extension, website).
 
-- `logo.svg` the mark (square)
+- `logo.svg` the mark
 - `wordmark.svg` mark + SAILNET
-- `icon-1024.png` app icon rendered from the mark
+- `icon-1024.png` rendered by `sail/cmd/brandicon` (`go run ./cmd/brandicon out.png [size]`)
