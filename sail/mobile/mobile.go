@@ -38,7 +38,7 @@ type Options struct {
 	Hops        int    `json:"hops"`        // 2..4, default 3
 	ExitCC      string `json:"exitCC"`      // preferred exit country, "" = any
 	Anchor      string `json:"anchor"`      // XNO per prepaid anchor, default 0.0005
-	MaxRate     string `json:"maxRate"`     // max XNO per MiB accepted, default 0.00005
+	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
 	Stealth     bool   `json:"stealth"`     // no direct ledger calls once the wallet state is cached
 	Bridges     string `json:"bridges"`     // bridge lines, newline separated
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
@@ -101,7 +101,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 		o.Anchor = "0.0005"
 	}
 	if o.MaxRate == "" {
-		o.MaxRate = "0.00005"
+		o.MaxRate = "0"
 	}
 	if o.DNSUpstream != "" {
 		upstream = o.DNSUpstream

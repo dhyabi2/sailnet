@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,7 +84,7 @@ type clientOpts struct {
 	hops    int
 	exitCC  string
 	anchor  *big.Int // raw XNO per prepaid anchor
-	rate    uint32   // max price accepted (RateUnitRaw per MiB)
+	rate    uint32   // max price accepted on any hop (RateUnitRaw per MiB); 0 = 3x the median
 	timeout time.Duration
 	regDir  string
 	freeTag string
@@ -181,11 +182,21 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	if len(all) < m.opts.hops {
 		return nil, fmt.Errorf("only %d relays on the ledger, need %d", len(all), m.opts.hops)
 	}
+	// Price: the customer is the buyer. Every hop must be at or under the
+	// cap (by default three times the median published price, so the cap
+	// follows the market rather than a number baked into a binary), and the
+	// draw is weighted by (median / price)^2, so a relay that doubles its
+	// price gets a quarter of the traffic. That, plus the fact that anyone
+	// can register a cheaper relay, is what keeps a cartel from holding.
+	median, cap := m.priceCap(all)
 	usable := all[:0:0]
 	for _, r := range all {
-		if m.scoreOf(r.Account) >= 0.3 && !m.opts.avoid[r.Account] && !m.skip[r.Account] {
+		if m.scoreOf(r.Account) >= 0.3 && !m.opts.avoid[r.Account] && !m.skip[r.Account] && r.MinRate <= cap {
 			usable = append(usable, r)
 		}
+	}
+	if len(usable) < m.opts.hops {
+		return nil, fmt.Errorf("only %d relays at or under %s XNO/MiB (median %s), need %d", len(usable), token.FormatXNO(token.RateToRaw(cap)), token.FormatXNO(token.RateToRaw(median)), m.opts.hops)
 	}
 	var path []*relay.RelayInfo
 	used := map[string]bool{}
@@ -207,7 +218,14 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	weight := func(r *relay.RelayInfo) float64 {
 		w := m.scoreOf(r.Account) * m.reg.RewardTerm(r.Account, mode)
 		w /= math.Sqrt(math.Sqrt(float64(cc[r.Country]) * float64(asn[r.ASN]))) // rarity, dampened
-		if rtt, ok := m.rtt[r.Account]; ok && rtt > 0 {                         // nearer first, dampened
+		if median > 0 {                                                         // cheaper relays get more of the demand
+			price := float64(r.MinRate)
+			if price < float64(median)/4 {
+				price = float64(median) / 4 // a free or near-free relay is not handed everything
+			}
+			w *= (float64(median) / price) * (float64(median) / price)
+		}
+		if rtt, ok := m.rtt[r.Account]; ok && rtt > 0 { // nearer first, dampened
 			w /= math.Sqrt(math.Sqrt(rtt.Seconds()*10 + 0.1))
 		}
 		return w
@@ -305,6 +323,29 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	return path, nil
 }
 
+// priceCap returns the median published price and the cap a hop must meet:
+// the user's --rate when set, else three times the median.
+func (m *manager) priceCap(all []*relay.RelayInfo) (median, cap uint32) {
+	var rates []int
+	for _, r := range all {
+		if r.MinRate > 0 {
+			rates = append(rates, int(r.MinRate))
+		}
+	}
+	if len(rates) > 0 {
+		sort.Ints(rates)
+		median = uint32(rates[len(rates)/2])
+	}
+	cap = m.opts.rate
+	if cap == 0 {
+		cap = 3 * median
+		if cap == 0 {
+			cap = math.MaxUint32
+		}
+	}
+	return median, cap
+}
+
 type errors string
 
 func (e errors) Error() string { return string(e) }
@@ -313,7 +354,7 @@ func (e errors) Error() string { return string(e) }
 // the circuit tag, and the signed block is handed to the relay so it can
 // publish and verify it without the client touching any RPC.
 func (m *manager) anchorTo(entry *relay.RelayInfo) error {
-	if entry.MinRate > m.opts.rate {
+	if _, cap := m.priceCap(m.reg.All()); entry.MinRate > cap {
 		return fmt.Errorf("entry %s wants %s XNO/MiB, above your cap", entry.Account, token.FormatXNO(token.RateToRaw(entry.MinRate)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -501,7 +542,7 @@ func (m *manager) keepalive(c *relay.Circuit) {
 			return
 		}
 		if q, err := c.QueryQuota(8 * time.Second); err == nil {
-			need := relay.BytesFor(m.opts.anchor, token.RateToRaw(m.opts.rate)) / 4
+			need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4
 			if q < need {
 				log.Printf("quota low (%d bytes left): next circuit will pay again", q)
 				m.mu.Lock()
@@ -518,7 +559,7 @@ func runClient(args []string) {
 	hops := fs.Int("hops", 3, "circuit length")
 	exitCC := fs.String("exit-cc", "", "preferred exit country")
 	anchor := fs.String("anchor", "0.0005", "XNO per prepaid anchor")
-	rate := fs.String("rate", "0.00005", "max XNO per MiB you accept")
+	rate := fs.String("rate", "0", "max XNO per MiB you accept on any hop (0 = three times the median published price)")
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag (fragment-B hash of a SAIL transfer to the entry) instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
@@ -534,7 +575,7 @@ func runClient(args []string) {
 	bridge := fs.String("bridge", "", "bridge line(s) of unlisted entry relays, comma-separated (also read from SAIL_HOME/bridges.txt); bridges are preferred as entry")
 	fs.Parse(args)
 	// SAIL_TRACE=<file> records every TLS record of the client's relay
-	// connections, as a censor on the path would see them.
+	// connections, as a censor on the path would see them (docs/SHAPING.md).
 	if tf := os.Getenv("SAIL_TRACE"); tf != "" {
 		sink, err := shape.Create(tf)
 		if err != nil {
@@ -616,7 +657,7 @@ func newStealthManager(hops int, exitCC, anchor, rate, freeTag string) *manager 
 	nc := newNano()
 	// Keep the connection to the RPC open between calls: every call on its
 	// own stream cost BEGIN, an inner TLS handshake, the request and END,
-	// a dozen cells of upstream per circuit that the shaping measurement found.
+	// a dozen cells of upstream per circuit that docs/SHAPING.md measured.
 	nc.HTTP = &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{DialContext: m.dialViaCircuit, TLSHandshakeTimeout: 20 * time.Second, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second}}
 	init := newManagerWith(m, nc, hops, exitCC, anchor, rate, "", freeTag)
 	log.Printf("stealth: Nano RPC only through the circuit; payments signed offline")
@@ -761,7 +802,7 @@ func runFetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	hops := fs.Int("hops", 3, "circuit length")
 	anchor := fs.String("anchor", "0.0005", "XNO per prepaid anchor")
-	rate := fs.String("rate", "0.00005", "max XNO per MiB")
+	rate := fs.String("rate", "0", "max XNO per MiB on any hop (0 = three times the median published price)")
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")

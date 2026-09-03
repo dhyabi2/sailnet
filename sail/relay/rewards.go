@@ -44,7 +44,7 @@ const (
 	AgeCap         = 180
 	EpochSeconds   = 86400
 	MinPaidPercent = 95 // tolerance for rounding and RPC timestamp skew at epoch edges
-	// Anti-manipulation parameters:
+	// Anti-manipulation parameters (see docs/REWARDS.md, "Why it resists manipulation"):
 	// an epoch counts toward age only with real earnings from several payers;
 	// tiny payers do not count toward performance and large ones are capped;
 	// and no relay can receive more than RewardCapPercent of its own levy, so
@@ -53,6 +53,7 @@ const (
 	MinPayers        = 3     // distinct payers above MinPayerXNO for an epoch to count
 	MinPayerXNO      = 0.001 // payers below this are ignored for age and performance
 	PayerCapXNO      = 0.1   // performance credit per payer is capped at sqrt(this)
+	ReferenceRate    = 200   // 0.00002 XNO/MiB in REGISTER rate units: the price performance is measured at
 	RewardCapPercent = 80    // a relay receives at most this share of its own levy
 )
 
@@ -223,9 +224,18 @@ func ComputeEpoch(ctx context.Context, nc *nano.Client, treasury string, e uint3
 				break
 			}
 		}
+		// Performance credit counts service, not revenue: each payer's XNO is
+		// converted to what it bought at this relay's published price and
+		// expressed at the reference price, so a relay that charges double
+		// earns no more credit per byte than one that charges the base rate.
+		// Otherwise the reward would favour high prices, which the customer pays.
+		scale := 1.0
+		if rel := st.Relays[acct]; rel != nil && rel.MinRate > 0 {
+			scale = float64(ReferenceRate) / float64(rel.MinRate)
+		}
 		for _, v := range row.Payers {
 			if x := xno(v); x >= MinPayerXNO {
-				row.Perf += math.Min(math.Sqrt(x), math.Sqrt(PayerCapXNO))
+				row.Perf += math.Min(math.Sqrt(x*scale), math.Sqrt(PayerCapXNO))
 			}
 		}
 		row.LevyOwed.Mul(row.Earned, big.NewInt(LevyPercent))
@@ -370,7 +380,7 @@ func (t *EpochTable) Compliant(acct string) bool {
 	return r.Paid.Cmp(need) >= 0
 }
 
-// String renders the table for inspection.
+// String renders the table for audit.
 func (t *EpochTable) String() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "epoch %d (%s UTC)\n", t.Epoch, time.Unix(int64(t.Epoch)*EpochSeconds, 0).UTC().Format("2006-01-02"))

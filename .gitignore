@@ -20,4 +20,5 @@ android/app/libs/sail-sources.jar
 
 # operator identity and per-deploy records never go in git
 deploy/state/
-node_modules/
+docs/research/deploy*.log
+docs/research/fund*.log
