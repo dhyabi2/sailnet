@@ -103,21 +103,21 @@ class MainActivity : AppCompatActivity() {
         box.setPadding(48, 16, 48, 0)
         val url = android.widget.EditText(this)
         url.hint = "RPC endpoint"
-        url.setText("https://rpc.nano.to")
+        url.setText("https://www.sailnet.space/node/api")
         url.setSingleLine()
         val key = android.widget.EditText(this)
-        key.hint = "rpc.nano.to API key (optional)"
+        key.hint = "rpc.nano.to API key (only for that endpoint)"
         key.setSingleLine()
         key.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         box.addView(url)
         box.addView(key)
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Nano RPC")
-            .setMessage("The app reads the ledger through this endpoint (payments, relay list). Public fallbacks are used if it fails. A key from rpc.nano.to raises its rate limit and is sent only to that host.")
+            .setMessage("The app reads the ledger through this endpoint (payments, relay list). The default is Sailnet's own endpoint; you may use rpc.nano.to with your key, or your own node. Public fallbacks are used if it fails.")
             .setView(box)
             .setCancelable(false)
             .setPositiveButton("Save") { _, _ ->
-                Prefs.setRpc(this, url.text.toString().ifBlank { "https://rpc.nano.to" }, key.text.toString())
+                Prefs.setRpc(this, url.text.toString().ifBlank { "https://www.sailnet.space/node/api" }, key.text.toString())
                 if (Prefs.autoConnect(this) && !SailVpnService.running) prepareAndStart()
             }
             .show()

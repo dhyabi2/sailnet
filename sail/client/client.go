@@ -566,6 +566,8 @@ func runClient(args []string) {
 	stealth := fs.Bool("stealth", true, "no direct Nano RPC: ledger calls go through the circuit, payments are signed from the cached chain state and published by the relay")
 	dns := fs.String("dns", "127.0.0.1:5300", "answer DNS here by resolving through the circuit at the exit (empty = off)")
 	status := fs.String("status", "127.0.0.1:1090", "JSON status endpoint for UIs and the browser extension (empty = off)")
+	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
+	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	capture := fs.Bool("capture", false, "whole-device mode: DNS sinkhole on :53 and listeners on :80/:443 that route every flow through the circuit by Host/SNI (needs administrator rights)")
 	capAddrs := fs.String("capture-ports", "127.0.0.1:53,127.0.0.1:80,127.0.0.1:443", "with --capture: DNS sinkhole, HTTP and HTTPS listen addresses")
 	subvert := fs.Bool("subvert-dns", false, "with --capture: point the operating system's resolver at 127.0.0.1 and restore it on exit")
@@ -574,6 +576,9 @@ func runClient(args []string) {
 	censoredFlag = fs.Bool("censored", false, "censored-network profile: bridges are the only entries, no startup probes to listed relays, never any direct ledger call")
 	bridge := fs.String("bridge", "", "bridge line(s) of unlisted entry relays, comma-separated (also read from SAIL_HOME/bridges.txt); bridges are preferred as entry")
 	fs.Parse(args)
+	if *rpcURL != "" || *rpcKey != "" {
+		nano.ConfigureRPC(*rpcURL, *rpcKey)
+	}
 	// SAIL_TRACE=<file> records every TLS record of the client's relay
 	// connections, as a censor on the path would see them.
 	if tf := os.Getenv("SAIL_TRACE"); tf != "" {
@@ -1123,6 +1128,8 @@ func RequireLocalNode(nc *nano.Client, allowPublic bool) {
 		return
 	case err != nil:
 		log.Fatalf("Nano RPC: %v. A relay needs its own Nano node: run deploy/nano-node.sh, then set NANO_RPC_URLS=http://127.0.0.1:7076 (or pass --allow-public-rpc for tests only)", err)
+	case !st.Local && (strings.HasPrefix(st.URL, nano.PrimaryRPC) || strings.HasPrefix(st.URL, nano.FallbackRPC)):
+		log.Printf("Nano RPC: Sailnet's endpoint %s (run your own node and pass --rpc http://127.0.0.1:7076 to keep lookups private)", st.URL)
 	case !st.Local && !allowPublic:
 		log.Fatalf("Nano RPC %s is a public endpoint. A live relay must use its own node (it would otherwise disclose every payer, tag and peer it looks up to that provider, and trust it for confirmations). Run deploy/nano-node.sh and set NANO_RPC_URLS=http://127.0.0.1:7076, or pass --allow-public-rpc for tests only", st.URL)
 	case !st.Local:

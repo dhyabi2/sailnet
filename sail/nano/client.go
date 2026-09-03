@@ -20,20 +20,21 @@ import (
 	"time"
 )
 
-// Default public RPC endpoints. rpc.nano.to first (supports work_generate),
-// then community proxies; requests fail over on transport errors, 5xx, 429
-// and empty bodies. Set NANO_RPC_URLS (comma-separated) to override.
-var (
-	PrimaryRPC  = "https://rpc.nano.to"
-	FallbackRPC = "https://rpc.nano-gpt.com"
-	DefaultRPCs = []string{PrimaryRPC, "https://node.somenano.com/proxy", "https://nanoslo.0x.no/proxy", "https://app.natrium.io/api", FallbackRPC}
+// Default RPC endpoints. Sailnet's own endpoint comes first: it keeps its
+// upstream key server-side and fails over on its own. Public nodes follow as
+// fallbacks. NANO_RPC_URLS (or the apps' RPC setting) overrides the list.
+const (
+	PrimaryRPC  = "https://www.sailnet.space/node/api"
+	FallbackRPC = "https://sailnet-app.vercel.app/node/api"
 )
+
+var DefaultRPCs = []string{PrimaryRPC, FallbackRPC, "https://rpc.nano-gpt.com", "https://node.somenano.com/proxy", "https://nanoslo.0x.no/proxy", "https://app.natrium.io/api"}
 
 // Client talks JSON-RPC to Nano nodes with failover on transport errors.
 type Client struct {
 	URLs    []string
 	HTTP    *http.Client
-	APIKey  string // optional key for rpc.nano.to (sent as "key" field)
+	APIKey  string // optional key for a user-configured rpc.nano.to endpoint (sent to that host only)
 	Verbose bool
 	Budget  *Budget // nil = DefaultBudget
 
@@ -451,9 +452,20 @@ func (s NodeStatus) Synced() bool {
 func ConfigureRPC(url, key string) {
 	url = strings.TrimSpace(url)
 	if url != "" {
-		urls := []string{url}
+		var urls []string
+		for _, u := range strings.Split(url, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				urls = append(urls, u)
+			}
+		}
 		for _, u := range DefaultRPCs {
-			if u != url {
+			seen := false
+			for _, v := range urls {
+				if v == u {
+					seen = true
+				}
+			}
+			if !seen {
 				urls = append(urls, u)
 			}
 		}

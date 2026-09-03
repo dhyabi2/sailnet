@@ -1,1 +1,5 @@
-{ "cleanUrls": true, "headers": [ { "source": "/(.*)", "headers": [ { "key": "X-Content-Type-Options", "value": "nosniff" } ] } ] }
+{
+  "cleanUrls": true,
+  "rewrites": [ { "source": "/node/api", "destination": "/api/node" } ],
+  "headers": [ { "source": "/(.*)", "headers": [ { "key": "X-Content-Type-Options", "value": "nosniff" } ] } ]
+}

@@ -45,7 +45,7 @@ type Options struct {
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
 	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
 	Censored    bool   `json:"censored"`    // bridges only, no probes, never a direct ledger call
-	RPCURL      string `json:"rpcUrl"`      // Nano RPC endpoint tried first, default https://rpc.nano.to
+	RPCURL      string `json:"rpcUrl"`      // Nano RPC endpoint tried first, default Sailnet's endpoint
 	RPCKey      string `json:"rpcKey"`      // API key for rpc.nano.to (sent to that host only)
 }
 

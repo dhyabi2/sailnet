@@ -88,6 +88,8 @@ func runRelay(args []string) {
 	exit := fs.Bool("exit", true, "offer exit service")
 	register := fs.Bool("register", false, "publish REGISTER + DESCRIPTOR on the ledger")
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node (payments and peers are then disclosed to a third-party RPC provider)")
+	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
+	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
 	payoutKeep := fs.String("payout-keep", "0.02", "XNO kept on the node as operating float for pools and the levy")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
@@ -101,6 +103,9 @@ func runRelay(args []string) {
 	freeTag := fs.String("free-tag", "", "test mode: preauthorized 64-hex payment tag")
 	freeBytes := fs.Int64("free-bytes", 200<<20, "test mode: bytes granted to --free-tag and to every peer's pool tag")
 	fs.Parse(args)
+	if *rpcURL != "" || *rpcKey != "" {
+		nano.ConfigureRPC(*rpcURL, *rpcKey)
+	}
 	// SIGHUP reloads the shaping parameters (SAIL_SHAPE) without a restart,
 	// so a measurement run can change them while circuits stay up.
 	go func() {
@@ -416,9 +421,14 @@ func runEarn(args []string) {
 	ingress := fs.Int("ingress", 2, "home mode: reach the harbour through a circuit of this many relays so it never sees your address (0 = connect directly)")
 	anchor := fs.String("anchor", "0.0005", "home mode: XNO prepaid to the entry of the ingress circuit")
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node")
+	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
+	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
 	payoutKeep := fs.String("payout-keep", "0.02", "XNO kept on the node as operating float for pools, the harbour and the levy")
 	fs.Parse(args)
+	if *rpcURL != "" || *rpcKey != "" {
+		nano.ConfigureRPC(*rpcURL, *rpcKey)
+	}
 	os.MkdirAll(client.DataDir(), 0o700)
 	wp := filepath.Join(client.DataDir(), "wallet.json")
 	if os.Getenv("SAIL_WALLET") != "" {

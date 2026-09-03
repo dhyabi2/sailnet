@@ -44,12 +44,12 @@
         <EditTextPreference
             android:key="rpc_url"
             android:title="RPC endpoint"
-            android:summary="Nano node the app asks first, e.g. https://rpc.nano.to. Public fallbacks are used when it fails. Applies to the next connection."
-            android:defaultValue="https://rpc.nano.to" />
+            android:summary="Endpoint the app asks first. Default is Sailnet's own (https://www.sailnet.space/node/api); you can point it at rpc.nano.to or your own node. Public fallbacks are used when it fails."
+            android:defaultValue="https://www.sailnet.space/node/api" />
         <EditTextPreference
             android:key="rpc_key"
             android:title="RPC key"
-            android:summary="API key for rpc.nano.to (raises its rate limit). Sent only to that host."
+            android:summary="Only if the endpoint above is rpc.nano.to: its API key, sent to that host only."
             android:inputType="textPassword"
             android:defaultValue="" />
     </PreferenceCategory>

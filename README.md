@@ -50,11 +50,19 @@ relays it forwards to. `sailnode relay -h` lists every flag; the useful ones:
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
 | `--unlisted` | run as a bridge: never on the ledger, handed out by invite |
 | `--exit=false` | middle relay only |
+| `--rpc http://127.0.0.1:7076` | Nano RPC endpoint(s), comma-separated, tried in order; default Sailnet's endpoint, then public nodes |
+| `--rpc-key …` | API key, only if `--rpc` is rpc.nano.to |
 
-A relay should read the ledger from its own Nano node
-(`deploy/nano-node.sh` installs one; set `NANO_RPC_URLS=http://127.0.0.1:7076`).
-Without one, add `--allow-public-rpc`; payments are then visible to a public
-RPC provider.
+**Nano RPC.** Clients and relays read the ledger through
+`https://www.sailnet.space/node/api` by default, Sailnet's own endpoint,
+which forwards to rpc.nano.to with Sailnet's key and fails over to public
+nodes. The apps' settings let you use rpc.nano.to directly with your own key,
+or any node you run; the CLI takes `--rpc` and `--rpc-key` (or `NANO_RPC_URLS` and
+`NANO_RPC_KEY`).
+
+A relay works out of the box through Sailnet's endpoint. For the most
+private setup run your own Nano node (`deploy/nano-node.sh`) and pass
+`--rpc http://127.0.0.1:7076`.
 
 Home PC behind NAT, no port forwarding: `sailnode earn --home --payout nano_…`.
 

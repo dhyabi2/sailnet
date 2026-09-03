@@ -74,7 +74,7 @@ func home() string {
 }
 
 func loadPrefs() prefs {
-	p := prefs{Hops: 3, Socks: "127.0.0.1:1080", RPCURL: "https://rpc.nano.to"}
+	p := prefs{Hops: 3, Socks: "127.0.0.1:1080", RPCURL: "https://www.sailnet.space/node/api"}
 	if b, err := os.ReadFile(filepath.Join(home(), "gui.json")); err == nil {
 		json.Unmarshal(b, &p)
 	}
@@ -215,7 +215,7 @@ func main() {
 	nick.SetPlaceHolder("nickname shown instead of the wallet address")
 	nick.SetText(p.Nick)
 	rpcURL := widget.NewEntry()
-	rpcURL.SetPlaceHolder("Nano RPC endpoint, e.g. https://rpc.nano.to")
+	rpcURL.SetPlaceHolder("Nano RPC endpoint (default: Sailnet's)")
 	rpcURL.SetText(p.RPCURL)
 	rpcKey := widget.NewPasswordEntry()
 	rpcKey.SetPlaceHolder("rpc.nano.to API key (optional, sent only to that host)")
