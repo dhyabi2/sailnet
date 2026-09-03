@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	navy   = color.NRGBA{0x0B, 0x1F, 0x3A, 255}
-	green  = color.NRGBA{0x9F, 0xE8, 0xB3, 255}
-	green2 = color.NRGBA{0xC8, 0xF5, 0xD3, 255} // the aft sail, a lighter green
+	navy   = color.NRGBA{0x0C, 0x1B, 0x33, 255}
+	green  = color.NRGBA{0x8C, 0xF0, 0xBE, 255}
+	green2 = color.NRGBA{0xD2, 0xF7, 0xE4, 255} // the aft sail, a lighter green
 )
 
 func inTri(px, py, x1, y1, x2, y2, x3, y3 float64) bool {

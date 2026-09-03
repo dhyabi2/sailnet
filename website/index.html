@@ -5,31 +5,47 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sailnet</title>
 <meta name="description" content="A rewarded privacy network paid in XNO. Run a relay and earn Nano; route your traffic through circuits that look like ordinary HTTPS.">
+<link rel="canonical" href="https://sailnet.space/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Sailnet">
+<meta property="og:title" content="Sailnet — privacy that pays its own way">
+<meta property="og:description" content="A rewarded privacy network paid in XNO. Run a relay and earn Nano; route your traffic through onion circuits that look like ordinary HTTPS. Android, macOS, Windows, Linux, Chrome and Firefox.">
+<meta property="og:url" content="https://sailnet.space/">
+<meta property="og:image" content="https://sailnet.space/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Sailnet: two sails and a hull on midnight blue">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Sailnet — privacy that pays its own way">
+<meta name="twitter:description" content="Run a relay and earn XNO, or route your traffic through circuits that look like ordinary HTTPS.">
+<meta name="twitter:image" content="https://sailnet.space/og.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
-<meta name="theme-color" content="#0B1F3A">
+<meta name="theme-color" content="#0C1B33">
 <style>
-  :root { color-scheme: dark; --navy: #0B1F3A; --green: #9FE8B3; }
+  :root { color-scheme: dark; --navy: #0C1B33; --green: #8CF0BE; --foam: #EAF6EF; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: var(--navy); color: var(--green); }
+  html, body { background: var(--navy); color: var(--foam); }
   body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; line-height: 1.4; }
   a { color: var(--green); text-decoration: underline; text-underline-offset: 3px; }
   a:hover { background: var(--green); color: var(--navy); text-decoration: none; }
   .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
   header { border-bottom: 2px solid var(--green); }
   header .wrap { display: flex; align-items: center; justify-content: space-between; height: 72px; }
-  .brand { display: flex; align-items: center; gap: 14px; font-weight: 700; letter-spacing: .28em; font-size: 18px; text-decoration: none; }
+  .brand { color: var(--green); display: flex; align-items: center; gap: 14px; font-weight: 700; letter-spacing: .28em; font-size: 18px; text-decoration: none; }
   .brand:hover { background: none; color: var(--green); }
   .brand img { width: 36px; height: 36px; display: block; }
   nav a { margin-left: 28px; font-size: 14px; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; }
   .hero { padding: 96px 0 72px; border-bottom: 2px solid var(--green); }
-  .hero h1 { font-size: clamp(40px, 8vw, 96px); font-weight: 700; line-height: .95; letter-spacing: -.02em; max-width: 14ch; }
+  .hero h1 { color: var(--green); font-size: clamp(40px, 8vw, 96px); font-weight: 700; line-height: .95; letter-spacing: -.02em; max-width: 14ch; }
   .hero p { font-size: 20px; max-width: 56ch; margin-top: 28px; }
   .cta { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 12px; }
   .btn { display: inline-block; border: 2px solid var(--green); padding: 14px 22px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; font-size: 13px; text-decoration: none; }
   .btn.solid { background: var(--green); color: var(--navy); }
   .btn.solid:hover { background: var(--navy); color: var(--green); }
   section { padding: 64px 0; border-bottom: 2px solid var(--green); }
-  h2 { font-size: 13px; letter-spacing: .28em; text-transform: uppercase; margin-bottom: 28px; }
+  h2 { color: var(--green); font-size: 13px; letter-spacing: .28em; text-transform: uppercase; margin-bottom: 28px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0; border-top: 1px solid var(--green); border-left: 1px solid var(--green); }
   .cell { border-right: 1px solid var(--green); border-bottom: 1px solid var(--green); padding: 24px; }
   .cell h3 { font-size: 18px; margin-bottom: 10px; }
@@ -72,8 +88,7 @@
   <h2>Run a relay</h2>
   <p>Any VPS or home PC. Earnings are swept every hour to a wallet you control.</p>
 <pre>docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/data \
-  ghcr.io/dhyabi2/sailnet relay --listen :443 --ip &lt;your IP&gt; --cc &lt;country&gt; \
-  --register --payout nano_your_wallet_address</pre>
+  ghcr.io/dhyabi2/sailnet relay --register --payout nano_your_wallet_address</pre>
   <p style="margin-top:16px">Behind NAT, no port forwarding: <code>sailnode earn --home --payout nano_…</code></p>
 </div></section>
 

@@ -24,15 +24,14 @@ Docker:
 
 ```
 docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/data \
-  ghcr.io/dhyabi2/sailnet relay --listen :443 --ip <your public IP> --cc <country code> \
-  --register --payout nano_your_wallet_address_here
+  ghcr.io/dhyabi2/sailnet relay --register --payout nano_your_wallet_address_here
 ```
 
 Binary (Linux, as root, port 443):
 
 ```
 curl -L -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64 && chmod +x /usr/local/bin/sailnode
-sailnode relay --listen :443 --ip <your public IP> --cc <country code> --register --payout nano_your_wallet_address_here
+sailnode relay --register --payout nano_your_wallet_address_here
 ```
 
 The node creates its own wallet in `SAIL_HOME` (`/data` in Docker,
@@ -43,6 +42,8 @@ relays it forwards to. `sailnode relay -h` lists every flag; the useful ones:
 | flag | what it does |
 |---|---|
 | `--payout nano_…` | forward earnings to this wallet every hour |
+| `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
+| `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
 | `--payout-keep 0.02` | XNO kept on the node as float (default 0.02) |
 | `--rate 0.00002` | price in XNO per MiB |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |

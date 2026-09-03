@@ -1,6 +1,6 @@
 # Sailnet brand
 
-Two colours, flat: navy `#0B1F3A` and light green `#9FE8B3`. No gradients,
+Two colours, flat: midnight `#0C1B33`, mint `#8CF0BE` and foam `#EAF6EF` (text on midnight). No gradients,
 no shadows, no rounded corners. Type is Helvetica Neue / Helvetica / Arial,
 bold, tracked wide for the wordmark. The mark is two sails and a hull; it is
 the same file everywhere (Android, desktop, extension, website).
