@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 128" width="640" height="128">
-  <rect width="640" height="128" fill="#0C1B33"/>
+  <rect width="640" height="128" fill="#000000"/>
   <g transform="translate(24,16) scale(2)">
-    <path d="M24 4 L24 30 L8 30 Z" fill="#8CF0BE"/>
-    <path d="M27 8 L27 30 L40 30 Z" fill="#D2F7E4"/>
-    <path d="M6 34 L42 34 L38 42 L10 42 Z" fill="#8CF0BE"/>
+    <path d="M24 4 L24 30 L8 30 Z" fill="#FFFFFF"/>
+    <path d="M27 8 L27 30 L40 30 Z" fill="#FFFFFF"/>
+    <path d="M6 34 L42 34 L38 42 L10 42 Z" fill="#FFFFFF"/>
   </g>
-  <text x="136" y="88" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="10" fill="#8CF0BE">SAILNET</text>
+  <text x="136" y="88" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="10" fill="#FFFFFF">SAILNET</text>
 </svg>

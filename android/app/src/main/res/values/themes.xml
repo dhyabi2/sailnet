@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Sailnet" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
-        <item name="colorPrimary">#0C1B33</item>
+        <item name="colorPrimary">#000000</item>
         <item name="colorPrimaryVariant">#0A4F4B</item>
-        <item name="colorSecondary">#8CF0BE</item>
+        <item name="colorSecondary">#FFFFFF</item>
         <item name="colorOnPrimary">#FFFFFF</item>
     </style>
 </resources>

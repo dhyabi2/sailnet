@@ -2,7 +2,7 @@
 //
 //	go run ./cmd/brandicon out.png [size]
 //
-// Navy and light green only, no anti-aliasing tricks, pixel-exact at any size.
+// Black and white only, no anti-aliasing tricks, pixel-exact at any size.
 package main
 
 import (
@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	navy   = color.NRGBA{0x0C, 0x1B, 0x33, 255}
-	green  = color.NRGBA{0x8C, 0xF0, 0xBE, 255}
-	green2 = color.NRGBA{0xD2, 0xF7, 0xE4, 255} // the aft sail, a lighter green
+	navy   = color.NRGBA{0x00, 0x00, 0x00, 255}
+	green  = color.NRGBA{0xFF, 0xFF, 0xFF, 255}
+	green2 = color.NRGBA{0xFF, 0xFF, 0xFF, 255} // the aft sail, a lighter green
 )
 
 func inTri(px, py, x1, y1, x2, y2, x3, y3 float64) bool {
