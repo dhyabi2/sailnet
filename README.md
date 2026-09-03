@@ -169,8 +169,10 @@ connect, wallet (address, balance, where to get XNO), status and settings
 (hops, exit country, censored mode, bridges). It runs the same client as
 `sailnode client` and serves a SOCKS5 proxy on 127.0.0.1:1080 and DNS on
 127.0.0.1:5300 for browsers and the extension. Releases carry
-`Sailnet-macos-arm64.dmg`, `Sailnet-macos-amd64.dmg` and
-`Sailnet-windows-amd64.exe`.
+`Sailnet-macos-arm64.dmg`, `Sailnet-macos-amd64.dmg`,
+`Sailnet-windows-amd64.exe` and `Sailnet-linux-amd64.tar.xz`. Every file on
+a release has a `.sha256` next to it; the node binaries also share one
+`SHA256SUMS`.
 
 The `Desktop apps` workflow signs and notarizes when the certificates are in
 the repository secrets (Developer ID certificate and notarytool credentials

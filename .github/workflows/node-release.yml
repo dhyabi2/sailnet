@@ -57,7 +57,7 @@ jobs:
           path: out
           merge-multiple: true
       - name: Checksums
-        run: cd out && sha256sum * > SHA256SUMS
+        run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done && sha256sum sail* > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*
