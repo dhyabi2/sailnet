@@ -99,6 +99,9 @@ func (c *Client) Call(ctx context.Context, body map[string]any, out any) error {
 			payload, _ = json.Marshal(keyed)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+		if err == nil && c.APIKey != "" && strings.Contains(u, "rpc.nano.to") {
+			req.Header.Set("key", c.APIKey)
+		}
 		if err != nil {
 			return err
 		}
@@ -327,7 +330,7 @@ func (c *Client) WorkGenerate(ctx context.Context, rootHex string, threshold uin
 	var v struct {
 		Work string `json:"work"`
 	}
-	body := map[string]any{"action": "work_generate", "hash": rootHex, "difficulty": fmt.Sprintf("%016x", threshold)}
+	body := map[string]any{"action": "work_generate", "hash": rootHex, "difficulty": fmt.Sprintf("%016x", threshold), "use_peers": "true"}
 	err := c.Call(ctx, body, &v)
 	if err != nil || v.Work == "" {
 		// Work requests are rare and the CPU fallback costs minutes on a
@@ -357,6 +360,9 @@ func (c *Client) callDirect(ctx context.Context, u string, body map[string]any, 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" && strings.Contains(u, "rpc.nano.to") {
+		req.Header.Set("key", c.APIKey)
+	}
 	resp, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
 	if err != nil {
 		return err

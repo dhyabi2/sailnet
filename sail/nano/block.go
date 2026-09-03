@@ -113,13 +113,20 @@ func (a *Account) frontier(ctx context.Context) ([32]byte, *big.Int, [32]byte, b
 	return prev, bal, rep, true, nil
 }
 
-// work obtains PoW for root, RPC first then CPU.
+// work obtains PoW for root: the cache first (filled ahead of time by
+// PrecomputeWork), then the RPC, then the CPU as a last resort.
 func (a *Account) work(ctx context.Context, root [32]byte, threshold uint64) (string, error) {
-	rootHex := strings.ToUpper(hex.EncodeToString(root[:]))
-	if w, err := a.Client.WorkGenerate(ctx, rootHex, threshold); err == nil && ValidWork(root, w, threshold) {
+	if w, ok := CachedWork(root, threshold); ok {
 		return w, nil
 	}
-	return GenerateWorkCPU(root, threshold), nil
+	rootHex := strings.ToUpper(hex.EncodeToString(root[:]))
+	if w, err := a.Client.WorkGenerate(ctx, rootHex, threshold); err == nil && ValidWork(root, w, threshold) {
+		RememberWork(root, w)
+		return w, nil
+	}
+	w := GenerateWorkCPU(root, threshold)
+	RememberWork(root, w)
+	return w, nil
 }
 
 // One block at a time per account: concurrent sends from the same account
@@ -160,6 +167,7 @@ func (a *Account) signAndPublish(ctx context.Context, b *Block, subtype string, 
 		return "", err
 	}
 	a.State.Set(h, b.Balance, b.Representative, true)
+	a.PrecomputeWork(h) // the next block's root is this block's hash
 	return hash, nil
 }
 
