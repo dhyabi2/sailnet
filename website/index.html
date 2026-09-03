@@ -95,7 +95,7 @@
 <section id="how"><div class="wrap">
   <h2>How it works</h2>
   <div class="grid">
-    <div class="cell"><h3>Circuits</h3><p>Three hops, one ChaCha20-Poly1305 layer per hop, fixed-size cells, replay windows. The entry sees you, the exit sees the site, nobody sees both.</p></div>
+    <div class="cell"><h3>Circuits</h3><p>Multi-hop circuits through relays run by strangers, one ChaCha20-Poly1305 layer per hop, fixed-size cells, replay windows. The entry sees you, the exit sees the site, nobody sees both.</p></div>
     <div class="cell"><h3>Payment</h3><p>An XNO send to the entry relay is the circuit tag. Signed offline, published by the relay. Nobody extends credit, so there is nothing to ban.</p></div>
     <div class="cell"><h3>Registry on the ledger</h3><p>Relays register in Nano state blocks. Public, verifiable, no server to seize. Signed gossip fills in when the ledger is out of reach.</p></div>
     <div class="cell"><h3>Looks like HTTPS</h3><p>A Chrome ClientHello, a WebSocket upgrade, a decoy website for anyone else. Traffic shaping tuned against a TLS-in-TLS classifier on the live network.</p></div>

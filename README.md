@@ -150,7 +150,7 @@ story with a code-signing certificate in `WINDOWS_CERT_PFX_BASE64`.
 
 ## How it works
 
-**Circuits.** A client builds a telescoping three-hop circuit: CREATE to the
+**Circuits.** A client builds a telescoping multi-hop circuit (two to four relays, three by default): CREATE to the
 entry, then EXTEND through each established hop, with an X25519 handshake per
 hop. Every cell is 1 024 bytes and carries one ChaCha20-Poly1305 layer per hop,
 peeled at each relay; nonces are per-hop, per-direction sequence numbers with a
