@@ -452,7 +452,30 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 			if c == nil {
 				continue
 			}
-			s.handleRelay(c, cell)
+			// Cells already in the buffer that belong to the same circuit
+			// travel as one batch: one peel loop, one metering, one write.
+			batch := []*wire.Cell{cell}
+			for len(batch) < 64 && r.Buffered() >= wire.CellSize {
+				more, err := wire.ReadCell(r)
+				if err != nil {
+					break
+				}
+				if more.CircID != cell.CircID || more.Cmd != wire.CmdData {
+					s.handleRelayBatch(c, batch)
+					batch = batch[:0]
+					if more.Cmd == wire.CmdPadding {
+						continue
+					}
+					if oc := circs[more.CircID]; oc != nil && more.Cmd == wire.CmdData && !s.bridged(in, more) {
+						s.handleRelay(oc, more)
+					}
+					continue
+				}
+				batch = append(batch, more)
+			}
+			if len(batch) > 0 {
+				s.handleRelayBatch(c, batch)
+			}
 		}
 	}
 }
@@ -658,54 +681,15 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 	return c, nil
 }
 
+// handleRelay meters a cell that passes through this hop and either
+// forwards it (one layer peeled) or, when it is for us, acts on it. The
+// low-quota warning goes out 30 s of the current rate ahead, so the client
+// tops the circuit up in place instead of losing every stream.
 func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
-	terminal, cmd, sid, data, err := wire.PeelForward(c.keys, cell.Payload)
-	if err != nil {
-		return // not for us and not authenticated: drop silently
-	}
-	// Meter every cell that passes through this hop.
-	s.Metrics.BytesRelayed.Add(wire.CellSize)
-	rem := s.Quota.Consume(c.tag, wire.CellSize)
-	if rem < 0 && !s.overdraftOK(c.tag, rem) {
-		s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
-		c.destroy()
-		return
-	}
-	// Tell the client before it runs dry: it tops the circuit up in place
-	// instead of losing every stream at the boundary. "Before" is measured
-	// in time, not bytes: a top-up needs a Nano block and a confirmation,
-	// so the warning goes out 30 s of the current rate ahead, and never
-	// later than a quarter of the quota.
-	c.mu.Lock()
-	now := time.Now()
-	if c.rateAt.IsZero() {
-		c.rateAt = now
-	}
-	c.rateN += wire.CellSize
-	if d := now.Sub(c.rateAt); d >= 2*time.Second {
-		c.rate = c.rateN * int64(time.Second) / int64(d)
-		c.rateN, c.rateAt = 0, now
-	}
-	warn := !c.lowSent && (rem < s.Quota.Total(c.tag)/4 || rem < c.rate*30)
-	if warn {
-		c.lowSent = true
-	}
-	c.mu.Unlock()
-	{
-		if warn {
-			var b [8]byte
-			binary.BigEndian.PutUint64(b[:], uint64(max64(rem, 0)))
-			s.reply(c, wire.CmdQuota, wire.QuotaLowStream, b[:]) // unsolicited: stream id marks it as a warning
-		}
-	}
-	if !terminal {
-		if c.next == nil {
-			return
-		}
-		c.next.write(&wire.Cell{CircID: c.nextID, Cmd: wire.CmdData, Payload: data})
-		s.meterPool(c.poolAcct, wire.CellSize)
-		return
-	}
+	s.handleRelayBatch(c, []*wire.Cell{cell})
+}
+
+func (s *Server) handleTerminal(c *circuit, cmd byte, sid uint16, data []byte) {
 	switch cmd {
 	case wire.CmdPing:
 		s.reply(c, wire.CmdPong, sid, data)
@@ -873,6 +857,100 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 	return c
 }
 
+// buffered reports how many bytes a connection has already read into its
+// buffer, or 0 when it cannot say.
+func buffered(c any) int {
+	if b, ok := c.(interface{ Buffered() int }); ok {
+		return b.Buffered()
+	}
+	return 0
+}
+
+// readMore appends cells that are already waiting in the buffer (no new
+// syscall, no blocking) to batch, up to max cells.
+func readMore(r io.Reader, batch []*wire.Cell, max int) []*wire.Cell {
+	for len(batch) < max && buffered(r) >= wire.CellSize {
+		cell, err := wire.ReadCell(r)
+		if err != nil {
+			break
+		}
+		batch = append(batch, cell)
+	}
+	return batch
+}
+
+// handleRelayBatch is handleRelay for several cells of one circuit that
+// arrived together: one lock for metering, one write to the next hop.
+func (s *Server) handleRelayBatch(c *circuit, cells []*wire.Cell) {
+	var fwd []*wire.Cell
+	type term struct {
+		cmd  byte
+		sid  uint16
+		data []byte
+	}
+	var terms []term
+	for _, cell := range cells {
+		terminal, cmd, sid, data, err := wire.PeelForward(c.keys, cell.Payload)
+		if err != nil {
+			continue // not for us and not authenticated: drop silently
+		}
+		if terminal {
+			terms = append(terms, term{cmd, sid, data})
+		} else {
+			fwd = append(fwd, &wire.Cell{CircID: c.nextID, Cmd: wire.CmdData, Payload: data})
+		}
+	}
+	n := int64(len(fwd)+len(terms)) * wire.CellSize
+	if n == 0 {
+		return
+	}
+	s.Metrics.BytesRelayed.Add(n)
+	rem := s.Quota.Consume(c.tag, n)
+	if rem < 0 && !s.overdraftOK(c.tag, rem) {
+		s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+		c.destroy()
+		return
+	}
+	s.lowQuotaCheck(c, rem, n)
+	if len(fwd) > 0 {
+		c.mu.Lock()
+		next := c.next
+		c.mu.Unlock()
+		if next != nil {
+			next.writeBatch(fwd...)
+			s.meterPool(c.poolAcct, int64(len(fwd))*wire.CellSize)
+		}
+	}
+	for _, t := range terms {
+		s.handleTerminal(c, t.cmd, t.sid, t.data)
+	}
+}
+
+// lowQuotaCheck warns the client once when the quota is nearly spent (see
+// handleRelay for the reasoning).
+func (s *Server) lowQuotaCheck(c *circuit, rem, n int64) {
+	c.mu.Lock()
+	now := time.Now()
+	if c.rateAt.IsZero() {
+		c.rateAt = now
+	}
+	c.rateN += n
+	if d := now.Sub(c.rateAt); d >= 2*time.Second {
+		c.rate = c.rateN * int64(time.Second) / int64(d)
+		c.rateN, c.rateAt = 0, now
+	}
+	warn := !c.lowSent && (rem < s.Quota.Total(c.tag)/4 || rem < c.rate*30)
+	if warn {
+		c.lowSent = true
+	}
+	c.mu.Unlock()
+	if warn {
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], uint64(max64(rem, 0)))
+		s.reply(c, wire.CmdQuota, wire.QuotaLowStream, b[:])
+	}
+}
+
 func (s *Server) reply(c *circuit, cmd byte, sid uint16, data []byte) {
 	box, err := wire.SealBackward(c.keys, cmd, sid, data)
 	if err != nil {
@@ -989,23 +1067,31 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 	go func() {
 		defer conn.Close()
 		for {
-			cell, err := wire.ReadCell(conn)
+			first, err := wire.ReadCell(conn)
 			if err != nil {
 				return
 			}
-			s.meterPool(c.poolAcct, wire.CellSize)
-			if cell.Cmd != wire.CmdData {
+			batch := readMore(conn, []*wire.Cell{first}, 64)
+			s.meterPool(c.poolAcct, int64(len(batch))*wire.CellSize)
+			out := make([]*wire.Cell, 0, len(batch))
+			for _, cell := range batch {
+				if cell.Cmd != wire.CmdData {
+					continue
+				}
+				box, err := wire.WrapBackward(c.keys, cell.Payload)
+				if err != nil {
+					return
+				}
+				out = append(out, &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+			}
+			if len(out) == 0 {
 				continue
 			}
-			if s.Quota.Consume(c.tag, wire.CellSize) < 0 { // downloads are paid for, not just uploads
+			if rem := s.Quota.Consume(c.tag, int64(len(out))*wire.CellSize); rem < 0 && !s.overdraftOK(c.tag, rem) { // downloads are paid for, not just uploads
 				c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
 				return
 			}
-			box, err := wire.WrapBackward(c.keys, cell.Payload)
-			if err != nil {
-				return
-			}
-			c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+			c.deliver(out...)
 		}
 	}()
 }
@@ -1695,6 +1781,9 @@ type bufConn struct {
 }
 
 func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
+// Buffered lets the cell loops batch what is already in the reader.
+func (b *bufConn) Buffered() int { return b.r.Buffered() }
 
 // Write passes straight through: record boundaries are decided by the
 // tunnel writer's shaper (relay/writer.go), not here. The random 1–3 way
