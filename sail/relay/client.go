@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strings"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -497,6 +498,13 @@ func (c *Circuit) readLoop() {
 			default:
 			}
 		default:
+			if cmd == wire.CmdError && sid == 0 && strings.Contains(string(data), "quota exhausted") {
+				// A hop stopped carrying this circuit. Close it now so the
+				// manager rebuilds at once, instead of streams failing
+				// silently until the next keepalive notices.
+				log.Printf("circuit: hop %d reports %s; rebuilding", hop, data)
+				go c.Close()
+			}
 			select {
 			case c.ctl <- ctlMsg{hop: hop, cmd: cmd, sid: sid, data: data}:
 			default:
