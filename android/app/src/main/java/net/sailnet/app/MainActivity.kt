@@ -84,15 +84,19 @@ class MainActivity : AppCompatActivity() {
                 val running = s.optBoolean("running")
                 val p = s.optString("path")
                 val bal = s.optString("balance")
+                val needsFunds = running && p.isEmpty() && s.optBoolean("needsFunds")
+                if (needsFunds && !askedFunds) { askedFunds = true; askFunds() }
                 status.text = when {
                     SailVpnService.blackhole -> "Blocked (kill switch)"
                     running && p.isNotEmpty() -> "Connected"
+                    needsFunds -> "Waiting for XNO"
                     running -> "Building circuit…"
                     SailVpnService.lastError.isNotEmpty() -> "Failed"
                     else -> "Disconnected"
                 }
                 statusDetail.text = when {
                     running && p.isNotEmpty() -> "Exit is the last hop. All apps go through it."
+                    needsFunds -> "Your wallet has no XNO yet. Get some from a faucet and send it to the address below; Sailnet connects by itself when it arrives."
                     running -> lastLogLine(s.optString("log"))
                     SailVpnService.lastError.isNotEmpty() -> SailVpnService.lastError
                     else -> "Tap Connect to route this device through Sailnet."
@@ -107,6 +111,23 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {}
             ui.postDelayed(this, 1500)
         }
+    }
+
+    private var askedFunds = false
+
+    /** The wallet is empty: say so, and offer the faucet and the address. */
+    private fun askFunds() {
+        val addr = Mobile.address(filesDir.absolutePath)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Fund your wallet")
+            .setMessage("Sailnet pays relays in XNO and your wallet is empty. Get free XNO from a faucet (or an exchange) and send it to your address:\n\n$addr\n\n0.0005 XNO is enough to start. Sailnet connects by itself when the funds arrive.")
+            .setPositiveButton("Get free XNO") { _, _ -> openLink("https://hub.nano.org/faucets") }
+            .setNeutralButton("Copy address") { _, _ ->
+                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("nano address", addr))
+                Toast.makeText(this, "Address copied", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     private fun lastLogLine(log: String): String {

@@ -370,6 +370,12 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	if !m.canAfford(m.opts.anchor) {
+		m.pocket() // a faucet or a friend may just have paid us
+	}
+	if !m.canAfford(m.opts.anchor) {
+		return errors("wallet has no XNO yet: send it a little (0.0005 XNO buys about 25 MB), it connects by itself when the funds arrive")
+	}
 	if m.anchors == nil {
 		m.anchors = map[string][]time.Time{}
 	}
@@ -878,6 +884,16 @@ func short(a string) string {
 }
 
 // canAfford reports whether the cached chain state shows at least amount raw.
+// NeedsFunds reports whether the wallet cannot pay for a circuit yet: the
+// cached balance is below one anchor. Screens use it to ask the user to fund
+// the wallet instead of showing a silent "building".
+func (m *manager) NeedsFunds() bool {
+	if m.opts.freeTag != "" {
+		return false
+	}
+	return !m.canAfford(m.opts.anchor)
+}
+
 func (m *manager) canAfford(amount *big.Int) bool {
 	_, bal, _, _, ok := chainState(m.key).Get()
 	return ok && bal.Cmp(amount) >= 0

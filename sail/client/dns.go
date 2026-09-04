@@ -51,7 +51,54 @@ func (m *manager) serveDNS(addr, upstream string) {
 
 // resolveViaCircuit sends one DNS message (TCP framing) to upstream through
 // the circuit's exit and returns the answer.
+// emptyAnswer builds a NOERROR reply with no records for q (header and
+// question echoed). Used for record types the tunnel cannot serve.
+func emptyAnswer(q []byte) []byte {
+	if len(q) < 12 {
+		return nil
+	}
+	r := append([]byte(nil), q...)
+	r[2] = 0x81                           // QR, RD
+	r[3] = 0x80                           // RA, NOERROR
+	binary.BigEndian.PutUint16(r[6:], 0)  // ANCOUNT
+	binary.BigEndian.PutUint16(r[8:], 0)  // NSCOUNT
+	binary.BigEndian.PutUint16(r[10:], 0) // ARCOUNT: drop EDNS and anything after the question
+	// keep only the first question
+	i := 12
+	for i < len(r) && r[i] != 0 {
+		i += int(r[i]) + 1
+	}
+	i += 1 + 4
+	if i > len(r) {
+		return nil
+	}
+	binary.BigEndian.PutUint16(r[4:], 1)
+	return r[:i]
+}
+
+// qtype returns the type of the first question in q, or 0.
+func qtype(q []byte) uint16 {
+	i := 12
+	for i < len(q) && q[i] != 0 {
+		i += int(q[i]) + 1
+	}
+	if i+3 > len(q) {
+		return 0
+	}
+	return binary.BigEndian.Uint16(q[i+1:])
+}
+
 func (m *manager) resolveViaCircuit(q []byte, upstream string) ([]byte, error) {
+	// Exits carry IPv4 only. An AAAA answer would make the app try IPv6 first
+	// and hang or fail on every site that has it, so those (and HTTPS/SVCB
+	// records, which carry IPv6 hints) get an empty answer: the app then uses
+	// the A record through the tunnel.
+	switch qtype(q) {
+	case 28, 65:
+		if a := emptyAnswer(q); a != nil {
+			return a, nil
+		}
+	}
 	c, err := m.circuit()
 	if err != nil {
 		return nil, err

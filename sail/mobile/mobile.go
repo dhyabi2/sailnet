@@ -145,6 +145,22 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	m.SetExcludeExit(o.ExcludeCC)
 	mgr = m
 	started = time.Now()
+	go func() { // keep trying while the tunnel is up: funds arriving become a circuit without a tap
+		for {
+			time.Sleep(20 * time.Second)
+			mu.Lock()
+			cur := mgr
+			mu.Unlock()
+			if cur != m {
+				return
+			}
+			if c, err := m.Circuit(); err == nil && c != nil {
+				continue
+			} else if err != nil && !strings.Contains(err.Error(), "retrying shortly") {
+				logFundsErr(err)
+			}
+		}
+	}()
 	if tunFd > 0 {
 		dev, err := fdbased.Open(fmt.Sprint(tunFd), uint32(mtu), 0)
 		if err != nil {
@@ -242,6 +258,7 @@ func Status() string {
 			out[k] = v
 		}
 		out["uptime"] = int(time.Since(started).Seconds())
+		out["needsFunds"] = m.NeedsFunds()
 	}
 	logs.mu.Lock()
 	n := len(logs.lines)
@@ -393,4 +410,16 @@ func logDNSErr(err error) {
 	}
 	dnsErrAt = time.Now()
 	log.Printf("dns: %v", err)
+}
+
+var fundsErrAt time.Time
+
+func logFundsErr(err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if time.Since(fundsErrAt) < 2*time.Minute {
+		return
+	}
+	fundsErrAt = time.Now()
+	log.Printf("circuit: %v", err)
 }
