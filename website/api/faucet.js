@@ -11,8 +11,8 @@
 // wallet needs, so an app can show "send 0.0005 XNO to <address>" instead
 // of a blank failure, and a developer sees the cause in "error".
 
-const https = require("https");
-const { URL } = require("url");
+import https from "https";
+import { URL } from "url";
 
 const AMOUNT = process.env.FAUCET_AMOUNT || "0.0005";
 
@@ -60,7 +60,7 @@ function forward(body, ip) {
   });
 }
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "content-type");
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -76,4 +76,4 @@ module.exports = async (req, res) => {
   }
   const out = await forward(body, ip);
   res.status(out.status).json(out.body);
-};
+}
