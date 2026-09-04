@@ -91,7 +91,7 @@ func main() {
 	a.Settings().SetTheme(mono{})
 	a.SetIcon(fyne.NewStaticResource("Icon.png", iconPNG))
 	w := a.NewWindow("SAILNET")
-	w.Resize(fyne.NewSize(420, 560))
+	w.Resize(fyne.NewSize(460, 720))
 	w.SetFixedSize(true)
 
 	os.Setenv("SAIL_HOME", home())
@@ -344,7 +344,7 @@ func main() {
 		save,
 	)
 
-	main := container.NewVBox(
+	top := container.NewVBox(
 		title,
 		steps,
 		widget.NewSeparator(),
@@ -358,8 +358,12 @@ func main() {
 		container.NewGridWithColumns(4, copyAddr, refresh, faucets, newExit),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("LOG", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewVScroll(logView),
 	)
+	// The log takes every pixel the fixed rows above leave: a border layout
+	// gives the centre object the remaining space, unlike a VBox, which gives
+	// each child only its minimum height.
+	logScroll := container.NewVScroll(logView)
+	main := container.NewBorder(top, nil, nil, nil, logScroll)
 	tabs := container.NewAppTabs(
 		container.NewTabItem("STATUS", main),
 		container.NewTabItem("SETTINGS", container.NewVScroll(settings)),
