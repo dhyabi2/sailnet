@@ -147,6 +147,13 @@ func (q *Quota) Consume(tag string, n int64) int64 {
 }
 
 // Remaining returns unconsumed bytes for a tag.
+// SetMinRate changes the price (raw per MiB) used for new credits.
+func (q *Quota) SetMinRate(raw *big.Int) {
+	q.mu.Lock()
+	q.MinRate = raw
+	q.mu.Unlock()
+}
+
 func (q *Quota) Remaining(tag string) int64 {
 	k := key(tag)
 	q.mu.Lock()

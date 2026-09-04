@@ -85,7 +85,9 @@ func runRelay(args []string) {
 	host := fs.String("host", "", "TLS name the relay presents (a real domain pointing here is best; default: a plausible generated name)")
 	cc := fs.String("cc", "XX", "country code")
 	asn := fs.Uint("asn", 0, "autonomous system number")
-	rate := fs.String("rate", "0.00002", "price, XNO per MiB")
+	rate := fs.String("rate", "0.000005", "starting price, XNO per MiB (about $0.002 per GB)")
+	reprice := fs.Bool("reprice", true, "adjust the price to demand every --reprice-days: down 10% when usage falls, up 3% when it grows, never above four times the starting price")
+	repriceDays := fs.Int("reprice-days", 10, "length of a repricing window in days")
 	exit := fs.Bool("exit", true, "offer exit service")
 	register := fs.Bool("register", false, "publish REGISTER + DESCRIPTOR on the ledger")
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "no effect (kept for old command lines): relays use Sailnet's endpoint unless --rpc names your own node")
@@ -235,32 +237,7 @@ func runRelay(args []string) {
 			}
 			cancel()
 		}
-		go func() {
-			for {
-				if registered(nc, key, strings.ToUpper(*cc), uint32(*asn), rateU, flags, desc) {
-					return
-				}
-				acct := &nano.Account{Key: key, Client: nc}
-				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-				rep, _ := token.Encode(token.Op{Code: token.OpRegister, Aux: token.RegisterAux(strings.ToUpper(*cc), uint32(*asn), rateU, flags)})
-				h, err := acct.Send(ctx, client.Treasury, big.NewInt(1), &rep)
-				if err == nil {
-					log.Println("REGISTER published", h)
-					op := token.Op{Code: token.OpDescriptor}
-					op.Aux = desc.Encode()
-					rep, _ = token.Encode(op)
-					if h, err = acct.Send(ctx, client.Treasury, big.NewInt(1), &rep); err == nil {
-						log.Println("DESCRIPTOR published", h)
-					}
-				}
-				cancel()
-				if err == nil {
-					return
-				}
-				log.Printf("registration not published yet (%v); retrying in 10 min", err)
-				time.Sleep(10 * time.Minute)
-			}
-		}()
+		go keepRegistered(nc, key, strings.ToUpper(*cc), uint32(*asn), rateU, flags, desc)
 	}
 
 	q, err := relay.NewQuota(filepath.Join(client.DataDir(), "quota.wal"), rateRaw)
@@ -386,6 +363,37 @@ func runRelay(args []string) {
 		log.Printf("faucet: %s XNO per claim, %d per IP per day, from %s", *faucetAmount, *faucetPerIP, client.Short(fk.Address))
 	}
 	log.Printf("sailnode relay %s on %s (ip %s, cc %s, asn %d, rate %s XNO/MiB, exit=%v, certfp %x)", key.Address, *listen, *ip, *cc, *asn, *rate, *exit, fp)
+	if *reprice && *register {
+		// Demand-driven price: every window the relay looks at the bytes
+		// it carried and moves its price down 10% when usage fell, up 3%
+		// when it grew. A price change is a new REGISTER. Nothing in
+		// here may take the relay down: every step is recovered and
+		// logged.
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("repricing stopped after an internal error: %v", r)
+				}
+			}()
+			pr := &relay.Pricing{File: filepath.Join(client.DataDir(), "pricing.json"), Days: *repriceDays, Min: 1, Max: rateU * 4}
+			cur := pr.Load(rateU, s.Metrics.BytesRelayed.Load())
+			apply := func(r uint32) {
+				q.SetMinRate(token.RateToRaw(r))
+				self.MinRate = r
+				log.Printf("price is now %s XNO/MiB", token.FormatXNO(token.RateToRaw(r)))
+				go keepRegistered(nc, key, strings.ToUpper(*cc), uint32(*asn), r, flags, desc)
+			}
+			if cur != rateU {
+				apply(cur) // a saved price from an earlier window
+			}
+			for {
+				time.Sleep(time.Hour)
+				if r, changed := pr.Tick(s.Metrics.BytesRelayed.Load()); changed {
+					apply(r)
+				}
+			}
+		}()
+	}
 	for _, extra := range listens[1:] {
 		go func(a string) { log.Fatal(s.ListenAndServe(a)) }(a(extra))
 		_, p, _ := net.SplitHostPort(extra)
@@ -398,6 +406,40 @@ func runRelay(args []string) {
 func a(s string) string { return strings.TrimSpace(s) }
 
 // registered reports whether the ledger already carries this relay's current record.
+// keepRegistered publishes REGISTER and DESCRIPTOR until the ledger shows
+// exactly this record; it retries on a 10-minute backoff and never panics.
+func keepRegistered(nc *nano.Client, key *nano.Key, cc string, asn, rate uint32, flags uint16, desc relay.Descriptor) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("registration stopped after an internal error: %v", r)
+		}
+	}()
+	for {
+		if registered(nc, key, cc, asn, rate, flags, desc) {
+			return
+		}
+		acct := &nano.Account{Key: key, Client: nc}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		rep, _ := token.Encode(token.Op{Code: token.OpRegister, Aux: token.RegisterAux(cc, asn, rate, flags)})
+		h, err := acct.Send(ctx, client.Treasury, big.NewInt(1), &rep)
+		if err == nil {
+			log.Println("REGISTER published", h)
+			op := token.Op{Code: token.OpDescriptor}
+			op.Aux = desc.Encode()
+			rep, _ = token.Encode(op)
+			if h, err = acct.Send(ctx, client.Treasury, big.NewInt(1), &rep); err == nil {
+				log.Println("DESCRIPTOR published", h)
+			}
+		}
+		cancel()
+		if err == nil {
+			return
+		}
+		log.Printf("registration not published yet (%v); retrying in 10 min", err)
+		time.Sleep(10 * time.Minute)
+	}
+}
+
 func registered(nc *nano.Client, key *nano.Key, cc string, asn, rate uint32, flags uint16, desc relay.Descriptor) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

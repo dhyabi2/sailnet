@@ -67,7 +67,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
 | `--payout-keep 0.02` | XNO kept on the node as float (default 0.02) |
-| `--rate 0.00002` | price in XNO per MiB |
+| `--rate 0.000005` | starting price in XNO per MiB (about $0.002 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
 | `--unlisted` | run as a bridge: never on the ledger, handed out by invite |
