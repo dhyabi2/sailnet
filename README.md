@@ -1,5 +1,7 @@
 # Sailnet
 
+**Website and downloads: [www.sailnet.space](https://www.sailnet.space)**
+
 A rewarded privacy network paid in XNO. Relays carry onion-routed circuits
 over ordinary-looking HTTPS and are paid per megabyte, directly, on the Nano
 ledger. No token, no accounts, no company in the middle.
