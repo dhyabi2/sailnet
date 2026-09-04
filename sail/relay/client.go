@@ -164,6 +164,9 @@ func init() { // SAIL_COVER_MS=0 disables cadence mode (measurement only)
 // Signer signs a CREATE for the tag's owner key (see SignCreate); nil in static test mode.
 type Signer func(clientPub, tag [32]byte) []byte
 
+// BuildProgress, when set, is told which hop of how many is being added.
+var BuildProgress func(hop, total int)
+
 func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byte, sign Signer) (*Circuit, error) {
 	if len(path) == 0 {
 		return nil, errors.New("empty path")
@@ -225,6 +228,9 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 
 	// EXTEND through each established hop.
 	for i := 1; i < len(path); i++ {
+		if BuildProgress != nil {
+			BuildProgress(i+1, len(path))
+		}
 		priv, pub, err := wire.GenX25519()
 		if err != nil {
 			return c, err

@@ -21,7 +21,8 @@ class SailVpnService : VpnService(), Protector {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (tun != null) return START_STICKY
+        if (tun != null || starting) return START_STICKY // one start at a time
+        starting = true
         startForeground(1, notification("Connecting…"))
         val builder = Builder()
             .setSession("Sailnet")
@@ -39,6 +40,7 @@ class SailVpnService : VpnService(), Protector {
             try {
                 Mobile.start(filesDir.absolutePath, options, pfd.fd.toLong(), MTU.toLong(), this)
                 running = true
+                starting = false
                 SailTileService.refresh(this)
                 updateNotification("Connected through the Sailnet circuit")
             } catch (e: Exception) {
@@ -46,6 +48,7 @@ class SailVpnService : VpnService(), Protector {
                 // falls back to the real network. The user disconnects explicitly.
                 lastError = e.message ?: "start failed"
                 blackhole = true
+                starting = false
                 updateNotification("Blocked: $lastError. Traffic is held, not leaked. Tap Disconnect to release.")
             }
         }.start()
@@ -55,6 +58,7 @@ class SailVpnService : VpnService(), Protector {
     override fun protect(fd: Long): Boolean = protect(fd.toInt())
 
     private fun stopTunnel() {
+        starting = false
         try { Mobile.stop() } catch (_: Exception) {}
         tun?.close()
         tun = null
@@ -96,6 +100,7 @@ class SailVpnService : VpnService(), Protector {
         const val CHANNEL = "sailnet"
         const val MTU = 1500
         @Volatile var running = false
+        @Volatile var starting = false // between the tap and the tunnel being up
         @Volatile var blackhole = false
         @Volatile var lastError = ""
     }

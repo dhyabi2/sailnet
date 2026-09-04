@@ -53,6 +53,7 @@ type Options struct {
 var (
 	mu       sync.Mutex
 	mgr      *client.Manager
+	starting bool // Start is running; Status() reports it without waiting
 	netst    *stack.Stack
 	tunDev   device.Device
 	lastErr  string
@@ -81,11 +82,22 @@ var logs = &ringLog{}
 // caches; optionsJSON is an Options object; tunFd is the TUN descriptor from
 // VpnService.establish() (0 = no TUN); mtu its MTU.
 func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error) {
+	// The lock is held only around the shared fields, never across the
+	// slow work (relay list, RTT probes, payment): Status() must answer at
+	// once while starting, or the app's screen freezes on it.
 	mu.Lock()
-	defer mu.Unlock()
-	if mgr != nil {
+	if mgr != nil || starting {
+		mu.Unlock()
 		return fmt.Errorf("already running")
 	}
+	starting = true
+	mu.Unlock()
+	defer func() {
+		mu.Lock()
+		starting = false
+		mu.Unlock()
+	}()
+	client.SetLastStage("Reading the relay list")
 	defer func() {
 		if err != nil {
 			lastErr = err.Error()
@@ -251,18 +263,25 @@ func Address(home string) string {
 
 // Status returns a JSON object: running, path, balance, relays, uptime,
 // bytesUp, bytesDown, address, error, log.
+func startingNow() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return starting
+}
+
 func Status() string {
 	mu.Lock()
 	m := mgr
 	e := lastErr
 	mu.Unlock()
-	out := map[string]any{"running": m != nil, "error": e}
+	out := map[string]any{"running": m != nil, "error": e, "starting": startingNow(), "stage": client.LastStage()}
 	if m != nil {
 		for k, v := range m.StatusJSON() {
 			out[k] = v
 		}
 		out["uptime"] = int(time.Since(started).Seconds())
 		out["needsFunds"] = m.NeedsFunds()
+		out["stage"] = m.Stage()
 	}
 	logs.mu.Lock()
 	n := len(logs.lines)

@@ -103,13 +103,16 @@ func main() {
 	client.SetNick(p.Nick, key.Address)
 
 	var (
-		mu  sync.Mutex
-		mgr *client.Manager
-		ln  net.Listener
+		mu       sync.Mutex
+		mgr      *client.Manager
+		ln       net.Listener
+		starting bool
 	)
 
 	title := widget.NewLabelWithStyle("SAILNET", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	state := widget.NewLabelWithStyle("OFF", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	steps := widget.NewLabel("") // what the client is doing, step by step
+	steps.Wrapping = fyne.TextWrapWord
 	path := widget.NewLabel("")
 	path.Wrapping = fyne.TextWrapWord
 	balance := widget.NewLabel("")
@@ -130,64 +133,93 @@ func main() {
 			ln = nil
 		}
 		if mgr != nil {
-			if c, err := mgr.Circuit(); err == nil && c != nil {
-				c.Close()
-			}
+			go mgr.Shutdown() // never on the UI thread, never builds a circuit to close it
 			mgr = nil
 		}
 		state.SetText("OFF")
+		steps.SetText("")
 		path.SetText("")
 		proxy.SetText("")
 		toggle.SetText("CONNECT")
+		toggle.Enable()
 	}
 	start := func() {
 		mu.Lock()
-		defer mu.Unlock()
-		if mgr != nil {
+		if mgr != nil || starting {
+			mu.Unlock()
 			return
 		}
-		for _, line := range strings.Split(p.Bridges, "\n") {
-			if strings.TrimSpace(line) != "" {
-				client.AddBridge(strings.TrimSpace(line))
-			}
-		}
-		_, noChain := os.Stat(filepath.Join(home(), "chain-"+key.Address[len(key.Address)-8:]+".json"))
-		m := client.NewStealthManagerBootstrap(3, "", "0.0005", "0", "", noChain != nil)
-		m.SetExcludeExit(p.Exclude)
-		m.SetCensored(true)
-		l, err := m.ServeSOCKS(p.Socks)
-		if err != nil {
-			dialog.ShowError(fmt.Errorf("SOCKS port %s: %v", p.Socks, err), w)
-			return
-		}
-		go m.ServeDNS("127.0.0.1:5300", "1.1.1.1:53")
-		go m.ServeStatus("127.0.0.1:1090")
-		mgr, ln = m, l
+		starting = true
+		mu.Unlock()
+		// The button answers at once; everything slow (relay list, RTT
+		// probes, payment, circuit) runs off the UI thread and reports
+		// through the steps line.
 		state.SetText("CONNECTING")
-		proxy.SetText("SOCKS5 " + p.Socks + "   DNS 127.0.0.1:5300")
-		toggle.SetText("DISCONNECT")
-		go m.Circuit()
-		go func() { // keep trying; an empty wallet waits for the entry's confirmation push
-			for {
-				time.Sleep(20 * time.Second)
-				mu.Lock()
-				cur := mgr
-				mu.Unlock()
-				if cur != m {
-					return
-				}
-				if c, err := m.Circuit(); err == nil && c != nil {
-					m.StopFundsWatch()
-				} else if err != nil && strings.Contains(err.Error(), "no XNO") {
-					m.EnsureFundsWatch()
+		steps.SetText("Starting…")
+		toggle.SetText("CONNECTING…")
+		toggle.Disable()
+		go func() {
+			for _, line := range strings.Split(p.Bridges, "\n") {
+				if strings.TrimSpace(line) != "" {
+					client.AddBridge(strings.TrimSpace(line))
 				}
 			}
+			_, noChain := os.Stat(filepath.Join(home(), "chain-"+key.Address[len(key.Address)-8:]+".json"))
+			m := client.NewStealthManagerBootstrap(3, "", "0.0005", "0", "", noChain != nil)
+			m.SetExcludeExit(p.Exclude)
+			m.SetCensored(true)
+			l, err := m.ServeSOCKS(p.Socks)
+			if err != nil {
+				fyne.Do(func() {
+					dialog.ShowError(fmt.Errorf("SOCKS port %s: %v", p.Socks, err), w)
+					state.SetText("OFF")
+					steps.SetText("")
+					toggle.SetText("CONNECT")
+					toggle.Enable()
+				})
+				mu.Lock()
+				starting = false
+				mu.Unlock()
+				return
+			}
+			go m.ServeDNS("127.0.0.1:5300", "1.1.1.1:53")
+			go m.ServeStatus("127.0.0.1:1090")
+			mu.Lock()
+			mgr, ln = m, l
+			starting = false
+			mu.Unlock()
+			fyne.Do(func() {
+				proxy.SetText("SOCKS5 " + p.Socks + "   DNS 127.0.0.1:5300")
+				toggle.SetText("DISCONNECT")
+				toggle.Enable()
+			})
+			go m.Circuit()
+			go func() { // keep trying; an empty wallet waits for the entry's confirmation push
+				for {
+					time.Sleep(20 * time.Second)
+					mu.Lock()
+					cur := mgr
+					mu.Unlock()
+					if cur != m {
+						return
+					}
+					if c, err := m.Circuit(); err == nil && c != nil {
+						m.StopFundsWatch()
+					} else if err != nil && strings.Contains(err.Error(), "no XNO") {
+						m.EnsureFundsWatch()
+					}
+				}
+			}()
 		}()
 	}
 	toggle = widget.NewButton("CONNECT", func() {
 		mu.Lock()
 		on := mgr != nil
+		busy := starting
 		mu.Unlock()
+		if busy {
+			return
+		}
 		if on {
 			stop()
 		} else {
@@ -293,6 +325,7 @@ func main() {
 
 	main := container.NewVBox(
 		title,
+		steps,
 		widget.NewSeparator(),
 		container.NewGridWithColumns(2, state, toggle),
 		path,
@@ -313,23 +346,50 @@ func main() {
 	w.SetContent(tabs)
 
 	go func() {
+		lastLog, lastSteps := "", ""
+		done := []string{}
 		for range time.Tick(time.Second) {
 			mu.Lock()
 			m := mgr
 			mu.Unlock()
 			txt := logs.text()
+			var st map[string]any
+			if m != nil {
+				st = m.StatusJSON() // off the UI thread: it may touch caches
+			}
 			fyne.Do(func() {
-				logView.SetText(txt)
+				if txt != lastLog { // re-laying out a long label every second is what used to burn CPU
+					lastLog = txt
+					logView.SetText(txt)
+				}
 				if m == nil {
 					balance.SetText("")
 					return
 				}
-				st := m.StatusJSON()
+				stage, _ := st["stage"].(string)
 				if ps, _ := st["path"].(string); ps != "" {
 					state.SetText("ON")
 					path.SetText(ps)
 				} else {
 					state.SetText("CONNECTING")
+				}
+				if stage != "" && (len(done) == 0 || done[len(done)-1] != stage) {
+					done = append(done, stage)
+					if len(done) > 6 {
+						done = done[len(done)-6:]
+					}
+				}
+				line := ""
+				for i, d := range done {
+					mark := "✓ "
+					if i == len(done)-1 && d != "Connected" {
+						mark = "… "
+					}
+					line += mark + d + "\n"
+				}
+				if line != lastSteps {
+					lastSteps = line
+					steps.SetText(strings.TrimRight(line, "\n"))
 				}
 				if b, _ := st["balance"].(string); b != "" {
 					balance.SetText(b + " XNO")

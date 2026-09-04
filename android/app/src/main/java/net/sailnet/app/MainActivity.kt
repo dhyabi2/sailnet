@@ -69,7 +69,12 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.relays).setOnClickListener { startActivity(Intent(this, RelaysActivity::class.java)) }
         findViewById<Button>(R.id.log).setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
         findViewById<Button>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
-        toggle.setOnClickListener { if (SailVpnService.running) stopVpn() else prepareAndStart() }
+        toggle.setOnClickListener {
+            when {
+                SailVpnService.running || SailVpnService.starting -> stopVpn()
+                else -> prepareAndStart()
+            }
+        }
         ui.post(refresh)
         title = "Sailnet · " + Prefs.nick(this)
         if (!SailVpnService.running) prepareAndStart() // opening the app means "protect me"
@@ -80,8 +85,12 @@ class MainActivity : AppCompatActivity() {
     private val refresh = object : Runnable {
         override fun run() {
             try {
-                val s = JSONObject(Mobile.status())
+                // A status call must never stall the screen; if it fails the
+                // service flags still drive the texts.
+                val s = try { JSONObject(Mobile.status()) } catch (_: Exception) { JSONObject() }
                 val running = s.optBoolean("running")
+                val starting = SailVpnService.starting || s.optBoolean("starting")
+                val stage = s.optString("stage")
                 val p = s.optString("path")
                 val bal = s.optString("balance")
                 val needsFunds = running && p.isEmpty() && s.optBoolean("needsFunds")
@@ -90,14 +99,14 @@ class MainActivity : AppCompatActivity() {
                     SailVpnService.blackhole -> "Blocked (kill switch)"
                     running && p.isNotEmpty() -> "Connected"
                     needsFunds -> "Waiting for XNO"
-                    running -> "Building circuit…"
+                    starting || running -> if (stage.isNotEmpty() && stage != "Connected") "Connecting: $stage" else "Connecting…"
                     SailVpnService.lastError.isNotEmpty() -> "Failed"
                     else -> "Disconnected"
                 }
                 statusDetail.text = when {
                     running && p.isNotEmpty() -> "Exit is the last hop. All apps go through it."
                     needsFunds -> "Your wallet has no XNO yet. Get some from a faucet and send it to the address below; Sailnet connects by itself when it arrives."
-                    running -> lastLogLine(s.optString("log"))
+                    starting || running -> if (stage.isNotEmpty()) "Step by step: relay list, relay timing, payment, then the circuit hop by hop. Nothing leaves the device until the circuit is up." else lastLogLine(s.optString("log"))
                     SailVpnService.lastError.isNotEmpty() -> SailVpnService.lastError
                     else -> "Tap Connect to route this device through Sailnet."
                 }
@@ -107,7 +116,11 @@ class MainActivity : AppCompatActivity() {
                 traffic.text = "↑ ${human(up)}   ↓ ${human(down)}   ${s.optInt("relays")} relays"
                 val low = bal.isNotEmpty() && (bal.toDoubleOrNull() ?: 0.0) < 0.0005
                 fundCard.visibility = if (bal.isEmpty() || low) View.VISIBLE else View.GONE
-                toggle.text = if (running) "Disconnect" else "Connect"
+                toggle.text = when {
+                    running -> "Disconnect"
+                    starting -> "Cancel"
+                    else -> "Connect"
+                }
             } catch (_: Exception) {}
             ui.postDelayed(this, 1500)
         }

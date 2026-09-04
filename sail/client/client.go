@@ -134,8 +134,9 @@ type manager struct {
 	// directBootstrap lets a stealth client reach the ledger directly while it
 	// has no cached chain state at all (first run on a fresh device).
 	directBootstrap bool
-	fundsWatch      func()    // stops the confirmation watch while waiting for funds
-	faucetAt        time.Time // last faucet claim (one per day)
+	fundsWatch      func()       // stops the confirmation watch while waiting for funds
+	faucetAt        time.Time    // last faucet claim (one per day)
+	stage           atomic.Value // what the client is doing right now, for screens
 }
 
 // dialViaCircuit is the transport for Nano RPC in stealth mode: the request
@@ -414,8 +415,10 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 		m.pocket() // a faucet or a friend may just have paid us
 	}
 	if !m.canAfford(m.opts.anchor) {
+		m.setStage("Waiting for XNO")
 		return errors("wallet has no XNO yet: send it a little (0.0005 XNO buys about 25 MB), it connects by itself when the funds arrive")
 	}
+	m.setStage("Paying the entry relay")
 	if m.anchors == nil {
 		m.anchors = map[string][]time.Time{}
 	}
@@ -454,6 +457,7 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	m.anchors[entry.Account] = append(m.anchors[entry.Account], time.Now()) // only payments that happened count toward the cap
 	m.saveAnchor()
 	log.Printf("paid %s XNO → %s (tag %s)", token.FormatXNO(m.opts.anchor), entry.Account, h[:8])
+	m.setStage("Paid the entry relay; waiting for the ledger")
 	return nil
 }
 
@@ -547,6 +551,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 			names[i] = fmt.Sprintf("%s(%s)", p.Country, short(p.Account))
 		}
 		log.Printf("building circuit: %s", strings.Join(names, " → "))
+		m.setStage("Building circuit: hop 1 of " + fmt.Sprint(len(path)))
 		t0 := time.Now()
 		c, err := relay.Build(path, m.tag, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) })
 		if err != nil {
@@ -585,6 +590,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 			mode = " (windowed streams)"
 		}
 		log.Printf("circuit built in %s: %s%s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "), mode)
+		m.setStage("Connected")
 		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
 		c.OnQuota = func(q int64) { m.quotaLow(c, q) }
 		m.cur = c
@@ -902,7 +908,7 @@ func (t *stealthTransport) viaEntry(body []byte) ([]byte, error) {
 		if len(bs) == 0 {
 			return nil, errors("no entry known for the first ledger read")
 		}
-		t.entry = relay.NewEntryRPC(bs[mathrand.Intn(len(bs))], 20*time.Second)
+		t.entry = relay.NewEntryRPC(bs[mathrand.Intn(len(bs))], 8*time.Second)
 	}
 	out, err := t.entry.Call(body, 60*time.Second)
 	if os.Getenv("SAIL_DEBUG_RPC") != "" {
@@ -972,6 +978,7 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 	} else {
 		log.Printf("%d relays on the ledger", len(m.reg.All()))
 	}
+	m.setStage("Measuring relays")
 	m.measureRTT()
 	m.loadAnchor()
 	m.gossipBootstrap() // learn the relays' own signed records: exit flag, country, rate (bridges carry none)
@@ -1111,6 +1118,50 @@ func short(a string) string {
 }
 
 // canAfford reports whether the cached chain state shows at least amount raw.
+// Shutdown closes the live circuit and stops background watches without
+// building anything new. Apps call it on disconnect.
+func (m *manager) Shutdown() {
+	m.StopFundsWatch()
+	m.mu.Lock()
+	c := m.cur
+	m.cur = nil
+	m.mu.Unlock()
+	if c != nil {
+		c.Close()
+	}
+	if live := m.live.Load(); live != nil {
+		live.Close()
+	}
+	m.setStage("")
+}
+
+// lastStage is the most recent stage of any manager in this process, so a
+// screen can show progress while the manager is still being constructed.
+var lastStage atomic.Value
+
+// SetLastStage records a stage before any manager exists.
+func SetLastStage(s string) { lastStage.Store(s) }
+
+// LastStage is the process-wide current stage (see Stage).
+func LastStage() string {
+	if v, ok := lastStage.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// setStage records what the client is doing, for the apps' progress views.
+func (m *manager) setStage(s string) { m.stage.Store(s); lastStage.Store(s) }
+
+// Stage is the current step in plain words: "Reading the relay list",
+// "Measuring relays", "Paying the entry relay", "Building circuit: hop 2 of
+// 3", "Connected", "Waiting for XNO".
+func (m *manager) Stage() string { return LastStage() }
+
+func init() {
+	relay.BuildProgress = func(hop, total int) { lastStage.Store(fmt.Sprintf("Building circuit: hop %d of %d", hop, total)) }
+}
+
 // NeedsFunds reports whether the wallet cannot pay for a circuit yet: the
 // cached balance is below one anchor. Screens use it to ask the user to fund
 // the wallet instead of showing a silent "building".
@@ -1224,26 +1275,34 @@ func (m *manager) measureRTT() {
 		m.rtt = map[string]time.Duration{}
 	}
 	m.mu.Unlock()
+	// All probes at once: with many relays a sequential sweep with 5 s
+	// timeouts is what made the first connect take a minute.
+	var wg sync.WaitGroup
 	for _, r := range m.reg.All() {
 		KeepIP(r.Desc.IP.String())
 		if r.Flags&token.FlagHome != 0 || (len(m.bridges()) > 0 && !r.Unlisted) {
 			continue // never touch a listed relay from the real IP when bridges exist
 		}
-		t0 := time.Now()
-		c, err := (&net.Dialer{Timeout: 5 * time.Second, Control: relay.DialControl}).Dial("tcp", r.Desc.Addr())
-		if err != nil {
+		wg.Add(1)
+		go func(r *relay.RelayInfo) {
+			defer wg.Done()
+			t0 := time.Now()
+			c, err := (&net.Dialer{Timeout: 5 * time.Second, Control: relay.DialControl}).Dial("tcp", r.Desc.Addr())
+			if err != nil {
+				m.mu.Lock()
+				m.mark(r.Account, false) // blocked or down from here: route around it
+				m.mu.Unlock()
+				log.Printf("relay %s (%s) unreachable from this network: %v", r.Country, short(r.Account), err)
+				return
+			}
+			c.Close()
 			m.mu.Lock()
-			m.mark(r.Account, false) // blocked or down from here: route around it
+			m.rtt[r.Account] = time.Since(t0)
 			m.mu.Unlock()
-			log.Printf("relay %s (%s) unreachable from this network: %v", r.Country, short(r.Account), err)
-			continue
-		}
-		c.Close()
-		m.mu.Lock()
-		m.rtt[r.Account] = time.Since(t0)
-		m.mu.Unlock()
-		log.Printf("rtt %s (%s): %s", r.Country, short(r.Account), time.Since(t0).Round(time.Millisecond))
+			log.Printf("rtt %s (%s): %s", r.Country, short(r.Account), time.Since(t0).Round(time.Millisecond))
+		}(r)
 	}
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------- exported surface

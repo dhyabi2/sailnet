@@ -46,6 +46,7 @@ func (m *manager) StatusJSON() map[string]any {
 		"bytesUp":    bytesUp.Load(),
 		"bytesDown":  bytesDown.Load(),
 		"stealth":    m.stealth,
+		"stage":      m.Stage(),
 		"hops":       m.opts.hops,
 		"exitCC":     m.opts.exitCC,
 		"nick":       Nick(),
