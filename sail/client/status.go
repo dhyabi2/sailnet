@@ -49,6 +49,7 @@ func (m *manager) StatusJSON() map[string]any {
 		"hops":      m.opts.hops,
 		"exitCC":    m.opts.exitCC,
 		"nick":      Nick(),
+		"needsFunds": m.NeedsFunds(),
 	}
 	return out
 }

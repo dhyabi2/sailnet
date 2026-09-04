@@ -46,6 +46,17 @@
     <button id="copy">Copy wallet</button>
   </div>
   <div class="hint" id="hint"></div>
+  <div id="fund" hidden style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px">
+    <div style="font-weight:600">This wallet has no XNO yet</div>
+    <div class="hint" style="margin-top:4px">Send it a little Nano: 0.0005 XNO buys about 25 MB. It connects by itself the moment the funds confirm.</div>
+    <div class="mono" id="fundAddr" style="margin-top:8px;font-size:11.5px"></div>
+    <div class="actions">
+      <button id="fundCopy">Copy address</button>
+      <a href="https://hub.nano.org/faucets" target="_blank" rel="noopener"><button>Free faucet</button></a>
+      <a href="https://www.binance.com/en/trade/XNO_USDT" target="_blank" rel="noopener"><button>Binance</button></a>
+      <a href="https://www.kraken.com/prices/nano" target="_blank" rel="noopener"><button>Kraken</button></a>
+    </div>
+  </div>
   <details>
     <summary>Settings</summary>
     <label>SOCKS5 host <input id="socksHost"></label>

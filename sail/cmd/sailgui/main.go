@@ -167,6 +167,22 @@ func main() {
 		proxy.SetText("SOCKS5 " + p.Socks + "   DNS 127.0.0.1:5300")
 		toggle.SetText("DISCONNECT")
 		go m.Circuit()
+		go func() { // keep trying; an empty wallet waits for the entry's confirmation push
+			for {
+				time.Sleep(20 * time.Second)
+				mu.Lock()
+				cur := mgr
+				mu.Unlock()
+				if cur != m {
+					return
+				}
+				if c, err := m.Circuit(); err == nil && c != nil {
+					m.StopFundsWatch()
+				} else if err != nil && strings.Contains(err.Error(), "no XNO") {
+					m.EnsureFundsWatch()
+				}
+			}
+		}()
 	}
 	toggle = widget.NewButton("CONNECT", func() {
 		mu.Lock()
@@ -193,6 +209,28 @@ func main() {
 		}()
 	})
 	copyAddr := widget.NewButton("COPY ADDRESS", func() { w.Clipboard().SetContent(key.Address) })
+	fundAsked := false
+	askFunds := func() {
+		msg := widget.NewLabel("This wallet has no XNO yet. Send it a little Nano: 0.0005 XNO buys about 25 MB.\nIt connects by itself the moment the funds confirm.")
+		msg.Wrapping = fyne.TextWrapWord
+		ad := widget.NewEntry()
+		ad.SetText(key.Address)
+		ad.Disable()
+		open := func(u string) func() {
+			return func() {
+				if pu, err := parseURL(u); err == nil {
+					a.OpenURL(pu)
+				}
+			}
+		}
+		links := container.NewGridWithColumns(3,
+			widget.NewButton("FREE FAUCET", open("https://hub.nano.org/faucets")),
+			widget.NewButton("BINANCE", open("https://www.binance.com/en/trade/XNO_USDT")),
+			widget.NewButton("KRAKEN", open("https://www.kraken.com/prices/nano")))
+		body := container.NewVBox(msg, ad,
+			widget.NewButton("COPY ADDRESS", func() { w.Clipboard().SetContent(key.Address) }), links)
+		dialog.ShowCustom("Fund the wallet", "CLOSE", body, w)
+	}
 	faucets := widget.NewButton("GET XNO", func() {
 		u, _ := parseURL("https://hub.nano.org/faucets")
 		a.OpenURL(u)
@@ -295,6 +333,14 @@ func main() {
 				}
 				if b, _ := st["balance"].(string); b != "" {
 					balance.SetText(b + " XNO")
+				}
+				if nf, _ := st["needsFunds"].(bool); nf {
+					state.SetText("WAITING FOR XNO")
+					path.SetText("Send a little XNO to the wallet below: 0.0005 XNO buys about 25 MB. It connects by itself when the funds confirm.")
+					if !fundAsked {
+						fundAsked = true
+						askFunds()
+					}
 				}
 			})
 		}

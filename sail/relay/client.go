@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dhyabi2/sail/wire"
@@ -14,22 +17,27 @@ import (
 
 // Circuit is the client side of a telescoping circuit.
 type Circuit struct {
-	leaf   [32]byte // TLS leaf certificate hash seen at the entry
-	Path   []*RelayInfo
-	Tag    [32]byte
-	conn   net.Conn
-	w      *connWriter
-	hops   []*wire.HopKeys
-	mu     sync.Mutex
-	nextS  uint16
-	strms  map[uint16]*Stream
-	ctl    chan ctlMsg
-	Failed int // index of the hop that failed during build (-1 = none)
-	Quota  int64
-	closed bool
-	Built  time.Time
-	Bytes  int64
+	leaf    [32]byte // TLS leaf certificate hash seen at the entry
+	Path    []*RelayInfo
+	Tag     [32]byte
+	conn    net.Conn
+	w       *connWriter
+	hops    []*wire.HopKeys
+	mu      sync.Mutex
+	nextS   uint16
+	strms   map[uint16]*Stream
+	ctl     chan ctlMsg
+	Failed  int // index of the hop that failed during build (-1 = none)
+	Quota   int64
+	closed  bool
+	Built   time.Time
+	Bytes   int64
+	recv    atomic.Int64 // unix nanos of the last cell received
+	pingErr atomic.Value
 }
+
+// LastRecv is when the circuit last received a cell from the entry.
+func (c *Circuit) LastRecv() time.Time { return time.Unix(0, c.recv.Load()) }
 
 type ctlMsg struct {
 	hop  int
@@ -53,8 +61,16 @@ type Stream struct {
 // disables. 25 ms with 16 cells caps a link at about 650 KB/s.
 var (
 	CoverTick  = 25 * time.Millisecond
-	CoverBurst = 16
+	CoverBurst = 64
 )
+
+func init() { // SAIL_COVER_MS=0 disables cadence mode (measurement only)
+	if v := os.Getenv("SAIL_COVER_MS"); v != "" {
+		var ms int
+		fmt.Sscan(v, &ms)
+		CoverTick = time.Duration(ms) * time.Millisecond
+	}
+}
 
 // Build opens a circuit through path one hop at a time. On error, Failed is
 // the index of the hop that could not be reached or did not sign its ack.
@@ -218,8 +234,12 @@ func (c *Circuit) readLoop() {
 	for {
 		cell, err := wire.ReadCell(c.conn)
 		if err != nil {
+			if !c.Closed() {
+				log.Printf("circuit: link to the entry dropped: %v", err)
+			}
 			return
 		}
+		c.recv.Store(time.Now().UnixNano())
 		if cell.Cmd == wire.CmdError {
 			c.ctl <- ctlMsg{hop: 0, cmd: wire.CmdError, data: cell.Payload}
 			return
@@ -281,14 +301,26 @@ func (c *Circuit) readLoop() {
 func (c *Circuit) Ping(timeout time.Duration) int {
 	for i := range c.hops {
 		if err := c.sendTo(i, wire.CmdPing, 0, []byte("p")); err != nil {
+			c.pingErr.Store("send: " + err.Error())
 			return i
 		}
 		m, err := c.waitCtl(wire.CmdPong, timeout)
-		if err != nil || m.hop != i {
+		if err != nil {
+			c.pingErr.Store("wait: " + err.Error())
+			return i
+		}
+		if m.hop != i {
+			c.pingErr.Store(fmt.Sprintf("pong from hop %d, wanted %d", m.hop, i))
 			return i
 		}
 	}
 	return -1
+}
+
+// PingErr describes why the last Ping failed.
+func (c *Circuit) PingErr() string {
+	v, _ := c.pingErr.Load().(string)
+	return v
 }
 
 // QueryQuota asks the entry hop how many prepaid bytes remain.
@@ -404,6 +436,13 @@ func (c *Circuit) Close() {
 }
 
 // Closed reports whether the circuit is down.
+// Streams is the number of open streams on the circuit.
+func (c *Circuit) Streams() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.strms)
+}
+
 func (c *Circuit) Closed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

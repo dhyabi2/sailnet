@@ -115,6 +115,7 @@ type manager struct {
 	scoreAt map[string]time.Time
 	rtt     map[string]time.Duration // measured TCP connect time per public relay
 	cur     *relay.Circuit
+	drain   bool                          // the current circuit is nearly out of prepaid quota: new streams get a fresh one
 	live    atomic.Pointer[relay.Circuit] // same as cur, readable without m.mu
 	tag     [32]byte
 	entry   *relay.RelayInfo
@@ -461,12 +462,15 @@ func (m *manager) loadAnchor() {
 func (m *manager) circuit() (*relay.Circuit, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.cur != nil && !m.cur.Closed() && time.Since(m.cur.Built) < m.rotateAfter() {
+	if m.cur != nil && !m.cur.Closed() && !m.drain && time.Since(m.cur.Built) < m.rotateAfter() {
 		return m.cur, nil
 	}
 	if m.cur != nil {
-		m.cur.Close()
+		// Rotate without cutting anyone off: the old circuit keeps serving
+		// the streams it has and closes once they are gone.
+		go drainCircuit(m.cur)
 		m.cur = nil
+		m.drain = false
 	}
 	if time.Since(m.lastFail) < 5*time.Second {
 		return nil, errors("circuit: retrying shortly")
@@ -551,11 +555,25 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	return nil, errors("could not build a circuit")
 }
 
+// drainCircuit closes c once its streams are done (or after a long grace).
+func drainCircuit(c *relay.Circuit) {
+	deadline := time.Now().Add(30 * time.Minute)
+	for !c.Closed() && c.Streams() > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+	}
+	c.Close()
+}
+
 func (m *manager) keepalive(c *relay.Circuit) {
 	for !c.Closed() {
 		time.Sleep(15*time.Second + time.Duration(mathrand.Intn(12000))*time.Millisecond) // jittered: no fixed rhythm on the wire
 		if bad := c.Ping(8 * time.Second); bad >= 0 {
-			log.Printf("keepalive: hop %d (%s) failed; rebuilding", bad, c.Path[bad].Account)
+			if time.Since(c.LastRecv()) < 10*time.Second {
+				// The pong is queued behind a busy download; the circuit is
+				// plainly alive, so a late pong is not a dead hop.
+				continue
+			}
+			log.Printf("keepalive: hop %d (%s) failed (%s; last cell %s ago); rebuilding", bad, c.Path[bad].Account, c.PingErr(), time.Since(c.LastRecv()).Round(time.Millisecond))
 			m.mu.Lock()
 			m.mark(c.Path[bad].Account, false)
 			m.mu.Unlock()
@@ -565,9 +583,12 @@ func (m *manager) keepalive(c *relay.Circuit) {
 		if q, err := c.QueryQuota(8 * time.Second); err == nil {
 			need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4
 			if q < need {
-				log.Printf("quota low (%d bytes left): next circuit will pay again", q)
+				log.Printf("quota low (%d bytes left): new streams get a fresh circuit", q)
 				m.mu.Lock()
 				m.tag = [32]byte{}
+				if m.cur == c {
+					m.drain = true
+				}
 				m.mu.Unlock()
 			}
 		}
@@ -713,7 +734,7 @@ func newStealthManager(hops int, exitCC, anchor, rate, freeTag string, direct bo
 }
 
 // stealthTransport routes Nano RPC: through the live circuit when there is
-// one, otherwise (first run only) through the entry relay's CmdRPC channel.
+// one, otherwise through the entry relay's CmdRPC channel.
 type stealthTransport struct {
 	m       *manager
 	circuit http.RoundTripper
@@ -725,9 +746,10 @@ func (t *stealthTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if c := t.m.live.Load(); c != nil && !c.Closed() {
 		return t.circuit.RoundTrip(req)
 	}
-	if !t.m.directBootstrap {
-		return nil, errors("stealth: no circuit yet (using cached state)")
-	}
+	// No circuit: ask through the entry relay's ledger channel. That path is
+	// inside the tunnel TLS, so it is as private as the circuit itself and
+	// there is no reason to limit it to a first run: a wallet that ran dry
+	// and was refilled must be able to notice the refill too.
 	body, _ := io.ReadAll(req.Body)
 	req.Body.Close()
 	out, err := t.viaEntry(body)
@@ -748,6 +770,9 @@ func (t *stealthTransport) viaEntry(body []byte) ([]byte, error) {
 		t.entry = relay.NewEntryRPC(bs[mathrand.Intn(len(bs))], 20*time.Second)
 	}
 	out, err := t.entry.Call(body, 60*time.Second)
+	if os.Getenv("SAIL_DEBUG_RPC") != "" {
+		log.Printf("ledger via entry: %s -> %d bytes err=%v: %.200s", body, len(out), err, out)
+	}
 	if err != nil {
 		log.Printf("ledger via entry: %v", err)
 		t.entry.Close()

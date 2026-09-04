@@ -62,11 +62,19 @@ func (w *connWriter) SetCover(tick time.Duration, burst int) {
 	}
 }
 
-// runCover is the cadence loop: one tick, one burst, always at least one
-// cell. Data cells keep their order; control cells go first.
+// runCover is the cadence loop: one tick, one burst. While the link is
+// active (data within the last few seconds) every tick carries at least one
+// cell, padding when there is nothing to send, so timing follows the clock
+// and not the user. When the link has been idle for a while the padding drops
+// to a slow floor: cover only matters while there is something to hide, and
+// a phone on a thin uplink must not spend its bandwidth on silence.
 func (w *connWriter) runCover(cp *coverParams) {
 	t := time.NewTicker(cp.tick)
 	defer t.Stop()
+	const activeFor = 3 * time.Second
+	idleFloor := 250 * time.Millisecond
+	lastData := time.Now()
+	lastPad := time.Now()
 	for {
 		select {
 		case <-w.done:
@@ -88,8 +96,15 @@ func (w *connWriter) runCover(cp *coverParams) {
 				break fill
 			}
 		}
-		if len(batch) == 0 {
+		if len(batch) > 0 {
+			lastData = time.Now()
+		} else {
+			active := time.Since(lastData) < activeFor
+			if !active && time.Since(lastPad) < idleFloor {
+				continue // idle link: slow floor only
+			}
 			batch = append(batch, wire.PaddingCell())
+			lastPad = time.Now()
 		}
 		sort.SliceStable(batch, func(i, j int) bool { return isCtl(batch[i]) && !isCtl(batch[j]) })
 		buf := make([]byte, 0, len(batch)*wire.CellSize)
@@ -109,10 +124,12 @@ func (w *connWriter) runCover(cp *coverParams) {
 }
 
 // writerQueue bounds the data in flight per connection. A full queue blocks
-// the producer, which is the back-pressure the old synchronous writer had. It
-// is kept small on purpose: on a slow path every queued cell is time a PONG
-// spends waiting, and the client's keepalive would mistake that for a dead hop.
-const writerQueue = 48
+// the producer, which is the back-pressure the old synchronous writer had.
+// It is also the window between two hops: with 200 ms between relays a queue
+// of 48 cells caps a circuit at about 240 KB/s, so it must hold a few hundred
+// KB. Control cells have their own queue and go first, so a deep data queue
+// no longer delays a PONG.
+const writerQueue = 512
 
 // newConnWriter starts a writer for one connection. client is true on the side
 // that opened it (it masks WebSocket frames, so its framing overhead differs).

@@ -27,6 +27,9 @@ async function render() {
   } else if (status && status.path) {
     setState("On", status.hops + " hops", "on");
     $("hint").textContent = "";
+  } else if (status && status.needsFunds) {
+    setState("Waiting for XNO", "unfunded", "warn");
+    $("hint").textContent = "";
   } else if (status) {
     setState("Building circuit", "wait", "warn");
     $("hint").textContent = "Paying the entry relay and extending the circuit. Pages will load in a few seconds.";
@@ -40,6 +43,10 @@ async function render() {
     $("traffic").textContent = "↑ " + human(status.bytesUp) + "  ↓ " + human(status.bytesDown) + "  " + status.relays + " relays";
     $("address").textContent = status.address || "—";
     if (status.nick) document.querySelector("h1").textContent = "Sailnet · " + status.nick;
+    $("fund").hidden = !status.needsFunds;
+    $("fundAddr").textContent = status.address || "";
+  } else {
+    $("fund").hidden = true;
   }
   $("socksHost").value = settings.socksHost;
   $("socksPort").value = settings.socksPort;
