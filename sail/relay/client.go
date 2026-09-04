@@ -32,7 +32,11 @@ type Circuit struct {
 	closed  bool
 	Built   time.Time
 	Bytes   int64
-	Flow    bool         // the exit understands BEGIN2 / CREDIT: open windowed streams
+	Flow    bool       // the exit understands BEGIN2 / CREDIT: open windowed streams
+	resume  [32]byte   // ownership proof for reattaching after a dropped entry link
+	relink  sync.Mutex // held while the entry link is being replaced
+	relinkC *sync.Cond
+	linking bool
 	OnQuota func(int64)  // called when the entry pushes a low-quota notice
 	recv    atomic.Int64 // unix nanos of the last cell received
 	pingErr atomic.Value
@@ -223,6 +227,7 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 		return c, err
 	}
 	c.hops = append(c.hops, keys)
+	c.resume = wire.ResumeKey(keys)
 	conn.SetReadDeadline(time.Time{})
 	go c.readLoop()
 
@@ -290,7 +295,7 @@ func (c *Circuit) send(cmd byte, sid uint16, data []byte) error {
 	c.mu.Lock()
 	c.Bytes += wire.CellSize
 	c.mu.Unlock()
-	return c.w.write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
+	return c.writer().write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
 }
 
 // sendTo sends a cell that terminates at hop n (for per-hop PING).
@@ -299,7 +304,96 @@ func (c *Circuit) sendTo(n int, cmd byte, sid uint16, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.w.write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
+	return c.writer().write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
+}
+
+// writer returns the entry link's writer, waiting (up to 30 s) while the
+// link is being reattached so senders see a pause instead of an error.
+func (c *Circuit) writer() *connWriter {
+	c.relink.Lock()
+	defer c.relink.Unlock()
+	deadline := time.Now().Add(30 * time.Second)
+	for c.linking && time.Now().Before(deadline) {
+		if c.relinkC == nil {
+			c.relinkC = sync.NewCond(&c.relink)
+		}
+		t := time.AfterFunc(time.Second, func() { c.relink.Lock(); c.relinkC.Broadcast(); c.relink.Unlock() })
+		c.relinkC.Wait()
+		t.Stop()
+	}
+	return c.w
+}
+
+// tryResume replaces a dropped entry link: a new TLS connection to the same
+// entry, CmdResume with the ownership proof, and the same keys, streams and
+// quota carry on. Cells that were in flight when the link died are lost;
+// the affected streams end, the rest never notice. Returns true when the
+// circuit is live again on the new link.
+func (c *Circuit) tryResume() bool {
+	if c.Closed() || len(c.Path) == 0 {
+		return false
+	}
+	c.relink.Lock()
+	c.linking = true
+	old := c.w
+	c.relink.Unlock()
+	defer func() {
+		c.relink.Lock()
+		c.linking = false
+		if c.relinkC != nil {
+			c.relinkC.Broadcast()
+		}
+		c.relink.Unlock()
+	}()
+	if old != nil {
+		old.stop()
+	}
+	deadline := time.Now().Add(45 * time.Second)
+	for attempt := 0; time.Now().Before(deadline) && !c.Closed(); attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(2+attempt) * time.Second)
+		}
+		conn, err := DialRelay(c.Path[0], 10*time.Second)
+		if err != nil {
+			continue
+		}
+		w := newConnWriter(conn, true)
+		if CoverTick > 0 {
+			ms := int(CoverTick / time.Millisecond)
+			w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst >> 8), byte(CoverBurst)}})
+			w.SetCover(CoverTick, CoverBurst)
+		}
+		if err := w.write(&wire.Cell{CircID: 1, Cmd: wire.CmdResume, Payload: wire.ResumeProof(c.resume, time.Now().Unix())}); err != nil {
+			w.stop()
+			conn.Close()
+			continue
+		}
+		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		var ack *wire.Cell
+		for {
+			ack, err = wire.ReadCell(conn)
+			if err != nil || ack.Cmd != wire.CmdPong { // pongs from the cover handshake are skipped
+				break
+			}
+		}
+		conn.SetReadDeadline(time.Time{})
+		if err != nil || ack.Cmd != wire.CmdResumed {
+			w.stop()
+			conn.Close()
+			if err == nil { // a definite refusal: the circuit is gone at the entry
+				return false
+			}
+			continue
+		}
+		c.relink.Lock()
+		c.conn, c.w = conn, w
+		c.relink.Unlock()
+		c.recv.Store(time.Now().UnixNano())
+		log.Printf("circuit: entry link reattached after a drop; streams carry on")
+		go c.readLoop()
+		return true
+	}
+	return false
 }
 
 func (c *Circuit) waitCtl(cmd byte, timeout time.Duration) (ctlMsg, error) {
@@ -321,12 +415,21 @@ func (c *Circuit) waitCtl(cmd byte, timeout time.Duration) (ctlMsg, error) {
 }
 
 func (c *Circuit) readLoop() {
-	defer c.Close()
+	resumed := false
+	defer func() {
+		if !resumed {
+			c.Close()
+		}
+	}()
 	for {
 		cell, err := wire.ReadCell(c.conn)
 		if err != nil {
 			if !c.Closed() {
 				log.Printf("circuit: link to the entry dropped: %v", err)
+				if c.tryResume() {
+					resumed = true
+					return // a new readLoop runs on the new link; this circuit stays open
+				}
 			}
 			return
 		}

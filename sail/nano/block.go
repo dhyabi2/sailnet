@@ -124,10 +124,19 @@ func (a *Account) work(ctx context.Context, root [32]byte, threshold uint64) (st
 		RememberWork(root, w)
 		return w, nil
 	}
+	if !AllowCPUWork {
+		return "", errors.New("proof-of-work service unavailable; retry later")
+	}
 	w := GenerateWorkCPU(root, threshold)
 	RememberWork(root, w)
 	return w, nil
 }
+
+// AllowCPUWork lets an account brute-force proof-of-work on the local CPU
+// when no work service answers. Clients keep it on (a phone has nothing else
+// to do); a relay turns it off, because minutes of a saturated core would
+// stall every circuit through it, and its sends all have retry loops.
+var AllowCPUWork = true
 
 // One block at a time per account: concurrent sends from the same account
 // would race on the frontier and fork.

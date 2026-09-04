@@ -197,6 +197,60 @@ func GenX25519() (priv, pub [32]byte, err error) {
 }
 
 // DeriveHopKeys computes shared keys; both sides get the same result.
+// ResumeKey is the per-circuit secret both ends of hop 0 can derive; it
+// proves ownership of a circuit when reattaching after a dropped link.
+func ResumeKey(k *HopKeys) [32]byte {
+	h, _ := blake2b.New256(nil)
+	h.Write([]byte("sailnet-resume-v1"))
+	h.Write(k.Forward)
+	h.Write(k.Backward)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// ResumeProof builds the CmdResume payload for key at time ts.
+func ResumeProof(key [32]byte, ts int64) []byte {
+	id := blake2b.Sum256(append([]byte("sailnet-resume-id"), key[:]...))
+	buf := make([]byte, 0, 72)
+	buf = append(buf, id[:]...)
+	var t [8]byte
+	binary.BigEndian.PutUint64(t[:], uint64(ts))
+	buf = append(buf, t[:]...)
+	mac, _ := blake2b.New256(key[:])
+	mac.Write(buf)
+	return append(buf, mac.Sum(nil)...)
+}
+
+// ResumeID is the lookup id a CmdResume payload carries.
+func ResumeID(key [32]byte) [32]byte {
+	return blake2b.Sum256(append([]byte("sailnet-resume-id"), key[:]...))
+}
+
+// VerifyResume checks a CmdResume payload against key; returns the timestamp.
+func VerifyResume(key [32]byte, payload []byte) (int64, bool) {
+	if len(payload) != 72 {
+		return 0, false
+	}
+	mac, _ := blake2b.New256(key[:])
+	mac.Write(payload[:40])
+	if !hmacEqual(mac.Sum(nil), payload[40:]) {
+		return 0, false
+	}
+	return int64(binary.BigEndian.Uint64(payload[32:40])), true
+}
+
+func hmacEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := range a {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
+}
+
 func DeriveHopKeys(priv, peerPub [32]byte, clientPub, hopPub [32]byte) (*HopKeys, error) {
 	shared, err := curve25519.X25519(priv[:], peerPub[:])
 	if err != nil {
@@ -373,6 +427,13 @@ const (
 	// circuit's existing quota, answering with CmdQuota. A circuit therefore
 	// never dies at a payment boundary: the client tops it up in place.
 	CmdTopUp byte = 26
+	// CmdResume (circuit 0, client → entry, plaintext over TLS) reattaches a
+	// circuit whose entry link dropped to a new connection: payload is
+	// H(resumeKey) ‖ unix seconds (8) ‖ MAC(resumeKey, payload[:40]). The entry
+	// answers CmdResumed with the same CircID, or CmdError. The middle and
+	// exit never notice; streams and quota carry on.
+	CmdResume  byte = 27
+	CmdResumed byte = 28
 	// QuotaLowStream is the stream id of an unsolicited CmdQuota from the
 	// entry: the quota is under a quarter, top up now.
 	QuotaLowStream uint16 = 2

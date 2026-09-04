@@ -148,6 +148,7 @@ func runRelay(args []string) {
 
 	key := client.LoadKey()
 	nc := client.NewNano()
+	nano.AllowCPUWork = false // a relay never burns its core on proof-of-work; sends retry when the work service is back
 	if *regDir == "" {
 		client.RequireLocalNode(nc, *allowPublicRPC) // live prerequisite: your own Nano node
 	}
@@ -359,7 +360,7 @@ func runRelay(args []string) {
 		if err != nil || amt.Sign() <= 0 {
 			log.Fatalf("bad --faucet-amount %q", *faucetAmount)
 		}
-		s.Faucet = &relay.Faucet{Key: fk, Nano: nc, State: client.ChainState(fk), Amount: amt, PerIP: *faucetPerIP, Secret: os.Getenv("FAUCET_SECRET"), File: filepath.Join(client.DataDir(), "faucet.json")}
+		s.Faucet = &relay.Faucet{Key: fk, Nano: nc, State: client.ChainState(fk), Amount: amt, PerIP: *faucetPerIP, Secret: os.Getenv("FAUCET_SECRET"), File: filepath.Join(client.DataDir(), "faucet-state.json")}
 		log.Printf("faucet: %s XNO per claim, %d per IP per day, from %s", *faucetAmount, *faucetPerIP, client.Short(fk.Address))
 	}
 	log.Printf("sailnode relay %s on %s (ip %s, cc %s, asn %d, rate %s XNO/MiB, exit=%v, certfp %x)", key.Address, *listen, *ip, *cc, *asn, *rate, *exit, fp)

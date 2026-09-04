@@ -1630,6 +1630,9 @@ func (m *manager) claimFaucetOnce() {
 		defer cancel()
 		if fr, err := ClaimFaucet(ctx, m.nc.HTTP, m.key.Address); err != nil {
 			log.Printf("faucet: %v", err)
+			m.mu.Lock()
+			m.faucetAt = time.Now().Add(-24*time.Hour + 10*time.Minute) // a failed claim is retried in ten minutes, not tomorrow
+			m.mu.Unlock()
 		} else {
 			log.Printf("faucet: %s XNO on its way (%s); connecting when it confirms", fr.Amount, fr.Hash[:8])
 		}

@@ -56,10 +56,13 @@ type Server struct {
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 	Host           string  // the name the certificate is for
 	Faucet         *Faucet // optional: /faucet on the HTTPS listener
-	Exit           bool
-	AllowPrivate   bool     // test mode only: let the exit reach loopback/LAN targets
-	PoolRaw        *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
-	Decoy          string   // HTML served to everyone else
+
+	parkMu       sync.Mutex
+	parks        map[[32]byte]*circuit // circuits whose client link dropped, kept for a minute
+	Exit         bool
+	AllowPrivate bool     // test mode only: let the exit reach loopback/LAN targets
+	PoolRaw      *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
+	Decoy        string   // HTML served to everyone else
 
 	mu        sync.Mutex
 	pools     map[string]*pool // downstream relay account → pool
@@ -167,9 +170,12 @@ type circuit struct {
 	streams  map[uint16]*exitStream
 	pending  map[uint16][][]byte // data that arrived before the stream connected (optimistic BEGIN)
 	lowSent  bool                // a low-quota notice was pushed since the last top-up
-	rateAt   time.Time           // rate window start (for the low-quota threshold)
-	rateN    int64               // bytes relayed in the window
-	rate     int64               // bytes per second over the last window
+	resume   [32]byte            // proves ownership when the client reattaches after a dropped link
+	parked   []*wire.Cell        // backward cells held while no client link is attached
+	parkedAt time.Time
+	rateAt   time.Time // rate window start (for the low-quota threshold)
+	rateN    int64     // bytes relayed in the window
+	rate     int64     // bytes per second over the last window
 	mu       sync.Mutex
 	closed   bool
 }
@@ -341,7 +347,7 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 	circs := map[uint32]*circuit{}
 	defer func() {
 		for _, c := range circs {
-			c.destroy()
+			s.park(c) // extended circuits wait a minute for the client to reattach
 		}
 		s.detachHome(in)
 		s.homeMu.Lock()
@@ -430,6 +436,13 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 			if c := circs[cell.CircID]; c != nil {
 				c.destroy()
 				delete(circs, cell.CircID)
+			}
+		case wire.CmdResume:
+			if c := s.handleResume(cell, in); c != nil {
+				circs[cell.CircID] = c
+				in.write(&wire.Cell{CircID: cell.CircID, Cmd: wire.CmdResumed})
+			} else {
+				in.write(&wire.Cell{CircID: cell.CircID, Cmd: wire.CmdError, Payload: []byte("nothing to resume")})
 			}
 		default:
 			if s.bridged(in, cell) {
@@ -635,7 +648,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 	if err != nil {
 		return nil, err
 	}
-	c := &circuit{id: cell.CircID, tag: tag, keys: keys, in: in, streams: map[uint16]*exitStream{}}
+	c := &circuit{id: cell.CircID, tag: tag, keys: keys, in: in, streams: map[uint16]*exitStream{}, resume: wire.ResumeKey(keys)}
 	certHash := s.leafHash()
 	reply := append(pub[:], SignAck(s.Key, clientPub, pub, certHash)...)
 	reply = append(reply, certHash[:]...)
@@ -762,12 +775,110 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 	}
 }
 
+// deliver sends a cell toward the client, or holds it while the client's
+// link is being reattached (up to a bounded number; older cells are dropped
+// first, the client's streams recover through their own windows).
+func (c *circuit) deliver(cells ...*wire.Cell) {
+	c.mu.Lock()
+	in := c.in
+	if in == nil {
+		for _, cell := range cells {
+			if len(c.parked) >= 4096 {
+				c.parked = c.parked[1:]
+			}
+			c.parked = append(c.parked, cell)
+		}
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	if len(cells) == 1 {
+		in.write(cells[0])
+	} else {
+		in.writeBatch(cells...)
+	}
+}
+
+// park keeps an extended circuit alive for a minute after its client link
+// dropped, so the client can reattach (CmdResume) instead of rebuilding.
+func (s *Server) park(c *circuit) {
+	c.mu.Lock()
+	if c.closed || c.next == nil {
+		c.mu.Unlock()
+		c.destroy()
+		return
+	}
+	c.in = nil
+	c.parkedAt = time.Now()
+	key := c.resume
+	c.mu.Unlock()
+	s.parkMu.Lock()
+	if s.parks == nil {
+		s.parks = map[[32]byte]*circuit{}
+	}
+	s.parks[wire.ResumeID(key)] = c
+	s.parkMu.Unlock()
+	time.AfterFunc(time.Minute, func() {
+		s.parkMu.Lock()
+		if s.parks[wire.ResumeID(key)] == c {
+			delete(s.parks, wire.ResumeID(key))
+			s.parkMu.Unlock()
+			c.mu.Lock()
+			still := c.in == nil
+			c.mu.Unlock()
+			if still {
+				c.destroy()
+			}
+			return
+		}
+		s.parkMu.Unlock()
+	})
+}
+
+// handleResume reattaches a parked circuit to this connection.
+func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
+	if len(cell.Payload) != 72 {
+		return nil
+	}
+	var id [32]byte
+	copy(id[:], cell.Payload[:32])
+	s.parkMu.Lock()
+	c := s.parks[id]
+	if c != nil {
+		delete(s.parks, id)
+	}
+	s.parkMu.Unlock()
+	if c == nil {
+		return nil
+	}
+	ts, ok := wire.VerifyResume(c.resume, cell.Payload)
+	if !ok || time.Since(time.Unix(ts, 0)).Abs() > 2*time.Minute {
+		s.parkMu.Lock()
+		s.parks[id] = c // not the owner: keep it parked for the real one
+		s.parkMu.Unlock()
+		return nil
+	}
+	c.mu.Lock()
+	c.id = cell.CircID
+	c.in = in
+	held := c.parked
+	c.parked = nil
+	c.mu.Unlock()
+	for _, h := range held {
+		h.CircID = cell.CircID
+	}
+	if len(held) > 0 {
+		in.writeBatch(held...)
+	}
+	return c
+}
+
 func (s *Server) reply(c *circuit, cmd byte, sid uint16, data []byte) {
 	box, err := wire.SealBackward(c.keys, cmd, sid, data)
 	if err != nil {
 		return
 	}
-	c.in.write(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+	c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
 }
 
 // replyChunks splits data into cell-sized pieces and queues them together, so
@@ -786,7 +897,7 @@ func (s *Server) replyChunks(c *circuit, sid uint16, data []byte) {
 		cells = append(cells, &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
 		data = data[n:]
 	}
-	c.in.writeBatch(cells...)
+	c.deliver(cells...)
 }
 
 // handleExtend: data = nextRelayAccount (string). We dial it, prepay from our
@@ -887,14 +998,14 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 				continue
 			}
 			if s.Quota.Consume(c.tag, wire.CellSize) < 0 { // downloads are paid for, not just uploads
-				c.in.write(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
+				c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
 				return
 			}
 			box, err := wire.WrapBackward(c.keys, cell.Payload)
 			if err != nil {
 				return
 			}
-			c.in.write(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+			c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
 		}
 	}()
 }
