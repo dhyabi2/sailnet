@@ -35,6 +35,8 @@ type Circuit struct {
 	Bytes   int64
 	Flow    bool       // the exit understands BEGIN2 / CREDIT: open windowed streams
 	resume  [32]byte   // ownership proof for reattaching after a dropped entry link
+	sendMu  sync.Mutex // seal + ring push, so ring order is sequence order
+	ring    []sentCell // last cells sent to the entry, for retransmission after a reattach
 	relink  sync.Mutex // held while the entry link is being replaced
 	relinkC *sync.Cond
 	linking bool
@@ -288,24 +290,47 @@ func (c *Circuit) acceptAck(i int, priv, clientPub [32]byte, payload []byte) (*w
 	return wire.DeriveHopKeys(priv, hopPub, clientPub, hopPub)
 }
 
+type sentCell struct {
+	seq  uint64
+	cell *wire.Cell
+}
+
+// seal wraps data for hops[:n] and remembers the cell with its hop-0
+// sequence number, so a reattachment can retransmit what the entry missed.
+func (c *Circuit) seal(n int, cmd byte, sid uint16, data []byte) (*wire.Cell, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	box, err := wire.OnionSeal(c.hops[:n], cmd, sid, data)
+	if err != nil {
+		return nil, err
+	}
+	cell := &wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box}
+	if len(c.ring) >= 2048 {
+		copy(c.ring, c.ring[1:])
+		c.ring = c.ring[:2047]
+	}
+	c.ring = append(c.ring, sentCell{c.hops[0].SentFwd(), cell})
+	return cell, nil
+}
+
 func (c *Circuit) send(cmd byte, sid uint16, data []byte) error {
-	box, err := wire.OnionSeal(c.hops, cmd, sid, data)
+	cell, err := c.seal(len(c.hops), cmd, sid, data)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
 	c.Bytes += wire.CellSize
 	c.mu.Unlock()
-	return c.writer().write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
+	return c.writer().write(cell)
 }
 
 // sendTo sends a cell that terminates at hop n (for per-hop PING).
 func (c *Circuit) sendTo(n int, cmd byte, sid uint16, data []byte) error {
-	box, err := wire.OnionSeal(c.hops[:n+1], cmd, sid, data)
+	cell, err := c.seal(n+1, cmd, sid, data)
 	if err != nil {
 		return err
 	}
-	return c.writer().write(&wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box})
+	return c.writer().write(cell)
 }
 
 // writer returns the entry link's writer, waiting (up to 30 s) while the
@@ -364,7 +389,7 @@ func (c *Circuit) tryResume() bool {
 			w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst >> 8), byte(CoverBurst)}})
 			w.SetCover(CoverTick, CoverBurst)
 		}
-		if err := w.write(&wire.Cell{CircID: 1, Cmd: wire.CmdResume, Payload: wire.ResumeProof(c.resume, time.Now().Unix())}); err != nil {
+		if err := w.write(&wire.Cell{CircID: 1, Cmd: wire.CmdResume, Payload: wire.ResumeProof(c.resume, time.Now().Unix(), c.hops[0].RecvBwd())}); err != nil {
 			w.stop()
 			conn.Close()
 			continue
@@ -386,11 +411,27 @@ func (c *Circuit) tryResume() bool {
 			}
 			continue
 		}
+		// Retransmit what the entry never received, in order, before any
+		// new cell: nothing that was in flight on the dead link is lost.
+		var missed []*wire.Cell
+		if len(ack.Payload) >= 8 {
+			got := binary.BigEndian.Uint64(ack.Payload[:8])
+			c.sendMu.Lock()
+			for _, r := range c.ring {
+				if r.seq > got {
+					missed = append(missed, r.cell)
+				}
+			}
+			c.sendMu.Unlock()
+		}
+		if len(missed) > 0 {
+			w.writeBatch(missed...)
+		}
 		c.relink.Lock()
 		c.conn, c.w = conn, w
 		c.relink.Unlock()
 		c.recv.Store(time.Now().UnixNano())
-		log.Printf("circuit: entry link reattached after a drop; streams carry on")
+		log.Printf("circuit: entry link reattached after a drop; %d cells retransmitted, streams carry on", len(missed))
 		go c.readLoop()
 		return true
 	}

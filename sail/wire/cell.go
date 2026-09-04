@@ -140,6 +140,14 @@ func (w *replayWindow) accept(seq uint64) bool {
 }
 
 func (k *HopKeys) nextFwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); k.fwdSeq++; return k.fwdSeq }
+
+// SentFwd/SentBwd are the sequence numbers of the last cell sealed in each
+// direction; RecvFwd/RecvBwd the highest accepted. Reattachment after a
+// dropped link uses them to retransmit exactly the cells the peer missed.
+func (k *HopKeys) SentFwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); return k.fwdSeq }
+func (k *HopKeys) SentBwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); return k.bwdSeq }
+func (k *HopKeys) RecvFwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); return k.fwdWin.high }
+func (k *HopKeys) RecvBwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); return k.bwdWin.high }
 func (k *HopKeys) nextBwd() uint64 { k.mu.Lock(); defer k.mu.Unlock(); k.bwdSeq++; return k.bwdSeq }
 func (k *HopKeys) acceptFwd(seq uint64) bool {
 	k.mu.Lock()
@@ -209,13 +217,16 @@ func ResumeKey(k *HopKeys) [32]byte {
 	return out
 }
 
-// ResumeProof builds the CmdResume payload for key at time ts.
-func ResumeProof(key [32]byte, ts int64) []byte {
+// ResumeProof builds the CmdResume payload for key at time ts; recv is the
+// highest backward sequence the client has accepted, so the entry knows
+// where to retransmit from.
+func ResumeProof(key [32]byte, ts int64, recv uint64) []byte {
 	id := blake2b.Sum256(append([]byte("sailnet-resume-id"), key[:]...))
-	buf := make([]byte, 0, 72)
+	buf := make([]byte, 0, 80)
 	buf = append(buf, id[:]...)
-	var t [8]byte
-	binary.BigEndian.PutUint64(t[:], uint64(ts))
+	var t [16]byte
+	binary.BigEndian.PutUint64(t[:8], uint64(ts))
+	binary.BigEndian.PutUint64(t[8:], recv)
 	buf = append(buf, t[:]...)
 	mac, _ := blake2b.New256(key[:])
 	mac.Write(buf)
@@ -227,17 +238,18 @@ func ResumeID(key [32]byte) [32]byte {
 	return blake2b.Sum256(append([]byte("sailnet-resume-id"), key[:]...))
 }
 
-// VerifyResume checks a CmdResume payload against key; returns the timestamp.
-func VerifyResume(key [32]byte, payload []byte) (int64, bool) {
-	if len(payload) != 72 {
-		return 0, false
+// VerifyResume checks a CmdResume payload against key; returns the
+// timestamp and the client's highest accepted backward sequence.
+func VerifyResume(key [32]byte, payload []byte) (ts int64, recv uint64, ok bool) {
+	if len(payload) != 80 {
+		return 0, 0, false
 	}
 	mac, _ := blake2b.New256(key[:])
-	mac.Write(payload[:40])
-	if !hmacEqual(mac.Sum(nil), payload[40:]) {
-		return 0, false
+	mac.Write(payload[:48])
+	if !hmacEqual(mac.Sum(nil), payload[48:]) {
+		return 0, 0, false
 	}
-	return int64(binary.BigEndian.Uint64(payload[32:40])), true
+	return int64(binary.BigEndian.Uint64(payload[32:40])), binary.BigEndian.Uint64(payload[40:48]), true
 }
 
 func hmacEqual(a, b []byte) bool {

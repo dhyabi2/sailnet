@@ -93,7 +93,9 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.load()
 	amount := token.FormatXNO(f.Amount)
 	answer := func(code int, rep faucetReply) {
-		rep.Amount = amount
+		if rep.Amount == "" {
+			rep.Amount = amount
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(code)
@@ -111,6 +113,7 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Account string `json:"account"`
+		Node    bool   `json:"node"` // a relay asking for its float: four claims' worth, so it can open pools at once
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		answer(400, faucetReply{Error: "bad request body"})
@@ -137,7 +140,18 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		answer(429, faucetReply{Error: "this wallet already received the registration amount today", RetryAfterS: int(24*time.Hour/time.Second) - int(time.Since(time.Unix(last, 0)).Seconds())})
 		return
 	}
-	f.st.IPs[ip]++ // counted even if the send fails: no free retries against a dry faucet
+	pay := new(big.Int).Set(f.Amount)
+	claims := 1
+	if req.Node {
+		claims = 4
+		pay.Mul(pay, big.NewInt(4))
+	}
+	if f.st.IPs[ip]+claims > f.PerIP {
+		f.mu.Unlock()
+		answer(429, faucetReply{Error: "this network address has used its " + itoa(f.PerIP) + " faucet claims for today; send the registration amount yourself or try tomorrow", RetryAfterS: secondsToMidnight()})
+		return
+	}
+	f.st.IPs[ip] += claims // counted even if the send fails: no free retries against a dry faucet
 	f.st.Accounts[acct] = time.Now().Unix()
 	f.saveLocked()
 	f.mu.Unlock()
@@ -146,7 +160,7 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	a := &nano.Account{Key: f.Key, Client: f.Nano, State: f.State}
 	a.ReceiveAll(ctx)
-	h, err := a.Send(ctx, acct, f.Amount, nil)
+	h, err := a.Send(ctx, acct, pay, nil)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(strings.ToLower(msg), "insufficient") {
@@ -154,15 +168,15 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("faucet: send failed: %v", err)
 		f.mu.Lock()
-		f.st.IPs[ip]--
+		f.st.IPs[ip] -= claims
 		delete(f.st.Accounts, acct)
 		f.saveLocked()
 		f.mu.Unlock()
 		answer(503, faucetReply{Error: "faucet unavailable (" + msg + "): the registration amount of " + amount + " XNO must be sent to the wallet by hand"})
 		return
 	}
-	log.Printf("faucet: %s XNO → %s (%s)", amount, short(acct), h[:8])
-	answer(200, faucetReply{OK: true, Hash: h})
+	log.Printf("faucet: %s XNO → %s (%s)", token.FormatXNO(pay), short(acct), h[:8])
+	answer(200, faucetReply{OK: true, Hash: h, Amount: token.FormatXNO(pay)})
 }
 
 func itoa(n int) string { return big.NewInt(int64(n)).String() }

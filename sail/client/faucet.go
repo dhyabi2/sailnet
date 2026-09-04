@@ -31,7 +31,18 @@ type FaucetReply struct {
 // transport, which carries the request to its entry relay). A refusal comes
 // back as an error that names the amount to send by hand.
 func ClaimFaucet(ctx context.Context, hc *http.Client, account string) (*FaucetReply, error) {
-	body, _ := json.Marshal(map[string]string{"action": "faucet", "account": account})
+	return claimFaucet(ctx, hc, account, false)
+}
+
+// ClaimFaucetNode is ClaimFaucet for a relay: it asks for four claims'
+// worth in one go (0.002 XNO), the float a new relay needs to open pools
+// to its peers before its own earnings arrive.
+func ClaimFaucetNode(ctx context.Context, hc *http.Client, account string) (*FaucetReply, error) {
+	return claimFaucet(ctx, hc, account, true)
+}
+
+func claimFaucet(ctx context.Context, hc *http.Client, account string, node bool) (*FaucetReply, error) {
+	body, _ := json.Marshal(map[string]any{"action": "faucet", "account": account, "node": node})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FaucetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -68,7 +79,7 @@ func FundFromFaucet(ctx context.Context, hc *http.Client, nc *nano.Client, key *
 	if n, err := acct.ReceiveAll(ctx); err == nil && n > 0 {
 		return nil // something was already on its way (an earlier claim, or a hand payment)
 	}
-	fr, err := ClaimFaucet(ctx, hc, key.Address)
+	fr, err := ClaimFaucetNode(ctx, hc, key.Address)
 	if err != nil {
 		if n, rerr := acct.ReceiveAll(ctx); rerr == nil && n > 0 {
 			return nil // refused because a claim was already pending: it is in now

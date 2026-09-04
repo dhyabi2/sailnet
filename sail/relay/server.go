@@ -176,11 +176,12 @@ type circuit struct {
 	pending  map[uint16][][]byte // data that arrived before the stream connected (optimistic BEGIN)
 	lowSent  bool                // a low-quota notice was pushed since the last top-up
 	resume   [32]byte            // proves ownership when the client reattaches after a dropped link
-	parked   []*wire.Cell        // backward cells held while no client link is attached
 	parkedAt time.Time
-	rateAt   time.Time // rate window start (for the low-quota threshold)
-	rateN    int64     // bytes relayed in the window
-	rate     int64     // bytes per second over the last window
+	sealMu   sync.Mutex // seal + ring push, so ring order is sequence order
+	ring     []ringCell // last backward cells sent, for retransmission after a reattach
+	rateAt   time.Time  // rate window start (for the low-quota threshold)
+	rateN    int64      // bytes relayed in the window
+	rate     int64      // bytes per second over the last window
 	mu       sync.Mutex
 	closed   bool
 }
@@ -445,7 +446,6 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		case wire.CmdResume:
 			if c := s.handleResume(cell, in); c != nil {
 				circs[cell.CircID] = c
-				in.write(&wire.Cell{CircID: cell.CircID, Cmd: wire.CmdResumed})
 			} else {
 				in.write(&wire.Cell{CircID: cell.CircID, Cmd: wire.CmdError, Payload: []byte("nothing to resume")})
 			}
@@ -764,19 +764,55 @@ func (s *Server) handleTerminal(c *circuit, cmd byte, sid uint16, data []byte) {
 	}
 }
 
-// deliver sends a cell toward the client, or holds it while the client's
-// link is being reattached (up to a bounded number; older cells are dropped
-// first, the client's streams recover through their own windows).
+// ringCell is a sent backward cell with its hop-0 sequence number.
+type ringCell struct {
+	seq  uint64
+	cell *wire.Cell
+}
+
+const ringCells = 2048 // 2 MB per busy circuit: covers what was in flight on the dead link
+
+// sealBackward seals one reply and records it for retransmission.
+func (c *circuit) sealBackward(cmd byte, sid uint16, data []byte) (*wire.Cell, error) {
+	c.sealMu.Lock()
+	defer c.sealMu.Unlock()
+	box, err := wire.SealBackward(c.keys, cmd, sid, data)
+	if err != nil {
+		return nil, err
+	}
+	cell := &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box}
+	c.remember(c.keys.SentBwd(), cell)
+	return cell, nil
+}
+
+// wrapBackward adds our layer to a cell from the next hop and records it.
+func (c *circuit) wrapBackward(box []byte) (*wire.Cell, error) {
+	c.sealMu.Lock()
+	defer c.sealMu.Unlock()
+	out, err := wire.WrapBackward(c.keys, box)
+	if err != nil {
+		return nil, err
+	}
+	cell := &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: out}
+	c.remember(c.keys.SentBwd(), cell)
+	return cell, nil
+}
+
+func (c *circuit) remember(seq uint64, cell *wire.Cell) {
+	if len(c.ring) >= ringCells {
+		copy(c.ring, c.ring[1:])
+		c.ring = c.ring[:ringCells-1]
+	}
+	c.ring = append(c.ring, ringCell{seq, cell})
+}
+
+// deliver sends cells toward the client. While the client's link is being
+// reattached nothing is written: every sent cell is in the ring, and the
+// reattachment retransmits from the client's last accepted sequence.
 func (c *circuit) deliver(cells ...*wire.Cell) {
 	c.mu.Lock()
 	in := c.in
 	if in == nil {
-		for _, cell := range cells {
-			if len(c.parked) >= 4096 {
-				c.parked = c.parked[1:]
-			}
-			c.parked = append(c.parked, cell)
-		}
 		c.mu.Unlock()
 		return
 	}
@@ -826,7 +862,7 @@ func (s *Server) park(c *circuit) {
 
 // handleResume reattaches a parked circuit to this connection.
 func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
-	if len(cell.Payload) != 72 {
+	if len(cell.Payload) != 80 {
 		return nil
 	}
 	var id [32]byte
@@ -840,24 +876,33 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 	if c == nil {
 		return nil
 	}
-	ts, ok := wire.VerifyResume(c.resume, cell.Payload)
+	ts, recv, ok := wire.VerifyResume(c.resume, cell.Payload)
 	if !ok || time.Since(time.Unix(ts, 0)).Abs() > 2*time.Minute {
 		s.parkMu.Lock()
 		s.parks[id] = c // not the owner: keep it parked for the real one
 		s.parkMu.Unlock()
 		return nil
 	}
+	// Tell the client what we last accepted, then retransmit what it
+	// missed, in order, before anything new is written.
+	var ack [8]byte
+	binary.BigEndian.PutUint64(ack[:], c.keys.RecvFwd())
+	in.write(&wire.Cell{CircID: cell.CircID, Cmd: wire.CmdResumed, Payload: ack[:]})
+	c.sealMu.Lock()
 	c.mu.Lock()
 	c.id = cell.CircID
-	c.in = in
-	held := c.parked
-	c.parked = nil
-	c.mu.Unlock()
-	for _, h := range held {
-		h.CircID = cell.CircID
+	var again []*wire.Cell
+	for _, r := range c.ring {
+		if r.seq > recv {
+			r.cell.CircID = cell.CircID
+			again = append(again, r.cell)
+		}
 	}
-	if len(held) > 0 {
-		in.writeBatch(held...)
+	c.in = in
+	c.mu.Unlock()
+	c.sealMu.Unlock()
+	if len(again) > 0 {
+		in.writeBatch(again...)
 	}
 	return c
 }
@@ -957,11 +1002,11 @@ func (s *Server) lowQuotaCheck(c *circuit, rem, n int64) {
 }
 
 func (s *Server) reply(c *circuit, cmd byte, sid uint16, data []byte) {
-	box, err := wire.SealBackward(c.keys, cmd, sid, data)
+	cell, err := c.sealBackward(cmd, sid, data)
 	if err != nil {
 		return
 	}
-	c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+	c.deliver(cell)
 }
 
 // replyChunks splits data into cell-sized pieces and queues them together, so
@@ -973,11 +1018,11 @@ func (s *Server) replyChunks(c *circuit, sid uint16, data []byte) {
 		if n > wire.MaxData {
 			n = wire.MaxData
 		}
-		box, err := wire.SealBackward(c.keys, wire.CmdData, sid, data[:n])
+		cell, err := c.sealBackward(wire.CmdData, sid, data[:n])
 		if err != nil {
 			return
 		}
-		cells = append(cells, &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+		cells = append(cells, cell)
 		data = data[n:]
 	}
 	c.deliver(cells...)
@@ -1100,11 +1145,11 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 				if cell.Cmd != wire.CmdData {
 					continue
 				}
-				box, err := wire.WrapBackward(c.keys, cell.Payload)
+				wrapped, err := c.wrapBackward(cell.Payload)
 				if err != nil {
 					return
 				}
-				out = append(out, &wire.Cell{CircID: c.id, Cmd: wire.CmdData, Payload: box})
+				out = append(out, wrapped)
 			}
 			if len(out) == 0 {
 				continue

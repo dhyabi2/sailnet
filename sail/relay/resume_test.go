@@ -76,3 +76,67 @@ func TestResumeAfterLinkDrop(t *testing.T) {
 	}
 	t.Fatal("stream did not work after the link drop")
 }
+
+// A link drop in the middle of a large download loses nothing: the missed
+// cells are retransmitted on the new link and the body arrives intact.
+func TestResumeMidTransferKeepsData(t *testing.T) {
+	reg := &Registry{}
+	var infos []*RelayInfo
+	var servers []*Server
+	for i := 0; i < 2; i++ {
+		s, ri, _ := startRelay(t, reg, 30+i, i == 1)
+		servers = append(servers, s)
+		infos = append(infos, ri)
+	}
+	var tag [32]byte
+	copy(tag[:], "resume-mid-payment-hash-placehol")
+	servers[0].Quota.Credit(hex.EncodeToString(tag[:]), 200<<20, "")
+	servers[1].Quota.Credit(PoolTag(infos[0].Account, infos[1].Account), 200<<20, "")
+	body := make([]byte, 6<<20)
+	for i := range body {
+		body[i] = byte(i * 7)
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+	defer target.Close()
+	c, err := Build(infos, tag, 10*time.Second, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Flow = true
+	st, err := c.Open(target.Listener.Addr().String(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Write([]byte("GET / HTTP/1.0\r\nHost: x\r\n\r\n"))
+	var got []byte
+	buf := make([]byte, 32<<10)
+	dropped := false
+	for {
+		n, err := st.Read(buf)
+		got = append(got, buf[:n]...)
+		if !dropped && len(got) > 1<<20 {
+			dropped = true
+			c.conn.Close() // the entry link dies mid-download
+		}
+		if err != nil {
+			break
+		}
+	}
+	i := strings.Index(string(got), "\r\n\r\n")
+	if i < 0 {
+		t.Fatal("no HTTP header")
+	}
+	payload := got[i+4:]
+	if len(payload) != len(body) {
+		t.Fatalf("got %d bytes, want %d", len(payload), len(body))
+	}
+	for j := range body {
+		if payload[j] != body[j] {
+			t.Fatalf("byte %d differs: data was lost or reordered across the drop", j)
+		}
+	}
+	if c.Closed() {
+		t.Fatal("circuit closed")
+	}
+}
