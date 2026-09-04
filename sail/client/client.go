@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	_ "embed"
@@ -131,6 +132,7 @@ type manager struct {
 	// directBootstrap lets a stealth client reach the ledger directly while it
 	// has no cached chain state at all (first run on a fresh device).
 	directBootstrap bool
+	fundsWatch      func() // stops the confirmation watch while waiting for funds
 }
 
 // dialViaCircuit is the transport for Nano RPC in stealth mode: the request
@@ -395,6 +397,8 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	// not received yet, and receiving is what opens the account.
 	if n, err := acct.ReceiveAll(ctx); err == nil && n > 0 {
 		log.Printf("received %d pending payment(s)", n)
+	} else if err != nil {
+		log.Printf("pocket: %v", err)
 	}
 	h, blk, err := acct.SendBlock(ctx, entry.Account, m.opts.anchor)
 	var pe *nano.PublishError
@@ -587,6 +591,7 @@ func runClient(args []string) {
 	status := fs.String("status", "127.0.0.1:1090", "JSON status endpoint for UIs and the browser extension (empty = off)")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
+	allowHTTP := fs.Bool("allow-http", false, "let plain HTTP (port 80) through the tunnel; off by default because the exit could read it")
 	capture := fs.Bool("capture", false, "whole-device mode: DNS sinkhole on :53 and listeners on :80/:443 that route every flow through the circuit by Host/SNI (needs administrator rights)")
 	capAddrs := fs.String("capture-ports", "127.0.0.1:53,127.0.0.1:80,127.0.0.1:443", "with --capture: DNS sinkhole, HTTP and HTTPS listen addresses")
 	subvert := fs.Bool("subvert-dns", false, "with --capture: point the operating system's resolver at 127.0.0.1 and restore it on exit")
@@ -595,11 +600,12 @@ func runClient(args []string) {
 	*censoredFlag = true // always on
 	bridge := fs.String("bridge", "", "bridge line(s) of unlisted entry relays, comma-separated (also read from SAIL_HOME/bridges.txt); bridges are preferred as entry")
 	fs.Parse(args)
+	AllowPlainHTTP = *allowHTTP
 	if *rpcURL != "" || *rpcKey != "" {
 		nano.ConfigureRPC(*rpcURL, *rpcKey)
 	}
 	// SAIL_TRACE=<file> records every TLS record of the client's relay
-	// connections, as a censor on the path would see them.
+	// connections, as a censor on the path would see them (docs/SHAPING.md).
 	if tf := os.Getenv("SAIL_TRACE"); tf != "" {
 		sink, err := shape.Create(tf)
 		if err != nil {
@@ -621,7 +627,7 @@ func runClient(args []string) {
 		_, noChain := os.Stat(filepath.Join(dataDir(), "chain-"+key0.Address[len(key0.Address)-8:]+".json"))
 		m = newStealthManager(*hops, *exitCC, *anchor, *rate, *freeTag, noChain != nil)
 		if noChain != nil {
-			log.Printf("first run: ledger reached directly until the wallet state is cached")
+			log.Printf("first run: ledger read through the entry relay until the wallet state is cached")
 		}
 	} else {
 		m = newManager(*hops, *exitCC, *anchor, *rate, *regDir, *freeTag)
@@ -665,6 +671,16 @@ func runClient(args []string) {
 		}
 	}
 	log.Printf("SOCKS5 proxy on %s (wallet %s)", *socks, m.key.Address)
+	go func() { // an empty wallet: watch for the first payment through the entry
+		for {
+			if m.NeedsFunds() {
+				m.EnsureFundsWatch()
+			} else {
+				m.StopFundsWatch()
+			}
+			time.Sleep(30 * time.Second)
+		}
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -682,18 +698,62 @@ func runClient(args []string) {
 func newStealthManager(hops int, exitCC, anchor, rate, freeTag string, direct bool) *manager {
 	m := &manager{stealth: true, directBootstrap: direct, censored: true}
 	nc := newNano()
-	if direct {
-		// First run: the only direct connection ever made is to Sailnet's own
-		// website endpoint, never to a third-party Nano node.
-		nc.URLs = []string{nano.PrimaryRPC, nano.FallbackRPC}
-	}
-	// Keep the connection to the RPC open between calls: every call on its
-	// own stream cost BEGIN, an inner TLS handshake, the request and END,
-	// a dozen cells of upstream per circuit that the shaping measurement found.
-	nc.HTTP = &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{DialContext: m.dialViaCircuit, TLSHandshakeTimeout: 20 * time.Second, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second}}
+	// The entry relay and the exit protect the ledger source with their own
+	// limits, so the client need not pace itself like it would against a
+	// public node: a first run's forty-odd reads take seconds, not minutes.
+	nc.Budget = nano.NewBudget(4, 30)
+	// Every ledger call goes through the circuit; before one exists (first
+	// run, nothing cached) it goes to the entry relay on circuit 0, which
+	// forwards it. The client never connects to anything but its entry.
+	nc.HTTP = &http.Client{Timeout: 60 * time.Second, Transport: &stealthTransport{m: m,
+		circuit: &http.Transport{DialContext: m.dialViaCircuit, TLSHandshakeTimeout: 20 * time.Second, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second}}}
 	init := newManagerWith(m, nc, hops, exitCC, anchor, rate, "", freeTag)
-	log.Printf("ledger via %s (through the circuit once one is up); payments signed offline", nc.Primary())
+	log.Printf("ledger through the entry relay until a circuit is up, then through the circuit; payments signed offline")
 	return init
+}
+
+// stealthTransport routes Nano RPC: through the live circuit when there is
+// one, otherwise (first run only) through the entry relay's CmdRPC channel.
+type stealthTransport struct {
+	m       *manager
+	circuit http.RoundTripper
+	mu      sync.Mutex
+	entry   *relay.EntryRPC
+}
+
+func (t *stealthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if c := t.m.live.Load(); c != nil && !c.Closed() {
+		return t.circuit.RoundTrip(req)
+	}
+	if !t.m.directBootstrap {
+		return nil, errors("stealth: no circuit yet (using cached state)")
+	}
+	body, _ := io.ReadAll(req.Body)
+	req.Body.Close()
+	out, err := t.viaEntry(body)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{"Content-Type": {"application/json"}}, Request: req, ContentLength: int64(len(out))}, nil
+}
+
+func (t *stealthTransport) viaEntry(body []byte) ([]byte, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.entry == nil {
+		bs := t.m.bridges()
+		if len(bs) == 0 {
+			return nil, errors("no entry known for the first ledger read")
+		}
+		t.entry = relay.NewEntryRPC(bs[mathrand.Intn(len(bs))], 20*time.Second)
+	}
+	out, err := t.entry.Call(body, 60*time.Second)
+	if err != nil {
+		log.Printf("ledger via entry: %v", err)
+		t.entry.Close()
+		t.entry = nil
+	}
+	return out, err
 }
 
 func newManager(hops int, exitCC, anchor, rate, regDir, freeTag string) *manager {
@@ -812,6 +872,13 @@ func (m *manager) serveSocks(conn net.Conn) {
 	io.ReadFull(conn, buf[:2])
 	port := int(buf[0])<<8 | int(buf[1])
 	target := net.JoinHostPort(host, strconv.Itoa(port))
+	if port == 80 && !AllowPlainHTTP {
+		// Plain HTTP would leave the exit readable by its operator and every
+		// network after it. Refused unless the operator explicitly allows it.
+		conn.Write([]byte{5, 2, 0, 1, 0, 0, 0, 0, 0, 0}) // SOCKS: connection not allowed by ruleset
+		log.Printf("refused plain HTTP (port 80): only encrypted destinations leave the exit; --allow-http overrides")
+		return
+	}
 	c, err := m.circuit()
 	if err != nil {
 		log.Println("circuit:", err)
@@ -907,6 +974,8 @@ func (m *manager) pocket() {
 	defer cancel()
 	if n, err := acct.ReceiveAll(ctx); err == nil && n > 0 {
 		log.Printf("received %d pending payment(s)", n)
+	} else if err != nil {
+		log.Printf("pocket: %v", err)
 	}
 	if _, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
 		m.directBootstrap = false // chain state is cached now: no more direct ledger calls
@@ -1053,6 +1122,10 @@ func NewStealthManager(hops int, exitCC, anchor, rate, freeTag string) *Manager 
 func NewStealthManagerBootstrap(hops int, exitCC, anchor, rate, freeTag string, direct bool) *Manager {
 	return newStealthManager(hops, exitCC, anchor, rate, freeTag, direct)
 }
+
+// AllowPlainHTTP lets port-80 connections through the tunnel. Off by default:
+// an unencrypted request is readable by the exit and by everyone after it.
+var AllowPlainHTTP = false
 
 // AddBridge registers a bridge line before a manager is built.
 func AddBridge(line string) { cliBridges = append(cliBridges, line) }
@@ -1267,4 +1340,50 @@ func CachedCountries() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// EnsureFundsWatch asks the entry to push confirmations for our own account
+// while the wallet cannot pay, so a faucet or a friend paying us turns into
+// a circuit within seconds. Everything travels inside the tunnel connection
+// to the entry; the client opens nothing else. Idempotent.
+func (m *manager) EnsureFundsWatch() {
+	m.mu.Lock()
+	if m.fundsWatch != nil || !m.NeedsFunds() {
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	bs := m.bridges()
+	if len(bs) == 0 {
+		return
+	}
+	rel := bs[mathrand.Intn(len(bs))]
+	stop, err := relay.WatchOver(rel, m.key.Address, 20*time.Second, func(n relay.Notification) {
+		log.Printf("payment confirmed on the ledger; connecting")
+		m.StopFundsWatch()
+		go m.circuit()
+	})
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	if m.fundsWatch != nil { // raced with another caller
+		m.mu.Unlock()
+		stop()
+		return
+	}
+	m.fundsWatch = stop
+	m.mu.Unlock()
+	log.Printf("watching the ledger for the first payment to this wallet")
+}
+
+// StopFundsWatch ends the confirmation watch, if any.
+func (m *manager) StopFundsWatch() {
+	m.mu.Lock()
+	stop := m.fundsWatch
+	m.fundsWatch = nil
+	m.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }

@@ -37,6 +37,7 @@ import (
 
 // Server is one Sailnet relay.
 type Server struct {
+	watch    atomic.Pointer[Watcher] // upstream confirmation feed, started on first CmdWatch
 	Key      *nano.Key
 	Nano     *nano.Client
 	Quota    *Quota
@@ -244,6 +245,9 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		s.homeMu.Lock()
 		delete(s.bridges, in)
 		s.homeMu.Unlock()
+		if w := s.watch.Load(); w != nil {
+			w.Unwatch(in)
+		}
 	}()
 	if heartbeat {
 		stop := make(chan struct{})
@@ -281,6 +285,21 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		}
 		if cell.Cmd == wire.CmdRelays && cell.CircID == 0 { // gossip: who do you know?
 			s.sendRelays(in)
+			continue
+		}
+		if cell.Cmd == wire.CmdCover && cell.CircID == 0 && len(cell.Payload) >= 3 { // cadence mode on this link
+			tick := time.Duration(int(cell.Payload[0])<<8|int(cell.Payload[1])) * time.Millisecond
+			in.SetCover(tick, int(cell.Payload[2]))
+			continue
+		}
+		if cell.Cmd == wire.CmdRPC && cell.CircID == 0 { // ledger for a client that has no circuit yet
+			go s.handleRPC(cell, in, conn.RemoteAddr().String())
+			continue
+		}
+		if cell.Cmd == wire.CmdWatch && cell.CircID == 0 { // push this account's confirmations to me
+			if acct := string(cell.Payload); len(acct) == 65 && acct[:5] == "nano_" {
+				s.watcher().Watch(acct, in)
+			}
 			continue
 		}
 		switch cell.Cmd {
@@ -1059,7 +1078,7 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
 	s.Metrics.Streams.Add(1)
 	// Read far more than one cell at a time and hand the whole chunk to the
 	// writer as one batch: the records that leave the tunnel then carry many
-	// cells each, instead of one cell per record.
+	// cells each, instead of one cell per record. See docs/SHAPING.md.
 	buf := make([]byte, 32*wire.MaxData)
 	for {
 		n, err := conn.Read(buf)
@@ -1236,7 +1255,7 @@ func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 // Write passes straight through: record boundaries are decided by the
 // tunnel writer's shaper (relay/writer.go), not here. The random 1–3 way
 // split that used to live here chopped every record the shaper produced;
-// The measurement is reproducible with sailtrace.
+// docs/SHAPING.md has the measurement.
 func (b *bufConn) Write(p []byte) (int, error) { return b.Conn.Write(p) }
 
 // wsAccept computes the RFC 6455 Sec-WebSocket-Accept value.
@@ -1257,4 +1276,16 @@ func (s *Server) leafHash() [32]byte {
 		return [32]byte{}
 	}
 	return sha256.Sum256(s.TLS.Certificate[0])
+}
+
+// watcher returns the relay's confirmation feed, starting it on first use.
+func (s *Server) watcher() *Watcher {
+	if w := s.watch.Load(); w != nil {
+		return w
+	}
+	w := NewWatcher(WSUpstream, notifyCell)
+	if !s.watch.CompareAndSwap(nil, w) {
+		return s.watch.Load()
+	}
+	return w
 }

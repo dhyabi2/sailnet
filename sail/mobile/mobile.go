@@ -139,7 +139,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	// are accepted for compatibility and ignored.
 	m = client.NewStealthManagerBootstrap(o.Hops, o.ExitCC, o.Anchor, o.MaxRate, "", noChain != nil)
 	if noChain != nil {
-		log.Printf("first run: wallet state fetched through Sailnet's endpoint, then cached")
+		log.Printf("first run: ledger read through the entry relay until the wallet state is cached")
 	}
 	m.SetCensored(true)
 	m.SetExcludeExit(o.ExcludeCC)
@@ -155,9 +155,13 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 				return
 			}
 			if c, err := m.Circuit(); err == nil && c != nil {
+				m.StopFundsWatch()
 				continue
 			} else if err != nil && !strings.Contains(err.Error(), "retrying shortly") {
 				logFundsErr(err)
+				if strings.Contains(err.Error(), "no XNO") {
+					m.EnsureFundsWatch() // the entry tells us the moment funds confirm
+				}
 			}
 		}
 	}()
@@ -297,6 +301,9 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 		}
 		if id.LocalPort == 53 { // DNS over TCP: ask the resolver at the exit instead
 			dst = upstream
+		} else if id.LocalPort == 80 && !client.AllowPlainHTTP {
+			logHTTPRefused()
+			return // plain HTTP: readable by the exit and every network after it
 		} else if ip := net.ParseIP(id.LocalAddress.String()); ip != nil && ip.IsPrivate() {
 			return // the fake DNS address or a LAN host: nothing behind the exit can reach it
 		}
@@ -422,4 +429,16 @@ func logFundsErr(err error) {
 	}
 	fundsErrAt = time.Now()
 	log.Printf("circuit: %v", err)
+}
+
+var httpRefusedAt time.Time
+
+func logHTTPRefused() {
+	mu.Lock()
+	defer mu.Unlock()
+	if time.Since(httpRefusedAt) < time.Minute {
+		return
+	}
+	httpRefusedAt = time.Now()
+	log.Printf("refused a plain HTTP (port 80) connection: only encrypted traffic leaves the exit")
 }

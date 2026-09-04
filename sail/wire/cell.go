@@ -341,6 +341,25 @@ const (
 	// mixed into bursts so a new stream's record-size sequence (an inner TLS
 	// handshake, say) does not look like a textbook TLS-in-TLS exchange.
 	CmdPadding byte = 18
+	// CmdCover (circuit 0, client → entry): switch this connection to cadence
+	// mode. Payload: cadence in ms (uint16) ‖ max cells per tick (uint8). Both
+	// sides then send at least one cell per tick, padding when idle, so an
+	// observer of the entry link sees a steady rhythm instead of the shape of
+	// what the user does.
+	CmdCover byte = 19
+	// CmdRPC (circuit 0, client → entry): a Nano RPC request (JSON) for the
+	// relay to forward to its own ledger source, so a fresh client reads the
+	// ledger without ever connecting to anything but its entry. StreamID is
+	// the request id; CmdRPCReply cells carry the answer in order, ending with
+	// an empty payload. Rate-limited and action-filtered by the relay.
+	CmdRPC      byte = 20
+	CmdRPCReply byte = 21
+	// CmdWatch (circuit 0, client → entry): payload is an account; the entry
+	// subscribes to its confirmations upstream and pushes each one back as a
+	// CmdNotify cell (JSON: account, amount, hash, subtype, link). A client
+	// waiting for funds learns of them the second they confirm.
+	CmdWatch  byte = 22
+	CmdNotify byte = 23
 )
 
 // PaddingCell returns a marshalled padding cell (random payload).

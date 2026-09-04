@@ -393,7 +393,7 @@ func (r *Registry) RefreshScores(ctx context.Context) error {
 // RewardTerm is the lottery weight of a relay in one of the two draws:
 // "age" (seniority) or "perf" (performance), normalised to the best relay,
 // with a floor so new relays are drawn often enough to build a record.
-// Clients hold the 60/40 draw.
+// Clients hold the 60/40 draw; see docs/REWARDS.md.
 func (r *Registry) RewardTerm(acct, mode string) float64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

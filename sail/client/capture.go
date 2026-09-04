@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// Whole-device capture without a root daemon: a DNS
+// Whole-device capture, the MASQ way but without a root daemon: a DNS
 // sinkhole on :53 answers every name with 127.0.0.1, so every application's
 // TCP flow to port 80 or 443 lands on our listeners; the Host header or the
 // TLS SNI names the real destination and the flow goes out through the

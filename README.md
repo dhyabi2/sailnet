@@ -84,6 +84,18 @@ itself the same way and shows where to get XNO.
 
 Every one of these is in the code today, not a plan.
 
+- **One connection, ever.** A client talks to nothing but its entry relay.
+  The first ledger read of a fresh wallet, and the watch for its first
+  payment, go through the entry on the tunnel's control channel: the entry
+  forwards a small, rate-limited set of ledger requests and pushes the
+  confirmation the moment it lands. No Nano node, no website, no WebSocket
+  is ever contacted by the client, and every block is signed on the client.
+- **Cadence on the entry link.** Both ends of the client-to-entry connection
+  send at least one cell every 25 ms, padding when idle, so the link's rhythm
+  no longer follows what the user does; relays batch with randomised timing
+  so single flows lose their shape in the aggregate.
+- **Plain HTTP refused.** Port 80 never leaves the exit unless the operator
+  explicitly allows it; only encrypted destinations do.
 - **Looks like a website.** A relay is an HTTPS server with a real decoy site.
   The client sends a current Chrome ClientHello (uTLS) with the relay's
   hostname as SNI, then a standard WebSocket upgrade; only a path carrying a

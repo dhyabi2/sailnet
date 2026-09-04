@@ -166,7 +166,7 @@ func (e *RPCError) Error() string { return e.Action + ": " + e.Msg }
 // IsNotFound reports the "Account not found" condition.
 func IsNotFound(err error) bool {
 	var re *RPCError
-	return errors.As(err, &re) && (re.Msg == "Account not found" || re.Msg == "Block not found")
+	return errors.As(err, &re) && (strings.HasSuffix(re.Msg, "Account not found") || strings.HasSuffix(re.Msg, "Block not found"))
 }
 
 // AccountInfo is the subset of account_info we need.
@@ -500,4 +500,18 @@ func (c *Client) Primary() string {
 		u = u[:i]
 	}
 	return u
+}
+
+// CallRaw performs an RPC action from a raw JSON body and returns the raw
+// JSON answer. Used by relays forwarding a client's ledger request.
+func (c *Client) CallRaw(ctx context.Context, body []byte) ([]byte, error) {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("bad request: %w", err)
+	}
+	var out json.RawMessage
+	if err := c.Call(ctx, req, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

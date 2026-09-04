@@ -48,6 +48,14 @@ type Stream struct {
 	ok   chan error
 }
 
+// CoverTick and CoverBurst set the cadence of the client→entry link: one
+// tick sends between one and CoverBurst cells, padding when idle. Zero
+// disables. 25 ms with 16 cells caps a link at about 650 KB/s.
+var (
+	CoverTick  = 25 * time.Millisecond
+	CoverBurst = 16
+)
+
 // Build opens a circuit through path one hop at a time. On error, Failed is
 // the index of the hop that could not be reached or did not sign its ack.
 // payment, if non-nil, is the JSON array of the two signed SAIL blocks that
@@ -67,6 +75,13 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 	}
 	c.conn, c.w = conn, newConnWriter(conn, true)
 	c.leaf = LeafHash(conn)
+	// Cadence mode on the entry link: both sides send at least one cell per
+	// tick from here on, so the link's rhythm no longer follows the user.
+	if CoverTick > 0 {
+		ms := int(CoverTick / time.Millisecond)
+		c.w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst)}})
+		c.w.SetCover(CoverTick, CoverBurst)
+	}
 
 	// CREATE with hop 0 (plaintext over TLS).
 	priv, pub, err := wire.GenX25519()

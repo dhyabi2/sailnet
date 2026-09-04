@@ -1,9 +1,11 @@
 package relay
 
 import (
+	mathrand "math/rand"
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dhyabi2/sail/shape"
@@ -20,7 +22,7 @@ import (
 //
 // The burst is then cut into TLS records by shape.Shaper, which replays the
 // record sizes of real HTTPS for the first records of the connection and
-// afterwards cuts at sizes drawn from the same measurement.
+// afterwards cuts at sizes drawn from the same measurement. See docs/SHAPING.md.
 type connWriter struct {
 	mu     sync.Mutex
 	c      net.Conn
@@ -32,6 +34,78 @@ type connWriter struct {
 	closed bool
 	last   time.Time
 	carry  [][]byte // cells taken while waiting for a held remainder
+	cover  atomic.Pointer[coverParams]
+}
+
+// coverParams is the cadence mode negotiated with CmdCover: every tick sends
+// between one and burst cells, padding when there is nothing to send.
+type coverParams struct {
+	tick  time.Duration
+	burst int
+}
+
+// SetCover switches this writer to cadence mode for the rest of its life.
+func (w *connWriter) SetCover(tick time.Duration, burst int) {
+	if tick < 5*time.Millisecond {
+		tick = 5 * time.Millisecond
+	}
+	if burst < 1 {
+		burst = 1
+	}
+	if burst > 64 {
+		burst = 64
+	}
+	w.cover.Store(&coverParams{tick: tick, burst: burst})
+	select { // wake the flusher so it moves to the cadence loop
+	case w.ctl <- wire.PaddingCell():
+	default:
+	}
+}
+
+// runCover is the cadence loop: one tick, one burst, always at least one
+// cell. Data cells keep their order; control cells go first.
+func (w *connWriter) runCover(cp *coverParams) {
+	t := time.NewTicker(cp.tick)
+	defer t.Stop()
+	for {
+		select {
+		case <-w.done:
+			return
+		case <-t.C:
+		}
+		var batch [][]byte
+		w.mu.Lock()
+		batch, w.carry = w.carry, nil
+		w.mu.Unlock()
+	fill:
+		for len(batch) < cp.burst {
+			select {
+			case b := <-w.ctl:
+				batch = append(batch, b)
+			case b := <-w.q:
+				batch = append(batch, b)
+			default:
+				break fill
+			}
+		}
+		if len(batch) == 0 {
+			batch = append(batch, wire.PaddingCell())
+		}
+		sort.SliceStable(batch, func(i, j int) bool { return isCtl(batch[i]) && !isCtl(batch[j]) })
+		buf := make([]byte, 0, len(batch)*wire.CellSize)
+		for _, b := range batch {
+			buf = append(buf, b...)
+		}
+		w.c.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		if err := w.sh.Write(chunker{w.c}, buf, wire.PaddingCell); err != nil {
+			w.fail(err)
+			return
+		}
+		if err := w.sh.Flush(chunker{w.c}); err != nil { // a tick is a record boundary
+			w.fail(err)
+			return
+		}
+	}
 }
 
 // writerQueue bounds the data in flight per connection. A full queue blocks
@@ -134,6 +208,10 @@ func (w *connWriter) stop() {
 // coalescing window to add more, then writes everything as one shaped burst.
 func (w *connWriter) flush() {
 	for {
+		if cp := w.cover.Load(); cp != nil {
+			w.runCover(cp)
+			return
+		}
 		var batch [][]byte
 		w.mu.Lock()
 		batch, w.carry = w.carry, nil
@@ -154,18 +232,18 @@ func (w *connWriter) flush() {
 			// other, until the byte target, the delay cap, or silence.
 			size := len(batch[0])
 			cap := time.NewTimer(maxDelay(p))
-			quiet := time.NewTimer(p.Coalesce)
+			quiet := time.NewTimer(quietGap(p))
 		gather:
 			for size < flushBytes(p) && len(batch) < writerQueue {
 				select {
 				case b := <-w.ctl:
 					batch = append(batch, b)
 					size += len(b)
-					quiet.Reset(p.Coalesce)
+					quiet.Reset(quietGap(p))
 				case b := <-w.q:
 					batch = append(batch, b)
 					size += len(b)
-					quiet.Reset(p.Coalesce)
+					quiet.Reset(quietGap(p))
 				case <-quiet.C:
 					break gather
 				case <-cap.C:
@@ -252,11 +330,23 @@ func (w *connWriter) pushBack(b []byte) {
 // Overhead reports the padding and payload bytes this connection has written.
 func (w *connWriter) Overhead() (pad, data int) { return w.sh.Padding, w.sh.Data }
 
+// maxDelay and quietGap are drawn at random around the configured values:
+// a relay that batches with a fixed rhythm hands an observer a clock to
+// align flows by; one that varies it does not.
 func maxDelay(p *shape.Params) time.Duration {
-	if p.MaxDelay <= 0 {
-		return 200 * time.Millisecond
+	d := p.MaxDelay
+	if d <= 0 {
+		d = 200 * time.Millisecond
 	}
-	return p.MaxDelay
+	return d/2 + time.Duration(mathrand.Int63n(int64(d/2)+1))
+}
+
+func quietGap(p *shape.Params) time.Duration {
+	g := p.Coalesce
+	if g <= 0 {
+		return 0
+	}
+	return g*7/10 + time.Duration(mathrand.Int63n(int64(g*6/10)+1))
 }
 
 func flushBytes(p *shape.Params) int {
