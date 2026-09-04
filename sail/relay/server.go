@@ -1078,7 +1078,7 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
 	s.Metrics.Streams.Add(1)
 	// Read far more than one cell at a time and hand the whole chunk to the
 	// writer as one batch: the records that leave the tunnel then carry many
-	// cells each, instead of one cell per record. See docs/SHAPING.md.
+	// cells each, instead of one cell per record.
 	buf := make([]byte, 32*wire.MaxData)
 	for {
 		n, err := conn.Read(buf)
@@ -1255,7 +1255,7 @@ func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 // Write passes straight through: record boundaries are decided by the
 // tunnel writer's shaper (relay/writer.go), not here. The random 1–3 way
 // split that used to live here chopped every record the shaper produced;
-// docs/SHAPING.md has the measurement.
+// The measurement is reproducible with `sailtrace`.
 func (b *bufConn) Write(p []byte) (int, error) { return b.Conn.Write(p) }
 
 // wsAccept computes the RFC 6455 Sec-WebSocket-Accept value.

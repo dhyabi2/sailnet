@@ -44,7 +44,7 @@ const (
 	AgeCap         = 180
 	EpochSeconds   = 86400
 	MinPaidPercent = 95 // tolerance for rounding and RPC timestamp skew at epoch edges
-	// Anti-manipulation parameters (see docs/REWARDS.md, "Why it resists manipulation"):
+	// Anti-manipulation parameters:
 	// an epoch counts toward age only with real earnings from several payers;
 	// tiny payers do not count toward performance and large ones are capped;
 	// and no relay can receive more than RewardCapPercent of its own levy, so
@@ -380,7 +380,7 @@ func (t *EpochTable) Compliant(acct string) bool {
 	return r.Paid.Cmp(need) >= 0
 }
 
-// String renders the table for audit.
+// String renders the table for inspection.
 func (t *EpochTable) String() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "epoch %d (%s UTC)\n", t.Epoch, time.Unix(int64(t.Epoch)*EpochSeconds, 0).UTC().Format("2006-01-02"))

@@ -22,7 +22,7 @@ import (
 //
 // The burst is then cut into TLS records by shape.Shaper, which replays the
 // record sizes of real HTTPS for the first records of the connection and
-// afterwards cuts at sizes drawn from the same measurement. See docs/SHAPING.md.
+// afterwards cuts at sizes drawn from the same measurement.
 type connWriter struct {
 	mu     sync.Mutex
 	c      net.Conn

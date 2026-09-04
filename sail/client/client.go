@@ -605,7 +605,7 @@ func runClient(args []string) {
 		nano.ConfigureRPC(*rpcURL, *rpcKey)
 	}
 	// SAIL_TRACE=<file> records every TLS record of the client's relay
-	// connections, as a censor on the path would see them (docs/SHAPING.md).
+	// connections, as a censor on the path would see them.
 	if tf := os.Getenv("SAIL_TRACE"); tf != "" {
 		sink, err := shape.Create(tf)
 		if err != nil {
