@@ -67,7 +67,12 @@ jobs:
         run: |
           for arch in arm64 amd64; do
             mkdir -p dmg && cp -R "out/Sailnet-$arch.app" dmg/Sailnet.app && ln -sf /Applications dmg/Applications
-            hdiutil create -volname Sailnet -srcfolder dmg -ov -format UDZO "out/Sailnet-macos-$arch.dmg"
+            # hdiutil on hosted runners sometimes answers "Resource busy"; retry.
+            for try in 1 2 3 4 5; do
+              hdiutil create -volname Sailnet -srcfolder dmg -ov -format UDZO "out/Sailnet-macos-$arch.dmg" && break
+              sleep 5
+            done
+            test -f "out/Sailnet-macos-$arch.dmg"
             rm -rf dmg
           done
       - name: Notarize
