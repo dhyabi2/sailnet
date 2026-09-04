@@ -107,7 +107,6 @@ func (m *manager) ServeStatus(addr string) {
 	}
 	mux.HandleFunc("/status", h(func() any { return m.StatusJSON() }))
 	mux.HandleFunc("/relays", h(func() any { return m.RelaysJSON() }))
-	mux.HandleFunc("/flows", h(func() any { var v []any; json.Unmarshal([]byte(Flows()), &v); return v }))
 	mux.HandleFunc("/rebuild", func(w http.ResponseWriter, r *http.Request) {
 		if !guard(w, r) {
 			return

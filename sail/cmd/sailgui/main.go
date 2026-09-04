@@ -268,12 +268,8 @@ func main() {
 		widget.NewLabelWithStyle("LOG", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewVScroll(logView),
 	)
-	activity := widget.NewLabel("")
-	activity.Wrapping = fyne.TextWrapWord
-	activity.TextStyle = fyne.TextStyle{Monospace: true}
 	tabs := container.NewAppTabs(
 		container.NewTabItem("STATUS", main),
-		container.NewTabItem("ACTIVITY", container.NewVScroll(activity)),
 		container.NewTabItem("SETTINGS", container.NewVScroll(settings)),
 	)
 	w.SetContent(tabs)
@@ -284,10 +280,8 @@ func main() {
 			m := mgr
 			mu.Unlock()
 			txt := logs.text()
-			act := activityText()
 			fyne.Do(func() {
 				logView.SetText(txt)
-				activity.SetText(act)
 				if m == nil {
 					balance.SetText("")
 					return

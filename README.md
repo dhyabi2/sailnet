@@ -249,9 +249,9 @@ submits to addons.mozilla.org on every version tag.
 
 ## Desktop apps
 
-`sail/cmd/sailgui` is the macOS and Windows client: one small window with
-connect, wallet (address, balance, where to get XNO), status and settings
-(hops, exit country, censored mode, bridges). It runs the same client as
+`sail/cmd/sailgui` is the macOS, Windows and Linux client: one small window
+with connect, wallet (address, balance, where to get XNO), status and
+settings (exit exclusion, bridges). It runs the same client as
 `sailnode client` and serves a SOCKS5 proxy on 127.0.0.1:1080 and DNS on
 127.0.0.1:5300 for browsers and the extension. Releases carry
 `Sailnet-macos-arm64.dmg`, `Sailnet-macos-amd64.dmg`,

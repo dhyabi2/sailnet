@@ -293,11 +293,9 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 			return
 		}
 		defer st.Close()
-		f := trackFlow("tcp", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), int(id.LocalPort))
-		defer f.close()
 		done := make(chan struct{}, 2)
-		go func() { io.Copy(meter{client.Up(st), f.addUp}, conn); st.Close(); done <- struct{}{} }()
-		go func() { io.Copy(meter{client.Down(conn), f.addDown}, st); done <- struct{}{} }()
+		go func() { io.Copy(client.Up(st), conn); st.Close(); done <- struct{}{} }()
+		go func() { io.Copy(client.Down(conn), st); done <- struct{}{} }()
 		<-done
 	}()
 }
@@ -307,8 +305,6 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 		defer conn.Close()
 		id := conn.ID()
 		if id.LocalPort == 53 { // DNS: resolved through the circuit at the exit
-			f := trackFlow("dns", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), 53)
-			defer f.close()
 			buf := make([]byte, 4096)
 			for {
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -317,10 +313,8 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 					return
 				}
 				q := append([]byte(nil), buf[:n]...)
-				f.addUp(n)
 				go func() {
 					if ans, err := h.m.ResolveViaCircuit(q, upstream); err == nil {
-						f.addDown(len(ans))
 						conn.WriteTo(ans, from)
 					} else {
 						logDNSErr(err)
@@ -342,8 +336,6 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 			return
 		}
 		defer st.Close()
-		f := trackFlow("udp", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), int(id.LocalPort))
-		defer f.close()
 		var first net.Addr
 		var up, down int
 		defer func() { log.Printf("udp flow closed: %d datagrams up, %d down", up, down) }()
@@ -360,7 +352,6 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				for dg := d.Next(); dg != nil; dg = d.Next() {
 					if first != nil {
 						client.Down(discard{}).Write(dg) // traffic counter
-						f.addDown(len(dg))
 						down++
 						conn.WriteTo(dg, first)
 					}
@@ -378,7 +369,6 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				first = from
 			}
 			up++
-			f.addUp(n)
 			if _, err := client.Up(st).Write(relay.Frame(buf[:n])); err != nil {
 				return
 			}

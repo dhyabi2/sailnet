@@ -822,10 +822,8 @@ func (m *manager) serveSocks(conn net.Conn) {
 	// behind BEGIN, saving a full 3-hop round trip per connection.
 	conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 	done := make(chan struct{}, 2)
-	fl := newSocksFlow(conn.RemoteAddr(), target)
-	defer func() { socksFlowsMu.Lock(); fl.Open = false; socksFlowsMu.Unlock() }()
-	go func() { io.Copy(flowCounter{Up(st), fl, &fl.Up}, conn); st.Close(); done <- struct{}{} }()
-	go func() { io.Copy(flowCounter{Down(conn), fl, &fl.Down}, st); done <- struct{}{} }()
+	go func() { io.Copy(Up(st), conn); st.Close(); done <- struct{}{} }()
+	go func() { io.Copy(Down(conn), st); done <- struct{}{} }()
 	<-done
 }
 
@@ -1253,69 +1251,4 @@ func CachedCountries() []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// Per-connection metering of the SOCKS proxy for the desktop Activity tab:
-// the source port identifies the local process (the app resolves it with the
-// OS), the destination and bytes say what it did.
-type socksFlow struct {
-	SrcPort int    `json:"srcPort"`
-	Dst     string `json:"dst"`
-	Up      int64  `json:"up"`
-	Down    int64  `json:"down"`
-	Started int64  `json:"started"`
-	Last    int64  `json:"last"`
-	Open    bool   `json:"open"`
-}
-
-var (
-	socksFlowsMu sync.Mutex
-	socksFlows   []*socksFlow
-)
-
-func newSocksFlow(src net.Addr, dst string) *socksFlow {
-	f := &socksFlow{Dst: dst, Started: time.Now().Unix(), Last: time.Now().Unix(), Open: true}
-	if a, ok := src.(*net.TCPAddr); ok {
-		f.SrcPort = a.Port
-	}
-	socksFlowsMu.Lock()
-	socksFlows = append(socksFlows, f)
-	if len(socksFlows) > 2000 {
-		socksFlows = socksFlows[len(socksFlows)-1000:]
-	}
-	socksFlowsMu.Unlock()
-	return f
-}
-
-type flowCounter struct {
-	w io.Writer
-	f *socksFlow
-	n *int64
-}
-
-func (c flowCounter) Write(p []byte) (int, error) {
-	n, err := c.w.Write(p)
-	if n > 0 {
-		socksFlowsMu.Lock()
-		*c.n += int64(n)
-		c.f.Last = time.Now().Unix()
-		socksFlowsMu.Unlock()
-	}
-	return n, err
-}
-
-// Flows returns the SOCKS connections of the last ten minutes as JSON.
-func Flows() string {
-	cut := time.Now().Add(-10 * time.Minute).Unix()
-	socksFlowsMu.Lock()
-	var out []*socksFlow
-	for _, f := range socksFlows {
-		if f.Last >= cut {
-			c := *f
-			out = append(out, &c)
-		}
-	}
-	socksFlowsMu.Unlock()
-	b, _ := json.Marshal(out)
-	return string(b)
 }

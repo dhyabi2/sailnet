@@ -38,8 +38,5 @@ object Prefs {
     }
     fun setNick(ctx: Context, n: String) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("nick", n.trim()).apply()
 
-    fun activityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("activity_consent", false)
-    fun setActivityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putBoolean("activity_consent", true).apply()
-
     fun autoConnect(ctx: Context) = true // always: opening the app means "protect me"
 }

@@ -1,15 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-        <!-- Activity screen: names of the apps using the tunnel (Android 11+ hides other apps without it). -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <!-- Activity screen: per-app network statistics. Granted by the user on Android's "Usage access" page. -->
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
 
     <application
         android:label="@string/app_name"
@@ -25,7 +19,6 @@
         <activity android:name=".SettingsActivity" android:exported="false" android:label="Settings" />
         <activity android:name=".RelaysActivity" android:exported="false" android:label="Relays" />
         <activity android:name=".LogActivity" android:exported="false" android:label="Log" />
-        <activity android:name=".ActivityActivity" android:exported="false" android:label="Activity" />
         <service
             android:name=".SailVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
