@@ -1,6 +1,6 @@
 name: Desktop apps
 
-# macOS .dmg, Windows .exe and Linux .tar.xz of the Sailnet desktop client, built with
+# macOS .dmg (Apple Silicon and Intel) and Windows .exe of the Sailnet desktop client, built with
 # fyne, attached to the release on version tags. Signing happens when the
 # certificates are present as secrets; without them the artifacts are
 # unsigned and still run. Every artifact ships with a .sha256 next to it (macOS: right-click → Open; Windows: SmartScreen
@@ -139,33 +139,3 @@ jobs:
         with:
           files: out/*
 
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: sail/go.mod
-          cache-dependency-path: sail/go.sum
-      - name: Toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev
-          go install fyne.io/tools/cmd/fyne@latest
-      - name: Build (amd64)
-        working-directory: sail/cmd/sailgui
-        run: |
-          mkdir -p ../../../out
-          CGO_ENABLED=1 fyne package -os linux -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
-          mv Sailnet.tar.xz ../../../out/Sailnet-Linux.tar.xz
-          CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o ../../../out/sailgui-linux-amd64 .
-      - name: Checksums
-        run: cd out && for f in Sailnet-Linux.tar.xz sailgui-linux-amd64; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux
-          path: out/*
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          files: out/*

@@ -17,12 +17,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - { goos: linux,   goarch: amd64 }
-          - { goos: linux,   goarch: arm64 }
-          - { goos: linux,   goarch: arm, goarm: "7" }
-          - { goos: darwin,  goarch: arm64 }
-          - { goos: darwin,  goarch: amd64 }
-          - { goos: windows, goarch: amd64 }
+          - { goos: linux,   goarch: amd64 }   # the relay binary the install command downloads; apps come from the other workflows
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,7 +36,6 @@ jobs:
           suffix="${GOOS}-${GOARCH}"; [ -n "$GOARM" ] && suffix="${suffix}v${GOARM}"
           mkdir -p ../out
           go build -trimpath -ldflags="-s -w" -o "../out/sailnode-${suffix}${ext}" ./cmd/sailnode
-          go build -trimpath -ldflags="-s -w" -o "../out/sail-${suffix}${ext}" ./cmd/sail
       - uses: actions/upload-artifact@v4
         with:
           name: node-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}
@@ -57,7 +51,7 @@ jobs:
           path: out
           merge-multiple: true
       - name: Checksums
-        run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done && sha256sum sail* > SHA256SUMS && cat SHA256SUMS
+        run: cd out && for f in *; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*
