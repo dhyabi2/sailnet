@@ -134,7 +134,8 @@ type manager struct {
 	// directBootstrap lets a stealth client reach the ledger directly while it
 	// has no cached chain state at all (first run on a fresh device).
 	directBootstrap bool
-	fundsWatch      func() // stops the confirmation watch while waiting for funds
+	fundsWatch      func()    // stops the confirmation watch while waiting for funds
+	faucetAt        time.Time // last faucet claim (one per day)
 }
 
 // dialViaCircuit is the transport for Nano RPC in stealth mode: the request
@@ -1256,8 +1257,28 @@ type StreamConn = streamConn
 // ErrIngress marks a failure on the client's own ingress circuit.
 var ErrIngress = errIngress
 
-func DataDir() string                         { return dataDir() }
-func LoadKey() *nano.Key                      { return loadKey() }
+func DataDir() string    { return dataDir() }
+func LoadKey() *nano.Key { return loadKey() }
+
+// LoadKeyFrom reads a wallet file (seed + index) at an explicit path.
+func LoadKeyFrom(path string) (*nano.Key, error) {
+	var wf struct {
+		Seed  string `json:"seed"`
+		Index uint32 `json:"index"`
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &wf); err != nil {
+		return nil, err
+	}
+	seed, err := hex.DecodeString(wf.Seed)
+	if err != nil || len(seed) != 32 {
+		return nil, fmt.Errorf("bad seed in %s", path)
+	}
+	return nano.DeriveKey(seed, wf.Index)
+}
 func ChainState(k *nano.Key) *nano.ChainState { return chainState(k) }
 func NewNano() *nano.Client                   { return newNano() }
 func Short(a string) string                   { return short(a) }
@@ -1508,6 +1529,7 @@ func (m *manager) EnsureFundsWatch() {
 		return
 	}
 	m.mu.Unlock()
+	m.claimFaucetOnce()
 	bs := m.bridges()
 	if len(bs) == 0 {
 		return
@@ -1530,6 +1552,29 @@ func (m *manager) EnsureFundsWatch() {
 	m.fundsWatch = stop
 	m.mu.Unlock()
 	log.Printf("watching the ledger for the first payment to this wallet")
+}
+
+// claimFaucetOnce asks the faucet (through the entry relay) for the
+// registration amount, at most once per day per wallet; the confirmation
+// watch then sees it arrive like any other payment. A refusal is logged
+// with the amount the user would have to send.
+func (m *manager) claimFaucetOnce() {
+	m.mu.Lock()
+	if time.Since(m.faucetAt) < 24*time.Hour {
+		m.mu.Unlock()
+		return
+	}
+	m.faucetAt = time.Now()
+	m.mu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if fr, err := ClaimFaucet(ctx, m.nc.HTTP, m.key.Address); err != nil {
+			log.Printf("faucet: %v", err)
+		} else {
+			log.Printf("faucet: %s XNO on its way (%s); connecting when it confirms", fr.Amount, fr.Hash[:8])
+		}
+	}()
 }
 
 // StopFundsWatch ends the confirmation watch, if any.

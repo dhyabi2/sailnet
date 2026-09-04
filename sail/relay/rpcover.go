@@ -2,12 +2,16 @@ package relay
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +29,7 @@ import (
 var rpcAllowed = map[string]bool{
 	"account_info": true, "account_history": true, "account_balance": true,
 	"blocks_info": true, "block_info": true, "receivable": true, "pending": true,
+	"faucet":  true, // not a ledger action: forwarded to the website faucet with the client's IP
 	"process": true, "work_generate": true, "block_count": true,
 }
 
@@ -99,6 +104,10 @@ func (s *Server) handleRPC(cell *wire.Cell, in *connWriter, remote string) {
 		fail("rate limit")
 		return
 	}
+	if req.Action == "faucet" {
+		reply(forwardFaucet(cell.Payload, ip))
+		return
+	}
 	if s.Nano == nil {
 		fail("no ledger source")
 		return
@@ -119,6 +128,35 @@ func (s *Server) handleRPC(cell *wire.Cell, in *connWriter, remote string) {
 		return
 	}
 	reply(out)
+}
+
+// FaucetURL is where a relay sends a client's faucet claim; the client's own
+// address goes along so the faucet's per-IP limit counts the client, not the
+// relay. FAUCET_SECRET, when this relay has it, proves that header.
+var FaucetURL = "https://www.sailnet.space/api/faucet"
+
+func forwardFaucet(body []byte, clientIP string) []byte {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FaucetURL, bytes.NewReader(body))
+	if err != nil {
+		return []byte(`{"ok":false,"amount":"0.0005","error":"faucet request failed"}`)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", clientIP)
+	if sec := os.Getenv("FAUCET_SECRET"); sec != "" {
+		req.Header.Set("X-Faucet-Secret", sec)
+	}
+	resp, err := (&http.Client{Timeout: 150 * time.Second}).Do(req)
+	if err != nil {
+		return []byte(`{"ok":false,"amount":"0.0005","error":"faucet unreachable from the relay: the registration amount of 0.0005 XNO must be sent by hand"}`)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if len(out) == 0 || out[0] != '{' {
+		return []byte(`{"ok":false,"amount":"0.0005","error":"faucet answered without JSON (HTTP ` + itoa(resp.StatusCode) + `)"}`)
+	}
+	return out
 }
 
 func jsonString(s string) string {

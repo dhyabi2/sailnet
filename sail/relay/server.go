@@ -54,7 +54,8 @@ type Server struct {
 	// GetCertificate, when set (ACME), supplies the live certificate instead of
 	// TLS; the ack then binds whatever leaf is being served right now.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
-	Host           string // the name the certificate is for
+	Host           string  // the name the certificate is for
+	Faucet         *Faucet // optional: /faucet on the HTTPS listener
 	Exit           bool
 	AllowPrivate   bool     // test mode only: let the exit reach loopback/LAN targets
 	PoolRaw        *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
@@ -268,6 +269,9 @@ func (s *Server) pumpUp(c *circuit, sid uint16, st *exitStream, already int) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.Faucet != nil {
+		mux.Handle("/faucet", s.Faucet)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// The tunnel looks like a WebSocket upgrade. Only a request whose path
 		// carries today's token (and the bridge secret, if any) is a tunnel;

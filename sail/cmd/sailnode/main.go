@@ -19,6 +19,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -88,6 +89,9 @@ func runRelay(args []string) {
 	exit := fs.Bool("exit", true, "offer exit service")
 	register := fs.Bool("register", false, "publish REGISTER + DESCRIPTOR on the ledger")
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "no effect (kept for old command lines): relays use Sailnet's endpoint unless --rpc names your own node")
+	faucetWallet := fs.String("faucet-wallet", "", "serve a faucet at /faucet paying the registration amount from this wallet file (empty = no faucet)")
+	faucetAmount := fs.String("faucet-amount", "0.0005", "XNO per faucet claim (the registration amount: one anchor)")
+	faucetPerIP := fs.Int("faucet-per-ip", 10, "faucet claims per public IP per day")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
@@ -218,6 +222,19 @@ func runRelay(args []string) {
 	// only if the ledger does not already show this exact record, and retry in
 	// the background (10-minute backoff) if the wallet is not funded yet.
 	if *register {
+		// A wallet that was never opened cannot publish REGISTER: ask the
+		// faucet for the registration amount first. Failure is not fatal;
+		// the message names the amount to send by hand.
+		if _, ok, err := nc.AccountInfo(context.Background(), key.Address); err == nil && !ok {
+			log.Printf("wallet %s is empty: asking the faucet for the registration amount", client.Short(key.Address))
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			if err := client.FundFromFaucet(ctx, &http.Client{Timeout: 150 * time.Second}, nc, key); err != nil {
+				log.Printf("faucet: %v", err)
+			} else {
+				log.Printf("faucet: wallet funded and opened")
+			}
+			cancel()
+		}
 		go func() {
 			for {
 				if registered(nc, key, strings.ToUpper(*cc), uint32(*asn), rateU, flags, desc) {
@@ -356,6 +373,18 @@ func runRelay(args []string) {
 			log.Printf("metrics %s", data)
 		}
 	}()
+	if *faucetWallet != "" {
+		fk, err := client.LoadKeyFrom(*faucetWallet)
+		if err != nil {
+			log.Fatalf("--faucet-wallet: %v", err)
+		}
+		amt, err := token.ParseXNO(*faucetAmount)
+		if err != nil || amt.Sign() <= 0 {
+			log.Fatalf("bad --faucet-amount %q", *faucetAmount)
+		}
+		s.Faucet = &relay.Faucet{Key: fk, Nano: nc, State: client.ChainState(fk), Amount: amt, PerIP: *faucetPerIP, Secret: os.Getenv("FAUCET_SECRET"), File: filepath.Join(client.DataDir(), "faucet.json")}
+		log.Printf("faucet: %s XNO per claim, %d per IP per day, from %s", *faucetAmount, *faucetPerIP, client.Short(fk.Address))
+	}
 	log.Printf("sailnode relay %s on %s (ip %s, cc %s, asn %d, rate %s XNO/MiB, exit=%v, certfp %x)", key.Address, *listen, *ip, *cc, *asn, *rate, *exit, fp)
 	for _, extra := range listens[1:] {
 		go func(a string) { log.Fatal(s.ListenAndServe(a)) }(a(extra))
