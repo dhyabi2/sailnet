@@ -38,6 +38,9 @@ type prefs struct {
 	Nick     string `json:"nick"`
 	RPCURL   string `json:"rpcUrl"`
 	RPCKey   string `json:"rpcKey"`
+	// NoSysProxy turns off the system proxy: by default the app routes the
+	// computer's browsers through its SOCKS port while connected.
+	NoSysProxy bool `json:"noSystemProxy"`
 }
 
 type ring struct {
@@ -99,6 +102,7 @@ func main() {
 	logs := &ring{}
 	log.SetOutput(client.RedactingWriter{W: logs})
 	p := loadPrefs()
+	client.RestoreSystemProxy() // a previous run that crashed while connected left the system proxy on: repair first
 	key := client.EnsureWallet()
 	client.SetNick(p.Nick, key.Address)
 
@@ -136,6 +140,7 @@ func main() {
 			go mgr.Shutdown() // never on the UI thread, never builds a circuit to close it
 			mgr = nil
 		}
+		go client.RestoreSystemProxy()
 		state.SetText("OFF")
 		steps.SetText("")
 		path.SetText("")
@@ -188,8 +193,16 @@ func main() {
 			mgr, ln = m, l
 			starting = false
 			mu.Unlock()
+			routed := "Browsers: set SOCKS5 " + p.Socks + " yourself (system proxy is off in Settings)"
+			if !p.NoSysProxy {
+				if err := client.SetSystemProxy(p.Socks); err != nil {
+					routed = "Could not set the system proxy (" + err.Error() + "); set SOCKS5 " + p.Socks + " in your browser"
+				} else {
+					routed = "This computer's browsers now go through Sailnet (system proxy → SOCKS5 " + p.Socks + ")"
+				}
+			}
 			fyne.Do(func() {
-				proxy.SetText("SOCKS5 " + p.Socks + "   DNS 127.0.0.1:5300")
+				proxy.SetText(routed + "   DNS 127.0.0.1:5300")
 				toggle.SetText("DISCONNECT")
 				toggle.Enable()
 			})
@@ -338,8 +351,14 @@ func main() {
 		client.SetNick(p.Nick, key.Address)
 		dialog.ShowInformation("Saved", "Settings apply to the next connection.", w)
 	})
+	sysProxy := widget.NewCheck("Route this computer's browsers through Sailnet while connected (system proxy)", func(on bool) {
+		p.NoSysProxy = !on
+		savePrefs(p)
+	})
+	sysProxy.SetChecked(!p.NoSysProxy)
 	settings := container.NewVBox(
 		widget.NewLabelWithStyle("SETTINGS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		sysProxy,
 		exclBox, socks, nick, bridges,
 		save,
 	)
@@ -430,6 +449,6 @@ func main() {
 			})
 		}
 	}()
-	w.SetCloseIntercept(func() { stop(); a.Quit() })
+	w.SetCloseIntercept(func() { stop(); client.RestoreSystemProxy(); a.Quit() })
 	w.ShowAndRun()
 }
