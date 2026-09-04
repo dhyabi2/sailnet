@@ -57,12 +57,14 @@ type Server struct {
 	Host           string  // the name the certificate is for
 	Faucet         *Faucet // optional: /faucet on the HTTPS listener
 
-	parkMu       sync.Mutex
-	parks        map[[32]byte]*circuit // circuits whose client link dropped, kept for a minute
-	Exit         bool
-	AllowPrivate bool     // test mode only: let the exit reach loopback/LAN targets
-	PoolRaw      *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
-	Decoy        string   // HTML served to everyone else
+	parkMu sync.Mutex
+	parks  map[[32]byte]*circuit // circuits whose client link dropped, kept for a minute
+
+	lastRegRefresh time.Time // on-demand registry re-read for newcomers, rate-limited
+	Exit           bool
+	AllowPrivate   bool     // test mode only: let the exit reach loopback/LAN targets
+	PoolRaw        *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
+	Decoy          string   // HTML served to everyone else
 
 	mu        sync.Mutex
 	pools     map[string]*pool // downstream relay account → pool
@@ -993,6 +995,23 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 	var clientPub [32]byte
 	copy(clientPub[:], data[i+1:])
 	rel := s.Registry.Get(nextAcct)
+	if rel == nil && s.Registry != nil {
+		// A relay this registry has not seen yet (it registered minutes ago):
+		// re-read the ledger now, at most once a minute, instead of refusing
+		// every circuit through a newcomer until the ten-minute refresh.
+		s.mu.Lock()
+		due := time.Since(s.lastRegRefresh) > time.Minute
+		if due {
+			s.lastRegRefresh = time.Now()
+		}
+		s.mu.Unlock()
+		if due {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			s.Registry.Refresh(ctx)
+			cancel()
+			rel = s.Registry.Get(nextAcct)
+		}
+	}
 	if rel == nil {
 		s.reply(c, wire.CmdError, sid, []byte("unknown relay "+nextAcct))
 		return

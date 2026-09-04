@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"strings"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
