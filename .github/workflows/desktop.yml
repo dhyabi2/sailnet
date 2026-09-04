@@ -66,13 +66,14 @@ jobs:
       - name: DMG
         run: |
           for arch in arm64 amd64; do
+            name=Intel; [ "$arch" = arm64 ] && name=AppleSilicon   # file names say the chip, not the architecture code
             mkdir -p dmg && cp -R "out/Sailnet-$arch.app" dmg/Sailnet.app && ln -sf /Applications dmg/Applications
             # hdiutil on hosted runners sometimes answers "Resource busy"; retry.
             for try in 1 2 3 4 5; do
-              hdiutil create -volname Sailnet -srcfolder dmg -ov -format UDZO "out/Sailnet-macos-$arch.dmg" && break
+              hdiutil create -volname Sailnet -srcfolder dmg -ov -format UDZO "out/Sailnet-macOS-$name.dmg" && break
               sleep 5
             done
-            test -f "out/Sailnet-macos-$arch.dmg"
+            test -f "out/Sailnet-macOS-$name.dmg"
             rm -rf dmg
           done
       - name: Notarize
@@ -115,7 +116,7 @@ jobs:
         run: |
           mkdir -p ../../../out
           CGO_ENABLED=1 fyne package -os windows -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
-          mv Sailnet.exe ../../../out/Sailnet-windows-amd64.exe
+          mv Sailnet.exe ../../../out/Sailnet-Windows.exe
       - name: Sign
         if: env.HAS_WIN_CERT == 'true'
         shell: pwsh
@@ -125,7 +126,7 @@ jobs:
         run: |
           [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:PFX))
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
-          & $signtool.FullName sign /f cert.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 out\Sailnet-windows-amd64.exe
+          & $signtool.FullName sign /f cert.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 out\Sailnet-Windows.exe
       - name: Checksums
         shell: bash
         run: cd out && for f in *.exe; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
@@ -156,10 +157,10 @@ jobs:
         run: |
           mkdir -p ../../../out
           CGO_ENABLED=1 fyne package -os linux -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
-          mv Sailnet.tar.xz ../../../out/Sailnet-linux-amd64.tar.xz
+          mv Sailnet.tar.xz ../../../out/Sailnet-Linux.tar.xz
           CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o ../../../out/sailgui-linux-amd64 .
       - name: Checksums
-        run: cd out && for f in Sailnet-linux-amd64.tar.xz sailgui-linux-amd64; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
+        run: cd out && for f in Sailnet-Linux.tar.xz sailgui-linux-amd64; do sha256sum "$f" > "$f.sha256"; done && cat *.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: linux

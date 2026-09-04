@@ -83,6 +83,7 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
           cd out && for f in *.apk; do mv "$f" "sailnet-${GITHUB_REF_NAME#v}-${f#app-}"; done
+          cp sailnet-*.apk Sailnet-Android.apk   # a stable name, so "releases/latest/download/Sailnet-Android.apk" always works
           for f in *.apk; do sha256sum "$f" > "$f.sha256"; done
           ls -la && cat *.sha256
 
