@@ -170,6 +170,7 @@
             android:orientation="horizontal">
             <Button android:id="@+id/copy" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Copy" />
             <Button android:id="@+id/share" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Share" />
+            <Button android:id="@+id/refresh" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Refresh" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>

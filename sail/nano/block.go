@@ -277,14 +277,21 @@ func (a *Account) ReceiveAll(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Every receivable is tried: one block that fails (not yet confirmed at
+	// the node, a transient RPC error) must not hide the others. The first
+	// error is reported after the loop, together with what was received.
 	n := 0
+	var firstErr error
 	for _, r := range rs {
 		if _, err := a.Receive(ctx, r.Hash, r.Amount); err != nil {
-			return n, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		n++
 	}
-	return n, nil
+	return n, firstErr
 }
 
 // ChangeRep publishes a change block (used by NOP to restore a real representative).

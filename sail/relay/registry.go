@@ -239,6 +239,18 @@ func (r *Registry) All() []*RelayInfo {
 
 // Add injects a relay: a bridge (Unlisted) is kept across Refresh; anything
 // else is a static bootstrap entry (tests).
+// LastSeen is when a relay last signed a gossip record that reached this
+// registry (relays sign a fresh one every time they answer a gossip request),
+// or zero when no record is known. A recent value is proof of life.
+func (r *Registry) LastSeen(acct string) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rec := r.gossip[acct]; rec != nil {
+		return time.Unix(rec.Time, 0)
+	}
+	return time.Time{}
+}
+
 func (r *Registry) Add(ri *RelayInfo) {
 	r.mu.Lock()
 	if ri.Unlisted {

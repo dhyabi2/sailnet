@@ -57,6 +57,17 @@ class MainActivity : AppCompatActivity() {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("nano address", addr))
             Toast.makeText(this, "Address copied", Toast.LENGTH_SHORT).show()
         }
+        findViewById<Button>(R.id.refresh).setOnClickListener {
+            val b = it as Button
+            b.isEnabled = false; b.text = "Checking…"
+            Thread {
+                val bal = try { Mobile.refresh() } catch (_: Exception) { "" }
+                ui.post {
+                    b.isEnabled = true; b.text = "Refresh"
+                    Toast.makeText(this, if (bal.isNotEmpty()) "Balance: $bal XNO" else "Could not reach the ledger yet", Toast.LENGTH_SHORT).show()
+                }
+            }.start()
+        }
         findViewById<Button>(R.id.share).setOnClickListener {
             startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, addr), "Share address"))
         }

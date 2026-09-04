@@ -59,6 +59,7 @@ $("toggle").onclick = async () => {
   render();
 };
 $("rebuild").onclick = async () => { await send({ type: "rebuild" }); setTimeout(render, 1500); };
+$("refresh").onclick = async () => { const b = $("refresh"); b.disabled = true; b.textContent = "Checking…"; await send({ type: "refresh" }); b.disabled = false; b.textContent = "Refresh balance"; render(); };
 $("copy").onclick = () => navigator.clipboard.writeText($("address").textContent);
 $("save").onclick = async () => {
   await send({ type: "save", settings: { socksHost: $("socksHost").value.trim(), socksPort: Number($("socksPort").value), statusUrl: $("statusUrl").value.trim().replace(/\/$/, "") } });

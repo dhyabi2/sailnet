@@ -133,6 +133,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     } else if (msg.type === "save") {
       await chrome.storage.local.set(msg.settings);
       reply(await reconcile());
+    } else if (msg.type === "refresh") {
+      const s = await settings();
+      try { await fetch(s.statusUrl + "/refresh", { method: "POST", headers: { "X-Sail": "1" } }); } catch (e) {}
+      reply(await reconcile());
     } else if (msg.type === "rebuild") {
       const s = await settings();
       try { await fetch(s.statusUrl + "/rebuild", { method: "POST", headers: { "X-Sail": "1" } }); } catch (e) {}

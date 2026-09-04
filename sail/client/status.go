@@ -109,6 +109,18 @@ func (m *manager) ServeStatus(addr string) {
 	}
 	mux.HandleFunc("/status", h(func() any { return m.StatusJSON() }))
 	mux.HandleFunc("/relays", h(func() any { return m.RelaysJSON() }))
+	mux.HandleFunc("/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if !guard(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		bal := m.RefreshFunds()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "balance": bal, "needsFunds": m.NeedsFunds()})
+	})
 	mux.HandleFunc("/rebuild", func(w http.ResponseWriter, r *http.Request) {
 		if !guard(w, r) {
 			return

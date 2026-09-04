@@ -1472,15 +1472,20 @@ func (m *manager) Balance() string {
 }
 
 // Relays is how many relays the client currently knows.
-// Relays counts relays this client considers usable: on the ledger and not
-// marked unreachable. Dead registrations stay on the ledger forever, so the
-// raw ledger count would overstate the network.
+// Relays counts relays known to be alive: a bridge we use, a relay that
+// answered a probe, or one whose own signed gossip record is recent (relays
+// sign a fresh record whenever they answer gossip). Dead registrations stay
+// on the ledger forever, so the raw ledger count would overstate the network.
 func (m *manager) Relays() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, r := range m.reg.All() {
-		if m.scoreOf(r.Account) >= 0.3 {
+		if m.scoreOf(r.Account) < 0.3 {
+			continue
+		}
+		_, probed := m.rtt[r.Account]
+		if r.Unlisted || probed || time.Since(m.reg.LastSeen(r.Account)) < 3*time.Hour {
 			n++
 		}
 	}
@@ -1668,6 +1673,20 @@ func (m *manager) EnsureFundsWatch() {
 	m.fundsWatch = stop
 	m.mu.Unlock()
 	log.Printf("watching the ledger for the first payment to this wallet")
+}
+
+// RefreshFunds is the apps' Refresh button: pocket every pending payment,
+// re-read the balance, and connect if the wallet can now pay. Returns the
+// balance in XNO ("" when unknown).
+func (m *manager) RefreshFunds() string {
+	m.pocket()
+	if !m.NeedsFunds() {
+		if live := m.live.Load(); live == nil || live.Closed() {
+			m.StopFundsWatch()
+			go m.circuit()
+		}
+	}
+	return m.Balance()
 }
 
 // startFundsPoll pockets receivables every 30 s while the wallet is empty and

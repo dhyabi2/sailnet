@@ -241,6 +241,27 @@ func main() {
 		}()
 	})
 	copyAddr := widget.NewButton("COPY ADDRESS", func() { w.Clipboard().SetContent(key.Address) })
+	refresh := widget.NewButton("REFRESH", nil)
+	refresh.OnTapped = func() {
+		mu.Lock()
+		m := mgr
+		mu.Unlock()
+		if m == nil {
+			return
+		}
+		refresh.SetText("CHECKING…")
+		refresh.Disable()
+		go func() {
+			b := m.RefreshFunds()
+			fyne.Do(func() {
+				if b != "" {
+					balance.SetText(b + " XNO")
+				}
+				refresh.SetText("REFRESH")
+				refresh.Enable()
+			})
+		}()
+	}
 	fundAsked := false
 	askFunds := func() {
 		msg := widget.NewLabel("This wallet has no XNO yet. Send it a little Nano: 0.0005 XNO buys about 25 MB.\nIt connects by itself the moment the funds confirm.")
@@ -334,7 +355,7 @@ func main() {
 		widget.NewLabelWithStyle("WALLET", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		addr,
 		balance,
-		container.NewGridWithColumns(3, copyAddr, faucets, newExit),
+		container.NewGridWithColumns(4, copyAddr, refresh, faucets, newExit),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("LOG", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewVScroll(logView),

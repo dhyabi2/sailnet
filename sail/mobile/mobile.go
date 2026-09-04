@@ -227,6 +227,18 @@ func Rebuild() {
 	}()
 }
 
+// Refresh pockets pending payments and re-reads the balance (the Refresh
+// button); returns the balance in XNO, "" when unknown.
+func Refresh() string {
+	mu.Lock()
+	m := mgr
+	mu.Unlock()
+	if m == nil {
+		return ""
+	}
+	return m.RefreshFunds()
+}
+
 // SetExcludeExit changes the excluded exit countries for the next circuit.
 func SetExcludeExit(list string) {
 	mu.Lock()
