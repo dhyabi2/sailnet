@@ -26,7 +26,7 @@ import (
 // fallbacks. NANO_RPC_URLS (or the apps' RPC setting) overrides the list.
 const (
 	PrimaryRPC  = "https://www.sailnet.space/node/api"
-	FallbackRPC = "https://sailnet-app.vercel.app/node/api"
+	FallbackRPC = "https://sailnet.space/node/api"
 )
 
 var DefaultRPCs = []string{PrimaryRPC, FallbackRPC, "https://rpc.nano-gpt.com", "https://node.somenano.com/proxy", "https://nanoslo.0x.no/proxy", "https://app.natrium.io/api"}

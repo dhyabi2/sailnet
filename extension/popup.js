@@ -33,9 +33,6 @@ async function render() {
   } else if (status) {
     setState("Building circuit", "wait", "warn");
     $("hint").textContent = "Paying the entry relay and extending the circuit. Pages will load in a few seconds.";
-  } else if (applied === "blocked") {
-    setState("Client not running", "blocked", "warn");
-    $("hint").textContent = "Kill switch is on: pages will not load until you start the Sailnet app. Turn the kill switch off in Settings to browse directly meanwhile.";
   } else {
     setState("Client not running", "direct", "warn");
     $("hint").textContent = "Browsing directly for now. Start the Sailnet app and this browser goes through the circuit again by itself.";
@@ -54,7 +51,6 @@ async function render() {
   $("socksHost").value = settings.socksHost;
   $("socksPort").value = settings.socksPort;
   $("statusUrl").value = settings.statusUrl;
-  $("killSwitch").checked = !!settings.killSwitch;
 }
 
 $("toggle").onclick = async () => {
@@ -65,7 +61,7 @@ $("toggle").onclick = async () => {
 $("rebuild").onclick = async () => { await send({ type: "rebuild" }); setTimeout(render, 1500); };
 $("copy").onclick = () => navigator.clipboard.writeText($("address").textContent);
 $("save").onclick = async () => {
-  await send({ type: "save", settings: { socksHost: $("socksHost").value.trim(), socksPort: Number($("socksPort").value), statusUrl: $("statusUrl").value.trim().replace(/\/$/, ""), killSwitch: $("killSwitch").checked } });
+  await send({ type: "save", settings: { socksHost: $("socksHost").value.trim(), socksPort: Number($("socksPort").value), statusUrl: $("statusUrl").value.trim().replace(/\/$/, "") } });
   render();
 };
 

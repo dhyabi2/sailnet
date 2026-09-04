@@ -96,7 +96,6 @@ class MainActivity : AppCompatActivity() {
                 val needsFunds = running && p.isEmpty() && s.optBoolean("needsFunds")
                 if (needsFunds && !askedFunds) { askedFunds = true; askFunds() }
                 status.text = when {
-                    SailVpnService.blackhole -> "Blocked (kill switch)"
                     running && p.isNotEmpty() -> "Connected"
                     needsFunds -> "Waiting for XNO"
                     starting || running -> if (stage.isNotEmpty() && stage != "Connected") "Connecting: $stage" else "Connecting…"
@@ -107,7 +106,7 @@ class MainActivity : AppCompatActivity() {
                     running && p.isNotEmpty() -> "Exit is the last hop. All apps go through it."
                     needsFunds -> "Your wallet has no XNO yet. Get some from a faucet and send it to the address below; Sailnet connects by itself when it arrives."
                     starting || running -> if (stage.isNotEmpty()) "Step by step: relay list, relay timing, payment, then the circuit hop by hop. Nothing leaves the device until the circuit is up." else lastLogLine(s.optString("log"))
-                    SailVpnService.lastError.isNotEmpty() -> SailVpnService.lastError
+                    SailVpnService.lastError.isNotEmpty() -> "Could not connect: ${SailVpnService.lastError}. Tap Connect to try again."
                     else -> "Tap Connect to route this device through Sailnet."
                 }
                 path.text = p.ifEmpty { "—" }

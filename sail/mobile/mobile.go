@@ -323,8 +323,20 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 		} else if id.LocalPort == 80 && !client.AllowPlainHTTP {
 			logHTTPRefused()
 			return // plain HTTP: readable by the exit and every network after it
-		} else if ip := net.ParseIP(id.LocalAddress.String()); ip != nil && ip.IsPrivate() {
-			return // the fake DNS address or a LAN host: nothing behind the exit can reach it
+		} else if ip := net.ParseIP(id.LocalAddress.String()); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+			// A LAN host (a Nano node on this network, a printer, a router):
+			// nothing behind the exit can reach it, so it is reached directly
+			// on a protected socket, outside the tunnel.
+			direct, err := (&net.Dialer{Timeout: 10 * time.Second, Control: relay.DialControl}).Dial("tcp", dst)
+			if err != nil {
+				return
+			}
+			defer direct.Close()
+			done := make(chan struct{}, 2)
+			go func() { io.Copy(direct, conn); direct.Close(); done <- struct{}{} }()
+			go func() { io.Copy(conn, direct); done <- struct{}{} }()
+			<-done
+			return
 		}
 		c, err := h.m.Circuit()
 		if err != nil {
@@ -365,8 +377,37 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				}()
 			}
 		}
-		if ip := net.ParseIP(id.LocalAddress.String()); ip != nil && ip.IsPrivate() {
-			return
+		if ip := net.ParseIP(id.LocalAddress.String()); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+			// LAN UDP (a local node's peering port, discovery): relayed
+			// directly on a protected socket, outside the tunnel.
+			direct, err := (&net.Dialer{Timeout: 10 * time.Second, Control: relay.DialControl}).Dial("udp", net.JoinHostPort(id.LocalAddress.String(), fmt.Sprint(id.LocalPort)))
+			if err != nil {
+				return
+			}
+			defer direct.Close()
+			go func() {
+				buf := make([]byte, 65535)
+				for {
+					n, err := direct.Read(buf)
+					if err != nil {
+						conn.Close()
+						return
+					}
+					if _, err := conn.WriteTo(buf[:n], nil); err != nil {
+						return
+					}
+				}
+			}()
+			buf := make([]byte, 65535)
+			for {
+				n, _, err := conn.ReadFrom(buf)
+				if err != nil {
+					return
+				}
+				if _, err := direct.Write(buf[:n]); err != nil {
+					return
+				}
+			}
 		}
 		// Any other UDP flow (QUIC, calls, games): a datagram stream to the exit.
 		dst := relay.UDPPrefix + net.JoinHostPort(id.LocalAddress.String(), fmt.Sprint(id.LocalPort))

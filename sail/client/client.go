@@ -136,6 +136,7 @@ type manager struct {
 	directBootstrap bool
 	fundsWatch      func()       // stops the confirmation watch while waiting for funds
 	faucetAt        time.Time    // last faucet claim (one per day)
+	polling         bool         // startFundsPoll is running
 	stage           atomic.Value // what the client is doing right now, for screens
 }
 
@@ -1045,6 +1046,23 @@ func (m *manager) serveSocks(conn net.Conn) {
 	io.ReadFull(conn, buf[:2])
 	port := int(buf[0])<<8 | int(buf[1])
 	target := net.JoinHostPort(host, strconv.Itoa(port))
+	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+		// A LAN or local destination (a Nano node on this network, a
+		// printer, a router): nothing behind the exit can reach it, so it
+		// is dialed directly. Only public destinations go through the tunnel.
+		direct, err := (&net.Dialer{Timeout: 10 * time.Second, Control: relay.DialControl}).Dial("tcp", target)
+		if err != nil {
+			conn.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer direct.Close()
+		conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(direct, conn); direct.Close(); done <- struct{}{} }()
+		go func() { io.Copy(conn, direct); done <- struct{}{} }()
+		<-done
+		return
+	}
 	if port == 80 && !AllowPlainHTTP {
 		// Plain HTTP would leave the exit readable by its operator and every
 		// network after it. Refused unless the operator explicitly allows it.
@@ -1611,6 +1629,7 @@ func (m *manager) EnsureFundsWatch() {
 	}
 	m.mu.Unlock()
 	m.claimFaucetOnce()
+	m.startFundsPoll()
 	bs := m.entryCandidates()
 	if len(bs) == 0 {
 		return
@@ -1633,6 +1652,40 @@ func (m *manager) EnsureFundsWatch() {
 	m.fundsWatch = stop
 	m.mu.Unlock()
 	log.Printf("watching the ledger for the first payment to this wallet")
+}
+
+// startFundsPoll pockets receivables every 30 s while the wallet is empty and
+// builds a circuit as soon as it can pay. The entry's confirmation push is
+// the fast path; this is the one that cannot be missed: a payment that lands
+// while the app waits is received within half a minute, on every platform.
+func (m *manager) startFundsPoll() {
+	m.mu.Lock()
+	if m.polling {
+		m.mu.Unlock()
+		return
+	}
+	m.polling = true
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			m.polling = false
+			m.mu.Unlock()
+		}()
+		for {
+			time.Sleep(30 * time.Second)
+			if !m.NeedsFunds() {
+				return
+			}
+			m.pocket()
+			if !m.NeedsFunds() {
+				log.Printf("funds arrived; connecting")
+				m.StopFundsWatch()
+				go m.circuit()
+				return
+			}
+		}
+	}()
 }
 
 // claimFaucetOnce asks the faucet (through the entry relay) for the

@@ -5,10 +5,10 @@
 // is actually answering on its status port. When either stops being true the
 // proxy and the WebRTC policy are cleared, so a browser is never left pointing
 // at a dead port after the client quits, the machine reboots, or the
-// extension is idle. A user who prefers to fail closed (no page loads at all
-// while the client is down) turns on the kill switch explicitly.
+// extension is idle. There is no blocking mode: the browser always has a
+// working network, through Sailnet when it runs, directly otherwise.
 
-const DEFAULTS = { socksHost: "127.0.0.1", socksPort: 1080, statusUrl: "http://127.0.0.1:1090", enabled: false, killSwitch: false };
+const DEFAULTS = { socksHost: "127.0.0.1", socksPort: 1080, statusUrl: "http://127.0.0.1:1090", enabled: false };
 
 // applied: what the browser is configured to right now ("direct" | "proxy" | "blocked").
 // Kept in storage because the service worker is stopped between events.
@@ -32,20 +32,6 @@ async function setProxy(s) {
         mode: "fixed_servers",
         rules: { singleProxy: { scheme: "socks5", host: s.socksHost, port: Number(s.socksPort) }, bypassList: ["127.0.0.1", "localhost", "<-loopback>"] }
       },
-      scope: "regular"
-    });
-  }
-  try { await chrome.privacy.network.webRTCIPHandlingPolicy.set({ value: "disable_non_proxied_udp" }); } catch (e) {}
-}
-
-// Fail closed: a proxy nothing listens on. Loopback stays reachable so the
-// status page and the client's own UI keep working.
-async function setBlocked(s) {
-  if (isFirefox) {
-    await chrome.proxy.settings.set({ value: { proxyType: "manual", socks: "127.0.0.1:9", socksVersion: 5, proxyDNS: true, passthrough: "localhost, 127.0.0.1" }, scope: "regular" });
-  } else {
-    await chrome.proxy.settings.set({
-      value: { mode: "fixed_servers", rules: { singleProxy: { scheme: "socks5", host: "127.0.0.1", port: 9 }, bypassList: ["127.0.0.1", "localhost", "<-loopback>"] } },
       scope: "regular"
     });
   }
@@ -79,13 +65,10 @@ async function reconcile() {
   reconciling = (async () => {
     const s = await settings();
     const st = s.enabled ? await status() : null;
-    let want = "direct";
-    if (s.enabled && st) want = "proxy";
-    else if (s.enabled && !st && s.killSwitch) want = "blocked";
+    const want = s.enabled && st ? "proxy" : "direct";
     const { [STATE_KEY]: applied } = await chrome.storage.local.get(STATE_KEY);
     if (want !== applied) {
       if (want === "proxy") await setProxy(s);
-      else if (want === "blocked") await setBlocked(s);
       else await setDirect();
       await chrome.storage.local.set({ [STATE_KEY]: want });
     }
@@ -111,8 +94,8 @@ async function badge(s, st, applied) {
     await chrome.action.setTitle({ title: st.needsFunds ? "Sailnet: waiting for XNO" : "Sailnet: building circuit" });
   } else {
     await chrome.action.setBadgeBackgroundColor({ color: "#B3731A" });
-    await chrome.action.setBadgeText({ text: applied === "blocked" ? "✕" : "!" });
-    await chrome.action.setTitle({ title: applied === "blocked" ? "Sailnet: client not running; kill switch is blocking pages" : "Sailnet: client not running; browsing directly" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await chrome.action.setTitle({ title: "Sailnet: client not running; browsing directly" });
   }
 }
 

@@ -44,12 +44,14 @@ class SailVpnService : VpnService(), Protector {
                 SailTileService.refresh(this)
                 updateNotification("Connected through the Sailnet circuit")
             } catch (e: Exception) {
-                // Kill switch: keep the TUN up with nothing behind it, so no app
-                // falls back to the real network. The user disconnects explicitly.
+                // No black hole: a failed start tears the tunnel down and says
+                // why, so the phone keeps its normal connection and the user
+                // can simply tap Connect again.
                 lastError = e.message ?: "start failed"
-                blackhole = true
                 starting = false
-                updateNotification("Blocked: $lastError. Traffic is held, not leaked. Tap Disconnect to release.")
+                updateNotification("Sailnet could not connect: $lastError")
+                stopTunnel()
+                stopSelf()
             }
         }.start()
         return START_STICKY
@@ -63,7 +65,6 @@ class SailVpnService : VpnService(), Protector {
         tun?.close()
         tun = null
         running = false
-        blackhole = false
         SailTileService.refresh(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
@@ -101,7 +102,6 @@ class SailVpnService : VpnService(), Protector {
         const val MTU = 1500
         @Volatile var running = false
         @Volatile var starting = false // between the tap and the tunnel being up
-        @Volatile var blackhole = false
         @Volatile var lastError = ""
     }
 }

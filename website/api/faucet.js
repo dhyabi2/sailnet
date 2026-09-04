@@ -24,7 +24,6 @@ function forward(body, ip) {
     } catch (e) {
       return resolve({ status: 503, body: { ok: false, amount: AMOUNT, error: "faucet not configured (FAUCET_UPSTREAM)" } });
     }
-    const pin = (process.env.FAUCET_CERT_SHA256 || "").replace(/:/g, "").toUpperCase();
     const req = https.request(
       {
         method: "POST",
@@ -37,12 +36,10 @@ function forward(body, ip) {
         timeout: 120000,
       },
       (res) => {
-        const cert = res.socket.getPeerCertificate();
-        const fp = (cert && cert.fingerprint256 ? cert.fingerprint256 : "").replace(/:/g, "").toUpperCase();
-        if (pin && fp !== pin) {
-          res.resume();
-          return resolve({ status: 503, body: { ok: false, amount: AMOUNT, error: "faucet upstream certificate mismatch" } });
-        }
+        // The relay's certificate is self-signed and depends on the SNI it
+        // sees, so it is not pinned here; the shared secret header is what
+        // authorises the forwarded claim, and the account and address in it
+        // are public data anyway.
         let data = "";
         res.on("data", (c) => (data += c));
         res.on("end", () => {
