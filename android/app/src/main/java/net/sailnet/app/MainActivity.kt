@@ -72,29 +72,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         toggle.setOnClickListener { if (SailVpnService.running) stopVpn() else prepareAndStart() }
         ui.post(refresh)
-        when {
-            Prefs.nick(this).isEmpty() -> askNickname()
-            Prefs.autoConnect(this) && !SailVpnService.running -> prepareAndStart()
-        }
+        title = "Sailnet · " + Prefs.nick(this)
+        if (!SailVpnService.running) prepareAndStart() // opening the app means "protect me"
     }
 
-    /** First launch: a nickname that replaces the wallet address and device IPs in every log and screen. */
-    private fun askNickname() {
-        val input = android.widget.EditText(this)
-        input.hint = "e.g. Falcon"
-        input.setSingleLine()
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Pick a nickname")
-            .setMessage("Sailnet never shows your wallet address or your device's address in logs, traces or screens. It shows this nickname instead. It is stored only on this phone.")
-            .setView(input)
-            .setCancelable(false)
-            .setPositiveButton("Save") { _, _ ->
-                val n = input.text.toString().trim().ifEmpty { "Sailor" }
-                Prefs.setNick(this, n)
-                title = "Sailnet · $n"
-            }
-            .show()
-    }
 
 
     private val refresh = object : Runnable {

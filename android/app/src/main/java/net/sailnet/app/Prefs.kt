@@ -15,9 +15,9 @@ object Prefs {
             .put("hops", 3)
             .put("excludeCC", (p.getStringSet("exclude_cc", emptySet()) ?: emptySet()).joinToString(","))
             .put("anchor", "0.0005")
-            .put("maxRate", p.getString("max_rate", "0") ?: "0")
-            .put("rpcUrl", rpcUrl(ctx))
-            .put("rpcKey", p.getString("rpc_key", "") ?: "")
+            .put("maxRate", "0")
+            .put("rpcUrl", "")
+            .put("rpcKey", "")
             .put("stealth", true)
             .put("bridges", bridges)
             .put("dnsUpstream", "1.1.1.1:53")
@@ -26,26 +26,20 @@ object Prefs {
             .toString()
     }
 
-    fun nick(ctx: Context): String = PreferenceManager.getDefaultSharedPreferences(ctx).getString("nick", "") ?: ""
-    fun setNick(ctx: Context, n: String) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("nick", n.trim()).apply()
-
-    /** The endpoint to ask first. Empty or the old rpc.nano.to default means Sailnet's own. */
-    fun rpcUrl(ctx: Context): String {
+    /** The nickname; generated on first use so nothing has to be asked. */
+    fun nick(ctx: Context): String {
         val p = PreferenceManager.getDefaultSharedPreferences(ctx)
-        val u = (p.getString("rpc_url", "") ?: "").trim()
-        if (u.isEmpty()) return "https://www.sailnet.space/node/api"
-        // An earlier build stored rpc.nano.to as its default; without a key that now means Sailnet's endpoint.
-        if (u.trimEnd('/') == "https://rpc.nano.to" && (p.getString("rpc_key", "") ?: "").isBlank()) {
-            p.edit().putString("rpc_url", "https://www.sailnet.space/node/api").apply()
-            return "https://www.sailnet.space/node/api"
-        }
-        return u
+        val n = p.getString("nick", "") ?: ""
+        if (n.isNotBlank()) return n
+        val words = listOf("Falcon", "Heron", "Osprey", "Kestrel", "Tern", "Petrel", "Gannet", "Skua", "Puffin", "Swift", "Merlin", "Harrier")
+        val gen = words[java.util.Random().nextInt(words.size)] + (100 + java.util.Random().nextInt(900))
+        p.edit().putString("nick", gen).apply()
+        return gen
     }
-    fun setRpc(ctx: Context, url: String, key: String) =
-        PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("rpc_url", url.trim()).putString("rpc_key", key.trim()).apply()
+    fun setNick(ctx: Context, n: String) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("nick", n.trim()).apply()
 
     fun activityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("activity_consent", false)
     fun setActivityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putBoolean("activity_consent", true).apply()
 
-    fun autoConnect(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("auto_connect", false)
+    fun autoConnect(ctx: Context) = true // always: opening the app means "protect me"
 }

@@ -17,38 +17,17 @@
             android:summary="Countries whose relays must not be your exit. Tap to choose from the relays currently known."
             android:entries="@array/empty"
             android:entryValues="@array/empty" />
-        <SwitchPreferenceCompat
-            android:key="auto_connect"
-            android:title="Connect on open"
-            android:summary="Start the tunnel when the app opens. For always-on, enable Sailnet in Android VPN settings."
-            android:defaultValue="false" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Advanced">
-        <EditTextPreference
-            android:key="rpc_url"
-            android:title="RPC endpoint"
-            android:summary="Endpoint the app asks first. Default is Sailnet's own (https://www.sailnet.space/node/api); you can point it at rpc.nano.to or your own node. Public fallbacks are used when it fails."
-            android:defaultValue="https://www.sailnet.space/node/api" />
-        <EditTextPreference
-            android:key="rpc_key"
-            android:title="RPC key"
-            android:summary="Only if the endpoint above is rpc.nano.to: its API key, sent to that host only."
-            android:inputType="textPassword"
-            android:defaultValue="" />
+    <PreferenceCategory android:title="Censored networks">
 
         <EditTextPreference
             android:key="bridges"
-            android:title="Extra bridge lines"
-            android:summary="Unlisted relays handed to you privately, one sail-bridge line per row. Bridges are preferred as entry."
+            android:title="Bridge lines"
+            android:summary="Only if the built-in entries are blocked where you are: paste bridge lines handed to you privately, one per row."
             android:defaultValue="" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Payments">
-        <EditTextPreference
-            android:key="max_rate"
-            android:title="Maximum price (XNO per MB)"
-            android:summary="Relays asking more than this are never used. Empty = three times the median price on the network."
-            android:defaultValue="" />
     </PreferenceCategory>
 </PreferenceScreen>
