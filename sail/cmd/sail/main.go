@@ -6,7 +6,7 @@
 //	sail pay <relay> <xno>               pay a relay; prints the payment tag (block hash)
 //	sail register <cc> <asn> <rate> <flags>   REGISTER this wallet as a relay (rate = XNO/MiB)
 //	sail relays                          relay registry from the ledger
-//	sail rewards [epoch]                 levy table for an epoch 
+//	sail rewards [epoch]                 levy table for an epoch
 package main
 
 import (
