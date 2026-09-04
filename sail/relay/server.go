@@ -1478,6 +1478,23 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 			amount = max
 		}
 	}
+	// A relay pays pools from what it holds: a new relay with only the
+	// faucet's registration amount opens a small pool, earns from the hop
+	// before it, and grows the pool on the next refill. Nothing is refused
+	// for being poor; only an empty wallet waits.
+	acct.ReceiveAll(ctx)
+	if info, ok, err := s.Nano.AccountInfo(ctx, s.Key.Address); err == nil && ok {
+		if bal, ok := new(big.Int).SetString(info.Balance, 10); ok {
+			reserve := new(big.Int).Exp(big.NewInt(10), big.NewInt(25), nil) // 0.00001 XNO stays for the next block
+			avail := new(big.Int).Sub(bal, reserve)
+			if avail.Cmp(amount) < 0 {
+				amount = avail
+			}
+			if amount.Sign() <= 0 {
+				return p.tag, fmt.Errorf("no XNO for a pool yet (balance %s XNO); earnings will fund it", formatXNO(bal))
+			}
+		}
+	}
 	h, err := acct.Send(ctx, rel.Account, amount, nil)
 	if err != nil {
 		return p.tag, err
