@@ -686,7 +686,7 @@ func newStealthManager(hops int, exitCC, anchor, rate, freeTag string, direct bo
 	// a dozen cells of upstream per circuit that the shaping measurement found.
 	nc.HTTP = &http.Client{Timeout: 40 * time.Second, Transport: &http.Transport{DialContext: m.dialViaCircuit, TLSHandshakeTimeout: 20 * time.Second, MaxIdleConnsPerHost: 2, IdleConnTimeout: 90 * time.Second}}
 	init := newManagerWith(m, nc, hops, exitCC, anchor, rate, "", freeTag)
-	log.Printf("stealth: Nano RPC only through the circuit; payments signed offline")
+	log.Printf("ledger via %s (through the circuit once one is up); payments signed offline", nc.Primary())
 	return init
 }
 

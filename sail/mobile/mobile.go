@@ -98,9 +98,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 			return fmt.Errorf("options: %w", err)
 		}
 	}
-	if o.Hops < 2 || o.Hops > 4 {
-		o.Hops = 3
-	}
+	o.Hops = 3 // the protocol's choice, not a setting
 	if o.Anchor == "" {
 		o.Anchor = "0.0005"
 	}

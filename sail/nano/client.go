@@ -486,3 +486,18 @@ var urlInErr = regexp.MustCompile(`(?:Post|Get) "https?://[^"]+": `)
 // stripURL removes the endpoint from a transport error: logs and screens say
 // what went wrong, not which provider was asked.
 func stripURL(msg string) string { return urlInErr.ReplaceAllString(msg, "") }
+
+// Primary is the host of the endpoint tried first, for a log line.
+func (c *Client) Primary() string {
+	if len(c.URLs) == 0 {
+		return ""
+	}
+	u := c.URLs[0]
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.Index(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	return u
+}

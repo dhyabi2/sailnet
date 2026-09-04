@@ -11,13 +11,6 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Circuit">
-        <ListPreference
-            android:key="hops"
-            android:title="Hops"
-            android:summary="%s"
-            android:defaultValue="3"
-            android:entries="@array/hops_labels"
-            android:entryValues="@array/hops_values" />
         <MultiSelectListPreference
             android:key="exclude_cc"
             android:title="Never exit through"
@@ -31,7 +24,7 @@
             android:defaultValue="false" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Nano RPC">
+    <PreferenceCategory android:title="Advanced">
         <EditTextPreference
             android:key="rpc_url"
             android:title="RPC endpoint"
@@ -43,31 +36,19 @@
             android:summary="Only if the endpoint above is rpc.nano.to: its API key, sent to that host only."
             android:inputType="textPassword"
             android:defaultValue="" />
-    </PreferenceCategory>
 
-    <PreferenceCategory android:title="Relays">
         <EditTextPreference
             android:key="bridges"
             android:title="Extra bridge lines"
             android:summary="Unlisted relays handed to you privately, one sail-bridge line per row. Bridges are preferred as entry."
             android:defaultValue="" />
-        <EditTextPreference
-            android:key="dns_upstream"
-            android:title="DNS resolver at the exit"
-            android:summary="Where the exit sends your name lookups. Default 1.1.1.1:53."
-            android:defaultValue="1.1.1.1:53" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Payments">
         <EditTextPreference
-            android:key="anchor"
-            android:title="Prepaid per circuit (XNO)"
-            android:summary="Sent to the entry relay when a circuit is opened. Default 0.0005, about 25 MB."
-            android:defaultValue="0.0005" />
-        <EditTextPreference
             android:key="max_rate"
             android:title="Maximum price (XNO per MB)"
-            android:summary="Relays asking more are not used. Default 0.00005."
-            android:defaultValue="0.00005" />
+            android:summary="Relays asking more than this are never used. Empty = three times the median price on the network."
+            android:defaultValue="" />
     </PreferenceCategory>
 </PreferenceScreen>

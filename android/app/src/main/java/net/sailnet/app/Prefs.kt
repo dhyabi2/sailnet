@@ -12,15 +12,15 @@ object Prefs {
         val extra = p.getString("bridges", "") ?: ""
         val bridges = builtIn + "\n" + extra
         return JSONObject()
-            .put("hops", (p.getString("hops", "3") ?: "3").toIntOrNull() ?: 3)
+            .put("hops", 3)
             .put("excludeCC", (p.getStringSet("exclude_cc", emptySet()) ?: emptySet()).joinToString(","))
-            .put("anchor", p.getString("anchor", "0.0005") ?: "0.0005")
+            .put("anchor", "0.0005")
             .put("maxRate", p.getString("max_rate", "0") ?: "0")
             .put("rpcUrl", rpcUrl(ctx))
             .put("rpcKey", p.getString("rpc_key", "") ?: "")
             .put("stealth", true)
             .put("bridges", bridges)
-            .put("dnsUpstream", p.getString("dns_upstream", "1.1.1.1:53") ?: "1.1.1.1:53")
+            .put("dnsUpstream", "1.1.1.1:53")
             .put("nick", nick(ctx))
             .put("censored", true)
             .toString()
@@ -29,9 +29,11 @@ object Prefs {
     fun nick(ctx: Context): String = PreferenceManager.getDefaultSharedPreferences(ctx).getString("nick", "") ?: ""
     fun setNick(ctx: Context, n: String) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("nick", n.trim()).apply()
 
+    /** The endpoint to ask first. Empty or the old rpc.nano.to default means Sailnet's own. */
     fun rpcUrl(ctx: Context): String {
         val p = PreferenceManager.getDefaultSharedPreferences(ctx)
-        val u = p.getString("rpc_url", "") ?: ""
+        val u = (p.getString("rpc_url", "") ?: "").trim()
+        if (u.isEmpty()) return "https://www.sailnet.space/node/api"
         // An earlier build stored rpc.nano.to as its default; without a key that now means Sailnet's endpoint.
         if (u.trimEnd('/') == "https://rpc.nano.to" && (p.getString("rpc_key", "") ?: "").isBlank()) {
             p.edit().putString("rpc_url", "https://www.sailnet.space/node/api").apply()

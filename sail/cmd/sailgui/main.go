@@ -154,7 +154,7 @@ func main() {
 			}
 		}
 		_, noChain := os.Stat(filepath.Join(home(), "chain-"+key.Address[len(key.Address)-8:]+".json"))
-		m := client.NewStealthManagerBootstrap(p.Hops, "", "0.0005", "0", "", noChain != nil)
+		m := client.NewStealthManagerBootstrap(3, "", "0.0005", "0", "", noChain != nil)
 		m.SetExcludeExit(p.Exclude)
 		m.SetCensored(true)
 		l, err := m.ServeSOCKS(p.Socks)
@@ -201,8 +201,6 @@ func main() {
 	})
 
 	// Settings
-	hops := widget.NewSelect([]string{"2", "3", "4"}, nil)
-	hops.SetSelected(fmt.Sprint(p.Hops))
 	// Exit exclusion: one checkbox per country the client knows relays in.
 	excluded := map[string]bool{}
 	for _, c := range strings.Split(p.Exclude, ",") {
@@ -238,7 +236,6 @@ func main() {
 	bridges.SetText(p.Bridges)
 	bridges.SetMinRowsVisible(3)
 	save := widget.NewButton("SAVE", func() {
-		fmt.Sscan(hops.Selected, &p.Hops)
 		var ex []string
 		for _, ch := range exclChecks {
 			if ch.Checked {
@@ -263,7 +260,6 @@ func main() {
 	})
 	settings := container.NewVBox(
 		widget.NewLabelWithStyle("SETTINGS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewGridWithColumns(2, widget.NewLabel("Hops"), hops),
 		exclBox, socks, nick, bridges,
 		widget.NewLabelWithStyle("NANO RPC", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		rpcURL, rpcKey, save,
