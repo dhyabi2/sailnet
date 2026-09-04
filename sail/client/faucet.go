@@ -64,11 +64,17 @@ func redactErr(err error) string {
 // FundFromFaucet claims the registration amount for key and waits for it
 // to land, then pockets it. Used by a relay whose wallet is not opened yet.
 func FundFromFaucet(ctx context.Context, hc *http.Client, nc *nano.Client, key *nano.Key) error {
+	acct := &nano.Account{Key: key, Client: nc, State: chainState(key)}
+	if n, err := acct.ReceiveAll(ctx); err == nil && n > 0 {
+		return nil // something was already on its way (an earlier claim, or a hand payment)
+	}
 	fr, err := ClaimFaucet(ctx, hc, key.Address)
 	if err != nil {
+		if n, rerr := acct.ReceiveAll(ctx); rerr == nil && n > 0 {
+			return nil // refused because a claim was already pending: it is in now
+		}
 		return err
 	}
-	acct := &nano.Account{Key: key, Client: nc, State: chainState(key)}
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		if n, err := acct.ReceiveAll(ctx); err == nil && n > 0 {
