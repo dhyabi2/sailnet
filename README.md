@@ -27,17 +27,39 @@ docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/dat
   ghcr.io/dhyabi2/sailnet relay --register --payout nano_your_wallet_address_here
 ```
 
-Binary (Linux, as root, port 443):
+Binary (Linux x86-64, as root, port 443; the checksum is verified):
 
 ```
-curl -L -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64 && chmod +x /usr/local/bin/sailnode
+curl -fsSL -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64 \
+  && curl -fsSL https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64.sha256 | sed 's#  .*#  /usr/local/bin/sailnode#' | sha256sum -c \
+  && chmod +x /usr/local/bin/sailnode
 sailnode relay --register --payout nano_your_wallet_address_here
 ```
 
+To keep it running across reboots:
+
+```
+cat > /etc/systemd/system/sailnode.service <<'EOF'
+[Unit]
+Description=Sailnet relay
+After=network-online.target
+[Service]
+ExecStart=/usr/local/bin/sailnode relay --register --payout nano_your_wallet_address_here
+Restart=always
+RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable --now sailnode
+```
+
 The node creates its own wallet in `SAIL_HOME` (`/data` in Docker,
-`~/.sail` otherwise) on first start and prints its address; send it a little
-XNO (0.01 is plenty) so it can publish its registration and prepay the
-relays it forwards to. `sailnode relay -h` lists every flag; the useful ones:
+`~/.sail` otherwise) on first start. An empty wallet asks the Sailnet faucet
+for the registration amount by itself, so nothing has to be sent by hand; if
+the faucet is unavailable the log names the amount (0.0005 XNO) and the
+address. Prepayments to the relays it forwards to come out of its own
+earnings. `sailnode relay -h` lists every flag; the useful ones:
 
 | flag | what it does |
 |---|---|
