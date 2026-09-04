@@ -32,6 +32,7 @@ type Circuit struct {
 	closed  bool
 	Built   time.Time
 	Bytes   int64
+	Flow    bool         // the exit understands BEGIN2 / CREDIT: open windowed streams
 	recv    atomic.Int64 // unix nanos of the last cell received
 	pingErr atomic.Value
 }
@@ -47,6 +48,11 @@ type ctlMsg struct {
 }
 
 // Stream is one TCP-like stream through the exit.
+//
+// A windowed stream (opened with BEGIN2 against an exit that advertises
+// token.FlagFlow) buffers up to wire.StreamWindow cells on its own and
+// returns CREDIT as the application reads, so the circuit reader never blocks
+// on one slow consumer. A plain stream is a pipe, as before.
 type Stream struct {
 	c    *Circuit
 	id   uint16
@@ -54,6 +60,75 @@ type Stream struct {
 	pw   *io.PipeWriter
 	once sync.Once
 	ok   chan error
+
+	flow     bool
+	rx       chan []byte // windowed: cells from the exit
+	rbuf     []byte      // windowed: unread remainder of the last cell
+	consumed int         // windowed: cells read since the last CREDIT
+	done     chan struct{}
+	doneOnce sync.Once
+	cmu      sync.Mutex
+	ccond    *sync.Cond
+	credit   int64 // windowed: cells we may still send
+}
+
+func newStream(c *Circuit, id uint16) *Stream {
+	st := &Stream{c: c, id: id, ok: make(chan error, 1), done: make(chan struct{})}
+	if c.Flow {
+		st.flow = true
+		st.rx = make(chan []byte, wire.StreamWindow)
+		st.credit = wire.StreamWindow
+		st.ccond = sync.NewCond(&st.cmu)
+	} else {
+		st.pr, st.pw = io.Pipe()
+	}
+	return st
+}
+
+// finish ends the stream locally: readers drain what is buffered then see EOF,
+// writers fail.
+func (s *Stream) finish() {
+	s.doneOnce.Do(func() {
+		close(s.done)
+		if s.pw != nil {
+			s.pw.Close()
+		}
+		if s.ccond != nil {
+			s.cmu.Lock()
+			s.ccond.Broadcast()
+			s.cmu.Unlock()
+		}
+	})
+}
+
+func (s *Stream) addCredit(n uint32) {
+	s.cmu.Lock()
+	s.credit += int64(n)
+	s.ccond.Broadcast()
+	s.cmu.Unlock()
+}
+
+// takeCredit waits for one cell of send window.
+func (s *Stream) takeCredit() bool {
+	s.cmu.Lock()
+	defer s.cmu.Unlock()
+	for s.credit <= 0 {
+		select {
+		case <-s.done:
+			return false
+		default:
+		}
+		s.ccond.Wait()
+	}
+	s.credit--
+	return true
+}
+
+func (s *Stream) beginCmd() byte {
+	if s.flow {
+		return wire.CmdBegin2
+	}
+	return wire.CmdBegin
 }
 
 // CoverTick and CoverBurst set the cadence of the client→entry link: one
@@ -264,7 +339,19 @@ func (c *Circuit) readLoop() {
 		switch cmd {
 		case wire.CmdData:
 			if st != nil {
-				st.pw.Write(data)
+				if st.flow {
+					select {
+					case st.rx <- data:
+					default: // the exit overran the window: protocol violation, drop the stream
+						st.finish()
+					}
+				} else {
+					st.pw.Write(data)
+				}
+			}
+		case wire.CmdCredit:
+			if st != nil && st.flow && len(data) >= 4 && last {
+				st.addCredit(binary.BigEndian.Uint32(data))
 			}
 		case wire.CmdConnected:
 			if st != nil {
@@ -273,7 +360,7 @@ func (c *Circuit) readLoop() {
 		case wire.CmdEnd:
 			if st != nil {
 				st.once.Do(func() { st.ok <- fmt.Errorf("stream refused: %s", data) })
-				st.pw.Close()
+				st.finish()
 				c.mu.Lock()
 				delete(c.strms, sid)
 				c.mu.Unlock()
@@ -347,11 +434,10 @@ func (c *Circuit) Open(target string, timeout time.Duration) (*Stream, error) {
 	}
 	id := c.nextS
 	c.nextS++
-	pr, pw := io.Pipe()
-	st := &Stream{c: c, id: id, pr: pr, pw: pw, ok: make(chan error, 1)}
+	st := newStream(c, id)
 	c.strms[id] = st
 	c.mu.Unlock()
-	if err := c.send(wire.CmdBegin, id, []byte(target)); err != nil {
+	if err := c.send(st.beginCmd(), id, []byte(target)); err != nil {
 		return nil, err
 	}
 	select {
@@ -376,17 +462,47 @@ func (c *Circuit) OpenOptimistic(target string) (*Stream, error) {
 	}
 	id := c.nextS
 	c.nextS++
-	pr, pw := io.Pipe()
-	st := &Stream{c: c, id: id, pr: pr, pw: pw, ok: make(chan error, 1)}
+	st := newStream(c, id)
 	c.strms[id] = st
 	c.mu.Unlock()
-	if err := c.send(wire.CmdBegin, id, []byte(target)); err != nil {
+	if err := c.send(st.beginCmd(), id, []byte(target)); err != nil {
 		return nil, err
 	}
 	return st, nil
 }
 
-func (s *Stream) Read(p []byte) (int, error) { return s.pr.Read(p) }
+func (s *Stream) Read(p []byte) (int, error) {
+	if !s.flow {
+		return s.pr.Read(p)
+	}
+	if len(s.rbuf) == 0 {
+		var d []byte
+		select { // buffered cells first, even after the exit ended the stream
+		case d = <-s.rx:
+		default:
+			select {
+			case d = <-s.rx:
+			case <-s.done:
+				select {
+				case d = <-s.rx:
+				default:
+					return 0, io.EOF
+				}
+			}
+		}
+		s.rbuf = d
+		s.consumed++
+		if s.consumed >= wire.CreditEvery {
+			var b [4]byte
+			binary.BigEndian.PutUint32(b[:], uint32(s.consumed))
+			s.consumed = 0
+			s.c.send(wire.CmdCredit, s.id, b[:])
+		}
+	}
+	n := copy(p, s.rbuf)
+	s.rbuf = s.rbuf[n:]
+	return n, nil
+}
 
 func (s *Stream) Write(p []byte) (int, error) {
 	total := 0
@@ -394,6 +510,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 		n := len(p)
 		if n > wire.MaxData {
 			n = wire.MaxData
+		}
+		if s.flow && !s.takeCredit() {
+			return total, errors.New("stream closed")
 		}
 		if err := s.c.send(wire.CmdData, s.id, p[:n]); err != nil {
 			return total, err
@@ -409,7 +528,7 @@ func (s *Stream) Close() error {
 	s.c.mu.Lock()
 	delete(s.c.strms, s.id)
 	s.c.mu.Unlock()
-	s.pw.Close()
+	s.finish()
 	return s.c.send(wire.CmdEnd, s.id, nil)
 }
 
@@ -422,7 +541,7 @@ func (c *Circuit) Close() {
 	}
 	c.closed = true
 	for _, st := range c.strms {
-		st.pw.Close()
+		st.finish()
 	}
 	c.mu.Unlock()
 	if c.w != nil {

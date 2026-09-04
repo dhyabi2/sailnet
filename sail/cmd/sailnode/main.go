@@ -97,7 +97,7 @@ func runRelay(args []string) {
 	certFile := fs.String("cert", "", "PEM certificate chain to present (e.g. Let's Encrypt for --host); default: a generated self-signed cert")
 	acme := fs.Bool("acme", false, "obtain and renew a real certificate for --host from Let's Encrypt automatically (the domain must point at this host; port 443 required)")
 	keyFile := fs.String("key", "", "PEM private key for --cert")
-	pool := fs.String("pool", "0.001", "XNO per downstream pool top-up (0 = static pool tags, test mode)")
+	pool := fs.String("pool", "0.005", "XNO per downstream pool top-up, refilled at a quarter left (0 = static pool tags, test mode)")
 	regDir := fs.String("registry-dir", "", "test mode: read/write relay descriptors as JSON in this directory instead of the ledger")
 	name := fs.String("name", "", "test mode: descriptor file name (default: account)")
 	freeTag := fs.String("free-tag", "", "test mode: preauthorized 64-hex payment tag")
@@ -196,7 +196,7 @@ func runRelay(args []string) {
 
 	flags := uint16(token.FlagPublic)
 	if *exit {
-		flags |= token.FlagExit
+		flags |= token.FlagExit | token.FlagFlow
 	}
 	var bridgeSecret [16]byte
 	if *unlisted {
@@ -250,7 +250,15 @@ func runRelay(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	reg := &relay.Registry{Client: nc, Treasury: client.Treasury}
+	// The relay list survives restarts: loaded from the cache at once, so a
+	// relay that just came up already knows whom to EXTEND to, and refreshed
+	// from the ledger in the background. Reads through Sailnet's endpoint need
+	// not crawl at public-node pace.
+	reg := &relay.Registry{Client: nc, Treasury: client.Treasury, CacheFile: filepath.Join(client.DataDir(), "registry.json")}
+	if n := reg.LoadCache(); n > 0 {
+		log.Printf("registry: %d relays from cache", n)
+	}
+	nc.Budget = nano.NewBudget(4, 30)
 	self := &relay.RelayInfo{Account: key.Address, Pub: key.Public, Country: strings.ToUpper(*cc), ASN: uint32(*asn), MinRate: rateU, Flags: flags, Desc: desc, Host: *host}
 	if *regDir != "" {
 		os.MkdirAll(*regDir, 0o755)
@@ -532,7 +540,7 @@ func runHome(key *nano.Key, nc *nano.Client, rate string, exit bool, harbourAcct
 	harbourPtr.Store(harbour)
 	flags := uint16(token.FlagHome)
 	if exit {
-		flags |= token.FlagExit
+		flags |= token.FlagExit | token.FlagFlow
 	}
 	q, err := relay.NewQuota(filepath.Join(client.DataDir(), "quota.wal"), token.RateToRaw(rateU))
 	if err != nil {

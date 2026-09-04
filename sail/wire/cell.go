@@ -360,6 +360,22 @@ const (
 	// waiting for funds learns of them the second they confirm.
 	CmdWatch  byte = 22
 	CmdNotify byte = 23
+
+	// Stream flow control (inside the onion, stream-scoped). A stream opened
+	// with BEGIN2 is windowed in both directions: each side may have at most
+	// StreamWindow cells outstanding and the receiver returns CREDIT cells
+	// (uint32 count) as it consumes. A slow consumer then holds back only
+	// its own stream instead of the whole circuit.
+	CmdBegin2 byte = 24 // like CmdBegin, with flow control
+	CmdCredit byte = 25 // payload: uint32 cells consumed, add to the sender's window
+)
+
+const (
+	// StreamWindow is the per-stream window in cells (about 2 MB): enough
+	// to fill a 600 ms circuit at several MB/s.
+	StreamWindow = 2048
+	// CreditEvery is how many consumed cells trigger a CREDIT.
+	CreditEvery = StreamWindow / 4
 )
 
 // PaddingCell returns a marshalled padding cell (random payload).

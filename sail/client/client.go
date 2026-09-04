@@ -244,8 +244,22 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		}
 		return w
 	}
+	// Speed without choosing deterministically: the entry is drawn with
+	// weight 1/rtt among the candidates (a relay twice as far gets half the
+	// draws, never zero), and middle and exit are drawn with a strong
+	// preference for the same region as each other, so the two inter-relay
+	// hops are short. Everything stays a weighted random draw, so a relay
+	// cannot win a client's path by being fast alone.
+	near := func(r *relay.RelayInfo) float64 {
+		if rtt, ok := m.rtt[r.Account]; ok && rtt > 0 {
+			return 1 / (rtt.Seconds() + 0.02)
+		}
+		return 1 / 0.2
+	}
+	sameRegion := func(a, b *relay.RelayInfo) bool { return continentOf(a.Country) == continentOf(b.Country) }
 	// pick draws one candidate at random in proportion to its weight
 	// (argmax would hand every circuit to the single best-scored relay).
+	var bias func(*relay.RelayInfo) float64 // per-draw multiplier (nearness, region)
 	pick := func(pred func(*relay.RelayInfo) bool) *relay.RelayInfo {
 		var cands []*relay.RelayInfo
 		var ws []float64
@@ -255,6 +269,9 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 				continue
 			}
 			w := weight(r)
+			if bias != nil {
+				w *= bias(r)
+			}
 			if w <= 0 {
 				continue
 			}
@@ -275,6 +292,9 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		return cands[len(cands)-1]
 	}
 	diverse := func(r *relay.RelayInfo) bool {
+		if r.Flags&token.FlagHome != 0 {
+			return false // a home node is reached only through its harbour, never picked as a middle or exit
+		}
 		for _, p := range path {
 			if p.Country == r.Country || (p.ASN != 0 && p.ASN == r.ASN) {
 				return false
@@ -295,6 +315,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		// ledger reading) wins over a public relay whenever one is usable and
 		// we can pay it (a new entry means a new anchor)
 		var e *relay.RelayInfo
+		bias = near
 		if m.censored || m.canAfford(m.opts.anchor) || (m.entry != nil && m.entry.Unlisted) {
 			e = pick(func(r *relay.RelayInfo) bool { return r.Unlisted })
 		}
@@ -310,11 +331,33 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		path = append(path, e)
 		m.entry = e
 	}
+	bias = nil
 	used[path[0].Account] = true
+	// Exit first, then middles near the exit: the two long hops of a circuit
+	// are the ones between relays, so they are the ones kept short.
+	var exit *relay.RelayInfo
+	if m.opts.hops > 1 {
+		exit = pick(func(r *relay.RelayInfo) bool {
+			return r.Flags&token.FlagExit != 0 && diverse(r) && !m.opts.exclude[strings.ToUpper(r.Country)] && (m.opts.exitCC == "" || r.Country == strings.ToUpper(m.opts.exitCC))
+		})
+		if exit == nil {
+			exit = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagExit != 0 && r.Flags&token.FlagHome == 0 })
+		}
+		if exit == nil {
+			return nil, errors("no exit relay available")
+		}
+		used[exit.Account] = true
+		bias = func(r *relay.RelayInfo) float64 {
+			if sameRegion(r, exit) || sameRegion(r, path[0]) {
+				return 4
+			}
+			return 1
+		}
+	}
 	for len(path) < m.opts.hops-1 {
 		r := pick(diverse)
 		if r == nil {
-			r = pick(func(*relay.RelayInfo) bool { return true }) // relax diversity
+			r = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagHome == 0 }) // relax diversity
 		}
 		if r == nil {
 			return nil, errors("not enough relays for the requested hops")
@@ -322,17 +365,9 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		path = append(path, r)
 		used[r.Account] = true
 	}
-	if m.opts.hops > 1 {
-		x := pick(func(r *relay.RelayInfo) bool {
-			return r.Flags&token.FlagExit != 0 && diverse(r) && !m.opts.exclude[strings.ToUpper(r.Country)] && (m.opts.exitCC == "" || r.Country == strings.ToUpper(m.opts.exitCC))
-		})
-		if x == nil {
-			x = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagExit != 0 })
-		}
-		if x == nil {
-			return nil, errors("no exit relay available")
-		}
-		path = append(path, x)
+	bias = nil
+	if exit != nil {
+		path = append(path, exit)
 	}
 	return path, nil
 }
@@ -543,7 +578,12 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		for _, p := range path {
 			m.mark(p.Account, true)
 		}
-		log.Printf("circuit built in %s: %s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "))
+		mode := ""
+		if path[len(path)-1].Flags&token.FlagFlow != 0 {
+			mode = " (windowed streams)"
+		}
+		log.Printf("circuit built in %s: %s%s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "), mode)
+		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
 		m.cur = c
 		m.rotate = 0 // fresh lifetime for the new circuit
 		m.live.Store(c)

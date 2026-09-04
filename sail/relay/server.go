@@ -142,6 +142,7 @@ type pool struct {
 	lastTop  time.Time
 	credited int64 // bytes we believe we have prepaid there
 	used     int64
+	topping  bool // a top-up is in flight (one at a time per peer)
 }
 
 // homeLink is a home node's outbound tunnel that we accept circuits into.
@@ -162,10 +163,100 @@ type circuit struct {
 	next     *connWriter // toward the next hop (nil if we are last)
 	nextID   uint32
 	poolAcct string // downstream relay whose pool this circuit consumes (metered per cell)
-	streams  map[uint16]net.Conn
+	streams  map[uint16]*exitStream
 	pending  map[uint16][][]byte // data that arrived before the stream connected (optimistic BEGIN)
 	mu       sync.Mutex
 	closed   bool
+}
+
+// exitStream is one stream at the exit. A windowed stream (BEGIN2) keeps the
+// client's upstream cells in its own queue and drains them to the target from
+// a goroutine, and sends downstream only while the client has granted window;
+// so a slow target or a slow client never blocks the circuit's reader.
+type exitStream struct {
+	conn   net.Conn
+	flow   bool
+	mu     sync.Mutex
+	cond   *sync.Cond
+	credit int64       // cells we may still send downstream
+	up     chan []byte // client → target, bounded by the client's window
+	done   chan struct{}
+	once   sync.Once
+}
+
+func newExitStream(conn net.Conn, flow bool) *exitStream {
+	st := &exitStream{conn: conn, flow: flow, done: make(chan struct{})}
+	if flow {
+		st.cond = sync.NewCond(&st.mu)
+		st.credit = wire.StreamWindow
+		st.up = make(chan []byte, wire.StreamWindow)
+	}
+	return st
+}
+
+func (st *exitStream) Close() {
+	st.once.Do(func() {
+		close(st.done)
+		st.conn.Close()
+		if st.cond != nil {
+			st.mu.Lock()
+			st.cond.Broadcast()
+			st.mu.Unlock()
+		}
+	})
+}
+
+func (st *exitStream) addCredit(n uint32) {
+	st.mu.Lock()
+	st.credit += int64(n)
+	st.cond.Broadcast()
+	st.mu.Unlock()
+}
+
+// takeCredit blocks until at least one cell of window is available and
+// returns how many cells (at most max) may be sent; 0 means the stream ended.
+func (st *exitStream) takeCredit(max int) int {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for st.credit <= 0 {
+		select {
+		case <-st.done:
+			return 0
+		default:
+		}
+		st.cond.Wait()
+	}
+	n := int(st.credit)
+	if n > max {
+		n = max
+	}
+	st.credit -= int64(n)
+	return n
+}
+
+// pumpUp drains the client's cells to the target and returns window.
+func (s *Server) pumpUp(c *circuit, sid uint16, st *exitStream, already int) {
+	consumed := already
+	for {
+		var d []byte
+		select {
+		case d = <-st.up:
+		case <-st.done:
+			return
+		}
+		st.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		if _, err := st.conn.Write(d); err != nil {
+			st.Close()
+			return
+		}
+		consumed++
+		if consumed >= wire.CreditEvery {
+			var b [4]byte
+			binary.BigEndian.PutUint32(b[:], uint32(consumed))
+			consumed = 0
+			s.reply(c, wire.CmdCredit, sid, b[:])
+		}
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -190,7 +281,7 @@ func (s *Server) Handler() http.Handler {
 			rw.Flush()
 			ws := wire.NewWSConn(conn, rw.Reader, false) // cells ride in real WebSocket frames from here on
 			ws.Ping()                                    // a small first record, like a real WebSocket session
-			go s.serveConn(ws, bufio.NewReader(ws), false)
+			go s.serveConn(ws, bufio.NewReaderSize(ws, 64<<10), false)
 			return
 		}
 		// Everyone else sees an ordinary small website.
@@ -529,7 +620,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 	if err != nil {
 		return nil, err
 	}
-	c := &circuit{id: cell.CircID, tag: tag, keys: keys, in: in, streams: map[uint16]net.Conn{}}
+	c := &circuit{id: cell.CircID, tag: tag, keys: keys, in: in, streams: map[uint16]*exitStream{}}
 	certHash := s.leafHash()
 	reply := append(pub[:], SignAck(s.Key, clientPub, pub, certHash)...)
 	reply = append(reply, certHash[:]...)
@@ -580,7 +671,20 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 			s.reply(c, wire.CmdEnd, sid, []byte("not an exit"))
 			return
 		}
-		go s.handleBegin(c, sid, string(data))
+		go s.handleBegin(c, sid, string(data), false)
+	case wire.CmdBegin2:
+		if !s.Exit {
+			s.reply(c, wire.CmdEnd, sid, []byte("not an exit"))
+			return
+		}
+		go s.handleBegin(c, sid, string(data), true)
+	case wire.CmdCredit:
+		c.mu.Lock()
+		st := c.streams[sid]
+		c.mu.Unlock()
+		if st != nil && st.flow && len(data) >= 4 {
+			st.addCredit(binary.BigEndian.Uint32(data))
+		}
 	case wire.CmdData:
 		c.mu.Lock()
 		st := c.streams[sid]
@@ -594,8 +698,16 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 		}
 		c.mu.Unlock()
 		if st != nil {
-			st.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			st.Write(data)
+			if st.flow {
+				select {
+				case st.up <- append([]byte(nil), data...):
+				default: // the client overran its window: protocol violation, drop the stream
+					st.Close()
+				}
+			} else {
+				st.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+				st.conn.Write(data)
+			}
 		}
 	case wire.CmdEnd:
 		c.mu.Lock()
@@ -932,14 +1044,60 @@ func (s *Server) meterPool(acct string, n int64) {
 		return
 	}
 	s.mu.Lock()
+	var refill *RelayInfo
 	if p := s.pools[acct]; p != nil {
 		before := p.used
 		p.used += n
 		if before/(8<<20) != p.used/(8<<20) {
 			s.savePoolsLocked()
 		}
+		// Refill before it runs dry, off the data path: a fast circuit empties
+		// a pool in seconds, and a top-up waiting for proof-of-work at extend
+		// time would cut every stream on it.
+		if s.PoolRaw != nil && !p.topping && s.Registry != nil {
+			if rel := s.Registry.Get(acct); rel != nil {
+				if size := BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate)); size >= 8<<20 && p.credited-p.used < size/4 {
+					p.topping = true
+					refill = rel
+				}
+			}
+		}
 	}
 	s.mu.Unlock()
+	if refill != nil {
+		go func() {
+			if _, err := s.topUpPool(refill); err != nil {
+				log.Printf("pool top-up to %s: %v", short(refill.Account), err)
+			}
+		}()
+	}
+}
+
+// topUpPool sends one PoolRaw to the peer and credits the pool.
+func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
+	s.mu.Lock()
+	p := s.pools[rel.Account]
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		p.topping = false
+		s.mu.Unlock()
+	}()
+	acct := &nano.Account{Key: s.Key, Client: s.Nano}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // proof-of-work may be CPU-only on a small box; off the request path
+	defer cancel()
+	h, err := acct.Send(ctx, rel.Account, s.PoolRaw, nil)
+	if err != nil {
+		return p.tag, err
+	}
+	s.mu.Lock()
+	p.tag = strings.ToUpper(h)
+	p.credited += BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate))
+	s.savePoolsLocked()
+	s.mu.Unlock()
+	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(s.PoolRaw), h[:8])
+	time.Sleep(2 * time.Second)
+	return p.tag, nil
 }
 
 // recentTopUp reports whether we prepaid this peer within the last minute.
@@ -993,32 +1151,19 @@ func (s *Server) ensurePool(rel *RelayInfo) (string, error) {
 		p = &pool{tag: PoolTag(s.Key.Address, rel.Account)}
 		s.pools[rel.Account] = p
 	}
-	need := s.PoolRaw != nil && p.credited-p.used < 4<<20 && time.Since(p.lastTop) > 5*time.Minute
+	need := s.PoolRaw != nil && p.credited-p.used < 4<<20 && !p.topping && time.Since(p.lastTop) > 5*time.Minute
 	if need && BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate)) < 8<<20 {
 		need = false // this peer's price makes our pool size pointless: do not top up 288 times a day
 	}
 	if need {
 		p.lastTop = time.Now()
+		p.topping = true
 	}
 	s.mu.Unlock()
 	if !need {
 		return p.tag, nil
 	}
-	acct := &nano.Account{Key: s.Key, Client: s.Nano}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // proof-of-work may be CPU-only on a small box; off the request path
-	defer cancel()
-	h, err := acct.Send(ctx, rel.Account, s.PoolRaw, nil)
-	if err != nil {
-		return p.tag, err
-	}
-	s.mu.Lock()
-	p.tag = strings.ToUpper(h)
-	p.credited += BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate))
-	s.savePoolsLocked()
-	s.mu.Unlock()
-	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(s.PoolRaw), h[:8])
-	time.Sleep(2 * time.Second)
-	return p.tag, nil
+	return s.topUpPool(rel)
 }
 
 // exitAllowed is the default exit policy: no mail relaying, no Windows file
@@ -1036,7 +1181,7 @@ func exitAllowed(target string) bool {
 	return true
 }
 
-func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
+func (s *Server) handleBegin(c *circuit, sid uint16, target string, flow bool) {
 	var conn net.Conn
 	var err error
 	if !exitAllowed(target) {
@@ -1067,12 +1212,16 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
 		conn.Close()
 		return
 	}
-	c.streams[sid] = conn
+	st := newExitStream(conn, flow)
+	c.streams[sid] = st
 	early := c.pending[sid]
 	delete(c.pending, sid)
 	c.mu.Unlock()
 	for _, d := range early { // flush data that arrived before the connect finished
 		conn.Write(d)
+	}
+	if flow {
+		go s.pumpUp(c, sid, st, len(early))
 	}
 	s.reply(c, wire.CmdConnected, sid, nil) // never reveal the exit's own address or ports
 	s.Metrics.Streams.Add(1)
@@ -1081,7 +1230,21 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
 	// cells each, instead of one cell per record.
 	buf := make([]byte, 32*wire.MaxData)
 	for {
-		n, err := conn.Read(buf)
+		room := len(buf)
+		if flow { // send only what the client has granted
+			cells := st.takeCredit(32)
+			if cells == 0 {
+				break
+			}
+			room = cells * wire.MaxData
+		}
+		n, err := conn.Read(buf[:room])
+		if n > 0 && flow { // return unused window (a short read used fewer cells)
+			usedCells := (n + wire.MaxData - 1) / wire.MaxData
+			if back := room/wire.MaxData - usedCells; back > 0 {
+				st.addCredit(uint32(back))
+			}
+		}
 		if n > 0 {
 			s.Metrics.BytesExit.Add(int64(n))
 			s.replyChunks(c, sid, buf[:n])
@@ -1101,7 +1264,7 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string) {
 	c.mu.Lock()
 	delete(c.streams, sid)
 	c.mu.Unlock()
-	conn.Close()
+	st.Close()
 }
 
 func (c *circuit) destroy() {
@@ -1158,6 +1321,11 @@ var DialControl func(network, address string, c syscall.RawConn) error
 func DialRelay(rel *RelayInfo, timeout time.Duration) (net.Conn, error) {
 	d := net.Dialer{Timeout: timeout, Control: DialControl}
 	raw, err := d.Dial("tcp", rel.Desc.Addr())
+	if tc, ok := raw.(*net.TCPConn); ok && err == nil {
+		// Socket buffers sized for a long path: 4 MB carries 10 MB/s at 400 ms.
+		tc.SetReadBuffer(4 << 20)
+		tc.SetWriteBuffer(4 << 20)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1230,7 +1398,7 @@ func DialRelayOver(rel *RelayInfo, timeout time.Duration, raw net.Conn) (net.Con
 	tc.SetDeadline(time.Time{})
 	ws := wire.NewWSConn(tc, br, true) // client side masks its frames, as the RFC requires
 	ws.Ping()                          // small first record after the handshake
-	return &bufConn{Conn: ws, r: bufio.NewReader(ws), leaf: leaf}, nil
+	return &bufConn{Conn: ws, r: bufio.NewReaderSize(ws, 64<<10), leaf: leaf}, nil
 }
 
 // LeafHash returns the SHA-256 of the relay's TLS leaf certificate seen on a

@@ -154,6 +154,7 @@ const (
 	FlagPublic = 1 << 0 // reachable on HTTPS :443
 	FlagExit   = 1 << 1 // offers exit service
 	FlagHome   = 1 << 2 // outbound-only, reached via reverse tunnel
+	FlagFlow   = 1 << 3 // exit understands BEGIN2 / CREDIT (stream flow control)
 )
 
 // FormatSAIL renders units as a decimal SAIL string.

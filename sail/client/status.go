@@ -37,18 +37,18 @@ func Down(w io.Writer) io.Writer { return countingWriter{w, &bytesDown} }
 // StatusJSON summarises the client for UIs.
 func (m *manager) StatusJSON() map[string]any {
 	out := map[string]any{
-		"running":   true,
-		"path":      Redact(m.Path()),
-		"balance":   m.Balance(),
-		"relays":    m.Relays(),
-		"address":   m.key.Address,
-		"uptime":    int(time.Since(startedAt).Seconds()),
-		"bytesUp":   bytesUp.Load(),
-		"bytesDown": bytesDown.Load(),
-		"stealth":   m.stealth,
-		"hops":      m.opts.hops,
-		"exitCC":    m.opts.exitCC,
-		"nick":      Nick(),
+		"running":    true,
+		"path":       Redact(m.Path()),
+		"balance":    m.Balance(),
+		"relays":     m.Relays(),
+		"address":    m.key.Address,
+		"uptime":     int(time.Since(startedAt).Seconds()),
+		"bytesUp":    bytesUp.Load(),
+		"bytesDown":  bytesDown.Load(),
+		"stealth":    m.stealth,
+		"hops":       m.opts.hops,
+		"exitCC":     m.opts.exitCC,
+		"nick":       Nick(),
 		"needsFunds": m.NeedsFunds(),
 	}
 	return out

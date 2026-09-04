@@ -127,9 +127,9 @@ func (w *connWriter) runCover(cp *coverParams) {
 // the producer, which is the back-pressure the old synchronous writer had.
 // It is also the window between two hops: with 200 ms between relays a queue
 // of 48 cells caps a circuit at about 240 KB/s, so it must hold a few hundred
-// KB. Control cells have their own queue and go first, so a deep data queue
-// no longer delays a PONG.
-const writerQueue = 512
+// KB; 4096 cells (4 MB) carries 10 MB/s over 400 ms. Control cells have their
+// own queue and go first, so a deep data queue no longer delays a PONG.
+const writerQueue = 4096
 
 // newConnWriter starts a writer for one connection. client is true on the side
 // that opened it (it masks WebSocket frames, so its framing overhead differs).
