@@ -323,7 +323,13 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			e = pick(func(r *relay.RelayInfo) bool { return r.Unlisted })
 		}
 		if e == nil && m.censored {
-			return nil, errors("censored mode: no usable bridge")
+			// Every bridge is gone or blocked. A listed relay as entry is
+			// visible to a censor who reads the ledger, but a dead network
+			// protects nobody: the client says so and connects anyway. The
+			// network therefore outlives its bridge operators.
+			if m.canAfford(m.opts.anchor) {
+				log.Printf("no bridge is reachable: using a listed relay as entry (visible on the ledger; add a bridge line when you have one)")
+			}
 		}
 		if e == nil {
 			e = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagHome == 0 })
@@ -904,7 +910,7 @@ func (t *stealthTransport) viaEntry(body []byte) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.entry == nil {
-		bs := t.m.bridges()
+		bs := t.m.entryCandidates()
 		if len(bs) == 0 {
 			return nil, errors("no entry known for the first ledger read")
 		}
@@ -1256,6 +1262,22 @@ func (m *manager) rotateAfter() time.Duration {
 	return m.rotate
 }
 
+// entryCandidates is the relays a client may talk to before it has a
+// circuit: bridges when it knows any, otherwise the listed public relays,
+// so the network keeps working after every bridge operator is gone.
+func (m *manager) entryCandidates() []*relay.RelayInfo {
+	if bs := m.bridges(); len(bs) > 0 {
+		return bs
+	}
+	var out []*relay.RelayInfo
+	for _, r := range m.reg.All() {
+		if r.Flags&token.FlagHome == 0 && r.Flags&token.FlagPublic != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // bridges lists the unlisted entries known to this client.
 func (m *manager) bridges() []*relay.RelayInfo {
 	var out []*relay.RelayInfo
@@ -1589,7 +1611,7 @@ func (m *manager) EnsureFundsWatch() {
 	}
 	m.mu.Unlock()
 	m.claimFaucetOnce()
-	bs := m.bridges()
+	bs := m.entryCandidates()
 	if len(bs) == 0 {
 		return
 	}
