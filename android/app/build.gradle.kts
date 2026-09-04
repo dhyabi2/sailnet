@@ -3,16 +3,27 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Version from git, so every tag is a new version to Android and to the
+// user: versionName is the nearest tag (v0.2.9 -> 0.2.9, plus -N-gHASH when
+// past it), versionCode the number of commits (always increasing).
+fun git(vararg args: String): String = try {
+    val p = ProcessBuilder("git", *args).directory(rootDir).redirectErrorStream(true).start()
+    p.inputStream.bufferedReader().readText().trim().also { p.waitFor() }
+} catch (e: Exception) { "" }
+val gitDescribe = git("describe", "--tags", "--always").removePrefix("v").ifEmpty { "0.0.0" }
+val gitCount = git("rev-list", "--count", "HEAD").toIntOrNull() ?: 1
+
 android {
     namespace = "net.sailnet.app"
     compileSdk = 34
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = "net.sailnet.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = gitCount
+        versionName = gitDescribe
     }
     signingConfigs {
         // Release signing from the environment (CI secrets); falls back to the debug key locally.

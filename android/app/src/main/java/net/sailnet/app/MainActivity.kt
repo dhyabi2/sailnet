@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         statusDetail = findViewById(R.id.statusDetail)
+        supportActionBar?.subtitle = "v" + BuildConfig.VERSION_NAME
         address = findViewById(R.id.address)
         balance = findViewById(R.id.balance)
         path = findViewById(R.id.path)

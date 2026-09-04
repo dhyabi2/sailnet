@@ -26,6 +26,8 @@ jobs:
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history and tags: the APK version comes from git
 
       - name: Go
         uses: actions/setup-go@v5
@@ -80,7 +82,7 @@ jobs:
           if [ -n "$SAIL_KEYSTORE" ]; then ./gradlew assembleRelease --no-daemon; else ./gradlew assembleDebug --no-daemon; fi
           mkdir -p out
           cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
-          cd out && for f in *.apk; do mv "$f" "sailnet-${f#app-}"; done
+          cd out && for f in *.apk; do mv "$f" "sailnet-${GITHUB_REF_NAME#v}-${f#app-}"; done
           for f in *.apk; do sha256sum "$f" > "$f.sha256"; done
           ls -la && cat *.sha256
 
