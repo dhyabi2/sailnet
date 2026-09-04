@@ -147,6 +147,9 @@ type pool struct {
 	credited int64 // bytes we believe we have prepaid there
 	used     int64
 	topping  bool // a top-up is in flight (one at a time per peer)
+	rateAt   time.Time
+	rateN    int64
+	rate     int64 // bytes per second through this pool, recent window
 }
 
 // homeLink is a home node's outbound tunnel that we accept circuits into.
@@ -1144,7 +1147,7 @@ func (s *Server) acceptSuppliedPayment(tag string, raw []byte) error {
 // and a circuit must not die waiting for it. Clients get no overdraft; they
 // top up in place before the boundary (CmdTopUp).
 func (s *Server) overdraftOK(tag string, rem int64) bool {
-	const overdraft = 32 << 20
+	const overdraft = 128 << 20 // about 15 s at 8 MB/s: the refill starts 60 s ahead, this covers a slow block
 	if rem < -overdraft || s.Registry == nil {
 		return false
 	}
@@ -1413,12 +1416,22 @@ func (s *Server) meterPool(acct string, n int64) {
 		if before/(8<<20) != p.used/(8<<20) {
 			s.savePoolsLocked()
 		}
-		// Refill before it runs dry, off the data path: a fast circuit empties
-		// a pool in seconds, and a top-up waiting for proof-of-work at extend
-		// time would cut every stream on it.
+		now := time.Now()
+		if p.rateAt.IsZero() {
+			p.rateAt = now
+		}
+		p.rateN += n
+		if d := now.Sub(p.rateAt); d >= 2*time.Second {
+			p.rate = p.rateN * int64(time.Second) / int64(d)
+			p.rateN, p.rateAt = 0, now
+		}
+		// Refill before it runs dry, off the data path, and early enough in
+		// time: a refill needs a Nano block, so it starts 60 s of the current
+		// rate ahead (and never later than a quarter of the pool).
 		if s.PoolRaw != nil && !p.topping && s.Registry != nil {
 			if rel := s.Registry.Get(acct); rel != nil {
-				if size := BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate)); size >= 8<<20 && p.credited-p.used < size/4 {
+				size := BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate))
+				if size >= 8<<20 && (p.credited-p.used < size/4 || p.credited-p.used < p.rate*60) {
 					p.topping = true
 					refill = rel
 				}
@@ -1446,18 +1459,35 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 		s.mu.Unlock()
 	}()
 	acct := &nano.Account{Key: s.Key, Client: s.Nano}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // proof-of-work may be CPU-only on a small box; off the request path
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // off the request path
 	defer cancel()
-	h, err := acct.Send(ctx, rel.Account, s.PoolRaw, nil)
+	// Size the refill to five minutes at the pool's recent rate, between one
+	// and twenty base pools, so a fast circuit is not refilled every few
+	// seconds (each refill is a Nano block).
+	s.mu.Lock()
+	rate := p.rate
+	s.mu.Unlock()
+	rateRaw := token.RateToRaw(rel.MinRate)
+	amount := new(big.Int).Set(s.PoolRaw)
+	if rate > 0 && rateRaw.Sign() > 0 {
+		want := new(big.Int).Mul(big.NewInt((rate*300+(1<<20)-1)/(1<<20)), rateRaw)
+		if want.Cmp(amount) > 0 {
+			amount = want
+		}
+		if max := new(big.Int).Mul(s.PoolRaw, big.NewInt(20)); amount.Cmp(max) > 0 {
+			amount = max
+		}
+	}
+	h, err := acct.Send(ctx, rel.Account, amount, nil)
 	if err != nil {
 		return p.tag, err
 	}
 	s.mu.Lock()
 	p.tag = strings.ToUpper(h)
-	p.credited += BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate))
+	p.credited += BytesFor(amount, rateRaw)
 	s.savePoolsLocked()
 	s.mu.Unlock()
-	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(s.PoolRaw), h[:8])
+	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(amount), h[:8])
 	time.Sleep(2 * time.Second)
 	return p.tag, nil
 }
