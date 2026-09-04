@@ -61,10 +61,14 @@ type Server struct {
 	parks  map[[32]byte]*circuit // circuits whose client link dropped, kept for a minute
 
 	lastRegRefresh time.Time // on-demand registry re-read for newcomers, rate-limited
-	Exit           bool
-	AllowPrivate   bool     // test mode only: let the exit reach loopback/LAN targets
-	PoolRaw        *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
-	Decoy          string   // HTML served to everyone else
+
+	connMu       sync.Mutex
+	conns        map[*connWriter]bool // live client/relay connections, for a graceful shutdown
+	draining     bool
+	Exit         bool
+	AllowPrivate bool     // test mode only: let the exit reach loopback/LAN targets
+	PoolRaw      *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
+	Decoy        string   // HTML served to everyone else
 
 	mu        sync.Mutex
 	pools     map[string]*pool // downstream relay account → pool
@@ -351,6 +355,23 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 	in := newConnWriter(conn, false)
 	defer in.stop()
 	circs := map[uint32]*circuit{}
+	var rpcParts map[uint16][]byte // chunked ledger requests in progress
+	s.connMu.Lock()
+	if s.conns == nil {
+		s.conns = map[*connWriter]bool{}
+	}
+	s.conns[in] = true
+	draining := s.draining
+	s.connMu.Unlock()
+	defer func() {
+		s.connMu.Lock()
+		delete(s.conns, in)
+		s.connMu.Unlock()
+	}()
+	if draining {
+		in.write(&wire.Cell{Cmd: wire.CmdError, Payload: []byte("relay restarting; use another entry")})
+		return
+	}
 	defer func() {
 		for _, c := range circs {
 			s.park(c) // extended circuits wait a minute for the client to reattach
@@ -412,6 +433,23 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		}
 		if cell.Cmd == wire.CmdRPC && cell.CircID == 0 { // ledger for a client that has no circuit yet
 			go s.handleRPC(cell, in, conn.RemoteAddr().String())
+			continue
+		}
+		if cell.Cmd == wire.CmdRPCMulti && cell.CircID == 0 { // a request too large for one cell, in chunks
+			if rpcParts == nil {
+				rpcParts = map[uint16][]byte{}
+			}
+			if len(cell.Payload) == 0 { // end of request
+				body := rpcParts[cell.StreamID]
+				delete(rpcParts, cell.StreamID)
+				if len(body) > 0 {
+					go s.handleRPC(&wire.Cell{Cmd: wire.CmdRPC, StreamID: cell.StreamID, Payload: body}, in, conn.RemoteAddr().String())
+				}
+				continue
+			}
+			if len(rpcParts[cell.StreamID])+len(cell.Payload) <= 64<<10 {
+				rpcParts[cell.StreamID] = append(rpcParts[cell.StreamID], cell.Payload...)
+			}
 			continue
 		}
 		if cell.Cmd == wire.CmdWatch && cell.CircID == 0 { // push this account's confirmations to me
@@ -1062,6 +1100,19 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 		return
 	}
 	if !s.Registry.Listed(rel.Account) && s.PoolRaw != nil {
+		s.mu.Lock()
+		due := time.Since(s.lastRegRefresh) > time.Minute
+		if due {
+			s.lastRegRefresh = time.Now()
+		}
+		s.mu.Unlock()
+		if due {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			s.Registry.Refresh(ctx)
+			cancel()
+		}
+	}
+	if !s.Registry.Listed(rel.Account) && s.PoolRaw != nil {
 		s.reply(c, wire.CmdError, sid, []byte("next hop is not on the ledger"))
 		return
 	}
@@ -1204,6 +1255,33 @@ func (s *Server) acceptSuppliedPayment(tag string, raw []byte) error {
 		time.Sleep(2 * time.Second)
 	}
 	return err
+}
+
+// Drain prepares a restart: new connections are turned away and every open
+// connection is told to move, so clients rebuild through another entry
+// before this process exits. Returns once the connections are gone or after
+// the grace period.
+func (s *Server) Drain(grace time.Duration) {
+	s.connMu.Lock()
+	s.draining = true
+	var ws []*connWriter
+	for w := range s.conns {
+		ws = append(ws, w)
+	}
+	s.connMu.Unlock()
+	for _, w := range ws {
+		w.write(&wire.Cell{Cmd: wire.CmdError, Payload: []byte("relay restarting; use another entry")})
+	}
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		s.connMu.Lock()
+		n := len(s.conns)
+		s.connMu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // overdraftOK lets a listed relay's pool run a little negative while its

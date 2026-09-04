@@ -214,8 +214,8 @@ func (e *EntryRPC) reset() {
 func (e *EntryRPC) Call(body []byte, timeout time.Duration) ([]byte, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if len(body) > wire.PayloadSize {
-		return nil, errors.New("request too large for one cell")
+	if len(body) > 64<<10 {
+		return nil, errors.New("request too large")
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := e.connect(); err != nil {
@@ -223,7 +223,23 @@ func (e *EntryRPC) Call(body []byte, timeout time.Duration) ([]byte, error) {
 		}
 		e.seq++
 		id := e.seq
-		if err := e.w.write(&wire.Cell{Cmd: wire.CmdRPC, StreamID: id, Payload: body}); err != nil {
+		var werr error
+		if len(body) <= wire.PayloadSize {
+			werr = e.w.write(&wire.Cell{Cmd: wire.CmdRPC, StreamID: id, Payload: body})
+		} else { // chunked: same id, empty payload ends it
+			var cells []*wire.Cell
+			for rest := body; len(rest) > 0; {
+				n := len(rest)
+				if n > 1000 {
+					n = 1000
+				}
+				cells = append(cells, &wire.Cell{Cmd: wire.CmdRPCMulti, StreamID: id, Payload: rest[:n]})
+				rest = rest[n:]
+			}
+			cells = append(cells, &wire.Cell{Cmd: wire.CmdRPCMulti, StreamID: id})
+			werr = e.w.writeBatch(cells...)
+		}
+		if werr != nil {
 			e.reset()
 			continue
 		}

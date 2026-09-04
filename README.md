@@ -49,6 +49,8 @@ After=network-online.target
 ExecStart=/usr/local/bin/sailnode relay --register --payout nano_your_wallet_address_here
 Restart=always
 RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target

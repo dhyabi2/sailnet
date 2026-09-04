@@ -364,6 +364,15 @@ func runRelay(args []string) {
 		log.Printf("faucet: %s XNO per claim, %d per IP per day, from %s", *faucetAmount, *faucetPerIP, client.Short(fk.Address))
 	}
 	log.Printf("sailnode relay %s on %s (ip %s, cc %s, asn %d, rate %s XNO/MiB, exit=%v, certfp %x)", key.Address, *listen, *ip, *cc, *asn, *rate, *exit, fp)
+	go func() { // a restart is announced: clients move to another entry before this process exits
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGTERM, syscall.SIGINT)
+		<-c
+		log.Printf("shutting down: telling connected clients to move to another entry")
+		s.Drain(20 * time.Second)
+		q.Flush()
+		os.Exit(0)
+	}()
 	if *reprice && *register {
 		// Demand-driven price: every window the relay looks at the bytes
 		// it carried and moves its price down 10% when usage fell, up 3%

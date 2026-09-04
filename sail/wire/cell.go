@@ -446,6 +446,10 @@ const (
 	// exit never notice; streams and quota carry on.
 	CmdResume  byte = 27
 	CmdResumed byte = 28
+	// CmdRPCMulti carries a ledger request larger than one cell: chunks with
+	// the same StreamID, ended by an empty payload; the entry then handles it
+	// exactly like CmdRPC.
+	CmdRPCMulti byte = 29
 	// QuotaLowStream is the stream id of an unsolicited CmdQuota from the
 	// entry: the quota is under a quarter, top up now.
 	QuotaLowStream uint16 = 2

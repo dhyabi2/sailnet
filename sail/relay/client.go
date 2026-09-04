@@ -18,31 +18,32 @@ import (
 
 // Circuit is the client side of a telescoping circuit.
 type Circuit struct {
-	leaf    [32]byte // TLS leaf certificate hash seen at the entry
-	Path    []*RelayInfo
-	Tag     [32]byte
-	conn    net.Conn
-	w       *connWriter
-	hops    []*wire.HopKeys
-	mu      sync.Mutex
-	nextS   uint16
-	strms   map[uint16]*Stream
-	ctl     chan ctlMsg
-	Failed  int // index of the hop that failed during build (-1 = none)
-	Quota   int64
-	closed  bool
-	Built   time.Time
-	Bytes   int64
-	Flow    bool       // the exit understands BEGIN2 / CREDIT: open windowed streams
-	resume  [32]byte   // ownership proof for reattaching after a dropped entry link
-	sendMu  sync.Mutex // seal + ring push, so ring order is sequence order
-	ring    []sentCell // last cells sent to the entry, for retransmission after a reattach
-	relink  sync.Mutex // held while the entry link is being replaced
-	relinkC *sync.Cond
-	linking bool
-	OnQuota func(int64)  // called when the entry pushes a low-quota notice
-	recv    atomic.Int64 // unix nanos of the last cell received
-	pingErr atomic.Value
+	leaf     [32]byte // TLS leaf certificate hash seen at the entry
+	Path     []*RelayInfo
+	Tag      [32]byte
+	conn     net.Conn
+	w        *connWriter
+	hops     []*wire.HopKeys
+	mu       sync.Mutex
+	nextS    uint16
+	strms    map[uint16]*Stream
+	ctl      chan ctlMsg
+	Failed   int // index of the hop that failed during build (-1 = none)
+	Quota    int64
+	closed   bool
+	Built    time.Time
+	Bytes    int64
+	Flow     bool       // the exit understands BEGIN2 / CREDIT: open windowed streams
+	LinkLost bool       // the entry link died and could not be reattached: avoid this entry for a while
+	resume   [32]byte   // ownership proof for reattaching after a dropped entry link
+	sendMu   sync.Mutex // seal + ring push, so ring order is sequence order
+	ring     []sentCell // last cells sent to the entry, for retransmission after a reattach
+	relink   sync.Mutex // held while the entry link is being replaced
+	relinkC  *sync.Cond
+	linking  bool
+	OnQuota  func(int64)  // called when the entry pushes a low-quota notice
+	recv     atomic.Int64 // unix nanos of the last cell received
+	pingErr  atomic.Value
 }
 
 // BytesMoved is the number of bytes received on the circuit so far.
@@ -472,11 +473,20 @@ func (c *Circuit) readLoop() {
 					resumed = true
 					return // a new readLoop runs on the new link; this circuit stays open
 				}
+				c.mu.Lock()
+				c.LinkLost = true
+				c.mu.Unlock()
 			}
 			return
 		}
 		c.recv.Store(time.Now().UnixNano())
 		if cell.Cmd == wire.CmdError {
+			if strings.Contains(string(cell.Payload), "restarting") {
+				log.Printf("circuit: entry is restarting; moving to another entry")
+				c.mu.Lock()
+				c.LinkLost = true
+				c.mu.Unlock()
+			}
 			c.ctl <- ctlMsg{hop: 0, cmd: wire.CmdError, data: cell.Payload}
 			return
 		}

@@ -514,6 +514,9 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		return m.cur, nil
 	}
 	if m.cur != nil {
+		if m.cur.Closed() && m.cur.LinkLost && len(m.cur.Path) > 0 {
+			m.mark(m.cur.Path[0].Account, false) // the entry vanished or is restarting: next build uses another one
+		}
 		// Rotate without cutting anyone off: the old circuit keeps serving
 		// the streams it has and closes once they are gone.
 		go drainCircuit(m.cur)
@@ -1469,7 +1472,20 @@ func (m *manager) Balance() string {
 }
 
 // Relays is how many relays the client currently knows.
-func (m *manager) Relays() int { return len(m.reg.All()) }
+// Relays counts relays this client considers usable: on the ledger and not
+// marked unreachable. Dead registrations stay on the ledger forever, so the
+// raw ledger count would overstate the network.
+func (m *manager) Relays() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, r := range m.reg.All() {
+		if m.scoreOf(r.Account) >= 0.3 {
+			n++
+		}
+	}
+	return n
+}
 
 // RunUDPTest sends a DNS query for example.com as a datagram through the
 // circuit to the resolver given (default 1.1.1.1:53) and prints the answer

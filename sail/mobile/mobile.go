@@ -422,7 +422,11 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 		defer st.Close()
 		var first net.Addr
 		var up, down int
-		defer func() { log.Printf("udp flow closed: %d datagrams up, %d down", up, down) }()
+		defer func() {
+			if os.Getenv("SAIL_DEBUG") != "" {
+				log.Printf("udp flow closed: %d datagrams up, %d down", up, down)
+			}
+		}()
 		go func() { // exit → app
 			var d relay.Deframer
 			buf := make([]byte, 4096)
