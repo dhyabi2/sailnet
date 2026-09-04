@@ -306,4 +306,3 @@ image and the APK and attaches them to a release.
 - `android/`, `extension/` the apps
 - `docker/`, `deploy/` images and server bootstrap
 
-Treasury: `nano_1cexacexqrr51coik9eeqzebmfej7g6chrd1eygmzm9ad86qek84pnhpda1t`
