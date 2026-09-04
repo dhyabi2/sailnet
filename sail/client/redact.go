@@ -19,6 +19,7 @@ var (
 	wallets  []string
 	relayIPs = map[string]bool{}
 	ipRe     = regexp.MustCompile(`\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b`)
+	ip6Re    = regexp.MustCompile(`\[?\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{1,4}\b\]?(?::\d{1,5})?`)
 	acctRe   = regexp.MustCompile(`\bnano_[13][13-9a-km-uw-z]{59}\b`)
 )
 
@@ -62,6 +63,17 @@ func Redact(s string) string {
 	}
 	s = acctRe.ReplaceAllStringFunc(s, func(a string) string {
 		return a[:11] + "…" // other accounts (relays) stay recognisable but short
+	})
+	s = ip6Re.ReplaceAllStringFunc(s, func(ip string) string {
+		if strings.HasPrefix(ip, "[::1]") || strings.HasPrefix(ip, "::1") {
+			return ip
+		}
+		// Only real IPv6 literals: a "::" or a hex letter. Clock times such as
+		// 11:33:37 also match the shape and must stay.
+		if !strings.Contains(ip, "::") && !strings.ContainsAny(ip, "abcdefABCDEF") {
+			return ip
+		}
+		return "an address"
 	})
 	s = ipRe.ReplaceAllStringFunc(s, func(ip string) string {
 		if strings.HasPrefix(ip, "127.") {

@@ -1236,7 +1236,7 @@ func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 // Write passes straight through: record boundaries are decided by the
 // tunnel writer's shaper (relay/writer.go), not here. The random 1–3 way
 // split that used to live here chopped every record the shaper produced;
-// The measurement is reproducible with `sailtrace`.
+// The measurement is reproducible with sailtrace.
 func (b *bufConn) Write(p []byte) (int, error) { return b.Conn.Write(p) }
 
 // wsAccept computes the RFC 6455 Sec-WebSocket-Accept value.

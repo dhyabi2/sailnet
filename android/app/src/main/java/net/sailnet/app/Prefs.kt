@@ -10,28 +10,40 @@ object Prefs {
         val p = PreferenceManager.getDefaultSharedPreferences(ctx)
         val builtIn = ctx.resources.openRawResource(R.raw.bridges).bufferedReader().readText()
         val extra = p.getString("bridges", "") ?: ""
-        val bridges = if (p.getBoolean("use_builtin_bridges", true)) builtIn + "\n" + extra else extra
+        val bridges = builtIn + "\n" + extra
         return JSONObject()
             .put("hops", (p.getString("hops", "3") ?: "3").toIntOrNull() ?: 3)
-            .put("exitCC", p.getString("exit_cc", "") ?: "")
+            .put("excludeCC", (p.getStringSet("exclude_cc", emptySet()) ?: emptySet()).joinToString(","))
             .put("anchor", p.getString("anchor", "0.0005") ?: "0.0005")
             .put("maxRate", p.getString("max_rate", "0") ?: "0")
             .put("rpcUrl", rpcUrl(ctx))
             .put("rpcKey", p.getString("rpc_key", "") ?: "")
-            .put("stealth", p.getBoolean("stealth", true))
+            .put("stealth", true)
             .put("bridges", bridges)
             .put("dnsUpstream", p.getString("dns_upstream", "1.1.1.1:53") ?: "1.1.1.1:53")
             .put("nick", nick(ctx))
-            .put("censored", p.getBoolean("censored", false))
+            .put("censored", true)
             .toString()
     }
 
     fun nick(ctx: Context): String = PreferenceManager.getDefaultSharedPreferences(ctx).getString("nick", "") ?: ""
     fun setNick(ctx: Context, n: String) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("nick", n.trim()).apply()
 
-    fun rpcUrl(ctx: Context): String = PreferenceManager.getDefaultSharedPreferences(ctx).getString("rpc_url", "") ?: ""
+    fun rpcUrl(ctx: Context): String {
+        val p = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val u = p.getString("rpc_url", "") ?: ""
+        // An earlier build stored rpc.nano.to as its default; without a key that now means Sailnet's endpoint.
+        if (u.trimEnd('/') == "https://rpc.nano.to" && (p.getString("rpc_key", "") ?: "").isBlank()) {
+            p.edit().putString("rpc_url", "https://www.sailnet.space/node/api").apply()
+            return "https://www.sailnet.space/node/api"
+        }
+        return u
+    }
     fun setRpc(ctx: Context, url: String, key: String) =
         PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("rpc_url", url.trim()).putString("rpc_key", key.trim()).apply()
+
+    fun activityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("activity_consent", false)
+    fun setActivityConsent(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).edit().putBoolean("activity_consent", true).apply()
 
     fun autoConnect(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("auto_connect", false)
 }

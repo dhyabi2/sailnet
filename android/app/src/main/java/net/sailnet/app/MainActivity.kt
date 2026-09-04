@@ -66,6 +66,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.kraken).setOnClickListener { openLink("https://www.kraken.com/prices/nano") }
         findViewById<Button>(R.id.newExit).setOnClickListener { Mobile.rebuild(); Toast.makeText(this, "Building a new circuit", Toast.LENGTH_SHORT).show() }
         findViewById<Button>(R.id.relays).setOnClickListener { startActivity(Intent(this, RelaysActivity::class.java)) }
+        findViewById<Button>(R.id.activity).setOnClickListener { startActivity(Intent(this, ActivityActivity::class.java)) }
         findViewById<Button>(R.id.log).setOnClickListener { startActivity(Intent(this, LogActivity::class.java)) }
         findViewById<Button>(R.id.settings).setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         toggle.setOnClickListener { if (SailVpnService.running) stopVpn() else prepareAndStart() }

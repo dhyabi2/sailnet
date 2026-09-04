@@ -18,21 +18,12 @@
             android:defaultValue="3"
             android:entries="@array/hops_labels"
             android:entryValues="@array/hops_values" />
-        <EditTextPreference
-            android:key="exit_cc"
-            android:title="Exit country"
-            android:summary="Two-letter code, e.g. DE or US. Empty = any. Applies to the next circuit."
-            android:defaultValue="" />
-        <SwitchPreferenceCompat
-            android:key="stealth"
-            android:title="Stealth mode"
-            android:summary="Never contact a Nano node from this network once the wallet state is cached. Ledger calls go through the circuit."
-            android:defaultValue="true" />
-        <SwitchPreferenceCompat
-            android:key="censored"
-            android:title="Censored network"
-            android:summary="Use only bridges as entry, never probe listed relays, never contact a Nano node directly. Needs a bridge line."
-            android:defaultValue="false" />
+        <MultiSelectListPreference
+            android:key="exclude_cc"
+            android:title="Never exit through"
+            android:summary="Countries whose relays must not be your exit. Tap to choose from the relays currently known."
+            android:entries="@array/empty"
+            android:entryValues="@array/empty" />
         <SwitchPreferenceCompat
             android:key="auto_connect"
             android:title="Connect on open"
@@ -55,11 +46,6 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Relays">
-        <SwitchPreferenceCompat
-            android:key="use_builtin_bridges"
-            android:title="Use built-in bridges"
-            android:summary="The three founding relays, compiled into the app."
-            android:defaultValue="true" />
         <EditTextPreference
             android:key="bridges"
             android:title="Extra bridge lines"

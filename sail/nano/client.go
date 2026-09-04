@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,7 +155,7 @@ func (c *Client) Call(ctx context.Context, body map[string]any, out any) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("all rpc endpoints failed: %w", lastErr)
+	return fmt.Errorf("ledger unreachable: %s", stripURL(lastErr.Error()))
 }
 
 // RPCError is a semantic error returned by the node (not failed over).
@@ -479,3 +480,9 @@ func ConfigureRPC(url, key string) {
 		os.Unsetenv("NANO_RPC_KEY")
 	}
 }
+
+var urlInErr = regexp.MustCompile(`(?:Post|Get) "https?://[^"]+": `)
+
+// stripURL removes the endpoint from a transport error: logs and screens say
+// what went wrong, not which provider was asked.
+func stripURL(msg string) string { return urlInErr.ReplaceAllString(msg, "") }

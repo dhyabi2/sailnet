@@ -37,14 +37,15 @@ type Protector interface {
 // Options is the JSON the app passes to Start.
 type Options struct {
 	Hops        int    `json:"hops"`        // 2..4, default 3
-	ExitCC      string `json:"exitCC"`      // preferred exit country, "" = any
+	ExitCC      string `json:"exitCC"`      // preferred exit country, "" = any (optional)
+	ExcludeCC   string `json:"excludeCC"`   // exit countries never to use, comma-separated
 	Anchor      string `json:"anchor"`      // XNO per prepaid anchor, default 0.0005
 	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
-	Stealth     bool   `json:"stealth"`     // no direct ledger calls once the wallet state is cached
+	Stealth     bool   `json:"stealth"`     // ignored: always on
 	Bridges     string `json:"bridges"`     // bridge lines, newline separated
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
 	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
-	Censored    bool   `json:"censored"`    // bridges only, no probes, never a direct ledger call
+	Censored    bool   `json:"censored"`    // ignored: always on
 	RPCURL      string `json:"rpcUrl"`      // Nano RPC endpoint tried first, default Sailnet's endpoint
 	RPCKey      string `json:"rpcKey"`      // API key for rpc.nano.to (sent to that host only)
 }
@@ -111,6 +112,9 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	}
 	os.Setenv("SAIL_HOME", home)
 	os.MkdirAll(home, 0o700)
+	if strings.TrimSuffix(strings.TrimSpace(o.RPCURL), "/") == "https://rpc.nano.to" && strings.TrimSpace(o.RPCKey) == "" {
+		o.RPCURL = "" // the earlier build's default; without a key it means "use Sailnet's endpoint"
+	}
 	nano.ConfigureRPC(o.RPCURL, o.RPCKey)
 	key0 := client.EnsureWallet()
 	client.SetNick(o.Nick, key0.Address)
@@ -133,19 +137,14 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	}
 	_, noChain := os.Stat(filepath.Join(home, "chain-"+key.Address[len(key.Address)-8:]+".json"))
 	var m *client.Manager
-	if o.Stealth {
-		m = client.NewStealthManager(o.Hops, o.ExitCC, o.Anchor, o.MaxRate, "")
-		if noChain != nil {
-			m.AllowDirectBootstrap(true)
-			log.Printf("first run: ledger reached directly until the wallet state is cached")
-		}
-	} else {
-		m = client.NewManager(o.Hops, o.ExitCC, o.Anchor, o.MaxRate, "", "")
+	// Stealth and the censored-network profile are always on; the options
+	// are accepted for compatibility and ignored.
+	m = client.NewStealthManagerBootstrap(o.Hops, o.ExitCC, o.Anchor, o.MaxRate, "", noChain != nil)
+	if noChain != nil {
+		log.Printf("first run: wallet state fetched through Sailnet's endpoint, then cached")
 	}
-	if o.Censored {
-		m.SetCensored(true)
-		log.Printf("censored-network profile: bridges only, no probes, no direct ledger access")
-	}
+	m.SetCensored(true)
+	m.SetExcludeExit(o.ExcludeCC)
 	mgr = m
 	started = time.Now()
 	if tunFd > 0 {
@@ -198,17 +197,35 @@ func Rebuild() {
 	}()
 }
 
-// SetExitCC changes the preferred exit country for the next circuit.
-func SetExitCC(cc string) {
+// SetExcludeExit changes the excluded exit countries for the next circuit.
+func SetExcludeExit(list string) {
 	mu.Lock()
 	m := mgr
 	mu.Unlock()
 	if m != nil {
-		m.SetExitCC(strings.ToUpper(strings.TrimSpace(cc)))
+		m.SetExcludeExit(list)
 	}
 }
 
-// Address returns the wallet address to fund (creates the wallet if needed).
+// Countries returns the relay countries known to this client as a JSON
+// array, for the exclusion picker; works before the first connection.
+func Countries() string {
+	mu.Lock()
+	m := mgr
+	mu.Unlock()
+	var cs []string
+	if m != nil {
+		cs = m.Countries()
+	} else {
+		cs = client.CachedCountries()
+	}
+	if cs == nil {
+		cs = []string{}
+	}
+	b, _ := json.Marshal(cs)
+	return string(b)
+}
+
 func Address(home string) string {
 	os.Setenv("SAIL_HOME", home)
 	return client.EnsureWallet().Address
@@ -278,9 +295,11 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 			return
 		}
 		defer st.Close()
+		f := trackFlow("tcp", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), int(id.LocalPort))
+		defer f.close()
 		done := make(chan struct{}, 2)
-		go func() { io.Copy(client.Up(st), conn); st.Close(); done <- struct{}{} }()
-		go func() { io.Copy(client.Down(conn), st); done <- struct{}{} }()
+		go func() { io.Copy(meter{client.Up(st), f.addUp}, conn); st.Close(); done <- struct{}{} }()
+		go func() { io.Copy(meter{client.Down(conn), f.addDown}, st); done <- struct{}{} }()
 		<-done
 	}()
 }
@@ -290,6 +309,8 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 		defer conn.Close()
 		id := conn.ID()
 		if id.LocalPort == 53 { // DNS: resolved through the circuit at the exit
+			f := trackFlow("dns", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), 53)
+			defer f.close()
 			buf := make([]byte, 4096)
 			for {
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -298,9 +319,13 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 					return
 				}
 				q := append([]byte(nil), buf[:n]...)
+				f.addUp(n)
 				go func() {
 					if ans, err := h.m.ResolveViaCircuit(q, upstream); err == nil {
+						f.addDown(len(ans))
 						conn.WriteTo(ans, from)
+					} else {
+						logDNSErr(err)
 					}
 				}()
 			}
@@ -319,6 +344,8 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 			return
 		}
 		defer st.Close()
+		f := trackFlow("udp", id.RemoteAddress.String(), int(id.RemotePort), id.LocalAddress.String(), int(id.LocalPort))
+		defer f.close()
 		var first net.Addr
 		var up, down int
 		defer func() { log.Printf("udp flow closed: %d datagrams up, %d down", up, down) }()
@@ -335,6 +362,7 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				for dg := d.Next(); dg != nil; dg = d.Next() {
 					if first != nil {
 						client.Down(discard{}).Write(dg) // traffic counter
+						f.addDown(len(dg))
 						down++
 						conn.WriteTo(dg, first)
 					}
@@ -352,6 +380,7 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				first = from
 			}
 			up++
+			f.addUp(n)
 			if _, err := client.Up(st).Write(relay.Frame(buf[:n])); err != nil {
 				return
 			}
@@ -363,3 +392,17 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+var dnsErrAt time.Time
+
+// logDNSErr reports why a lookup could not be answered, at most once per
+// 10 s: a silent failure here looked like a dead app.
+func logDNSErr(err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if time.Since(dnsErrAt) < 10*time.Second {
+		return
+	}
+	dnsErrAt = time.Now()
+	log.Printf("dns: %v", err)
+}

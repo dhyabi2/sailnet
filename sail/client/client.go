@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	stdErrors "errors"
@@ -71,9 +72,18 @@ func chainState(k *nano.Key) *nano.ChainState {
 	return nano.LoadChainState(filepath.Join(dataDir(), "chain-"+k.Address[len(k.Address)-8:]+".json"))
 }
 
+// bootstrapResolver answers name lookups over a protected socket to a public
+// resolver. Inside the app the system resolver is the tunnel itself, which
+// cannot answer before a circuit exists, so the first ledger call would
+// otherwise fail on "no such host".
+var bootstrapResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 8 * time.Second, Control: relay.DialControl}
+	return d.DialContext(ctx, "udp", "1.1.1.1:53")
+}}
+
 func newNano() *nano.Client {
 	c := nano.NewClient()
-	c.HTTP = &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: 15 * time.Second, Control: relay.DialControl}).DialContext, DisableKeepAlives: true}}
+	c.HTTP = &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: 15 * time.Second, Control: relay.DialControl, Resolver: bootstrapResolver}).DialContext, DisableKeepAlives: true}}
 	if k := os.Getenv("NANO_RPC_KEY"); k != "" {
 		c.APIKey = k
 	}
@@ -83,8 +93,9 @@ func newNano() *nano.Client {
 type clientOpts struct {
 	hops    int
 	exitCC  string
-	anchor  *big.Int // raw XNO per prepaid anchor
-	rate    uint32   // max price accepted on any hop (RateUnitRaw per MiB); 0 = 3x the median
+	exclude map[string]bool // exit countries the user refuses
+	anchor  *big.Int        // raw XNO per prepaid anchor
+	rate    uint32          // max price accepted on any hop (RateUnitRaw per MiB); 0 = 3x the median
 	timeout time.Duration
 	regDir  string
 	freeTag string
@@ -131,7 +142,7 @@ func (m *manager) dialViaCircuit(ctx context.Context, network, addr string) (net
 	if c == nil || c.Closed() {
 		if m.directBootstrap {
 			// first run: nothing cached yet, so one direct call is the only way to learn our balance
-			return (&net.Dialer{Timeout: 15 * time.Second, Control: relay.DialControl}).DialContext(ctx, network, addr)
+			return (&net.Dialer{Timeout: 15 * time.Second, Control: relay.DialControl, Resolver: bootstrapResolver}).DialContext(ctx, network, addr)
 		}
 		return nil, errors("stealth: no circuit yet (using cached state)")
 	}
@@ -310,7 +321,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	}
 	if m.opts.hops > 1 {
 		x := pick(func(r *relay.RelayInfo) bool {
-			return r.Flags&token.FlagExit != 0 && diverse(r) && (m.opts.exitCC == "" || r.Country == strings.ToUpper(m.opts.exitCC))
+			return r.Flags&token.FlagExit != 0 && diverse(r) && !m.opts.exclude[strings.ToUpper(r.Country)] && (m.opts.exitCC == "" || r.Country == strings.ToUpper(m.opts.exitCC))
 		})
 		if x == nil {
 			x = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagExit != 0 })
@@ -557,13 +568,15 @@ func runClient(args []string) {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	socks := fs.String("socks", "127.0.0.1:1080", "SOCKS5 listen address")
 	hops := fs.Int("hops", 3, "circuit length")
-	exitCC := fs.String("exit-cc", "", "preferred exit country")
+	exitCC := fs.String("exit-cc", "", "preferred exit country (optional)")
+	excludeCC := fs.String("exclude-cc", "", "exit countries never to use, comma-separated (e.g. US,GB)")
 	anchor := fs.String("anchor", "0.0005", "XNO per prepaid anchor")
 	rate := fs.String("rate", "0", "max XNO per MiB you accept on any hop (0 = three times the median published price)")
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag (fragment-B hash of a SAIL transfer to the entry) instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
-	stealth := fs.Bool("stealth", true, "no direct Nano RPC: ledger calls go through the circuit, payments are signed from the cached chain state and published by the relay")
+	stealth := new(bool)
+	*stealth = true // always: no direct Nano RPC except the first-run bootstrap through Sailnet's endpoint
 	dns := fs.String("dns", "127.0.0.1:5300", "answer DNS here by resolving through the circuit at the exit (empty = off)")
 	status := fs.String("status", "127.0.0.1:1090", "JSON status endpoint for UIs and the browser extension (empty = off)")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
@@ -573,7 +586,7 @@ func runClient(args []string) {
 	subvert := fs.Bool("subvert-dns", false, "with --capture: point the operating system's resolver at 127.0.0.1 and restore it on exit")
 	dnsUp := fs.String("dns-upstream", "1.1.1.1:53", "resolver the exit asks on your behalf")
 	nickFlag := fs.String("nick", "", "nickname shown instead of your wallet address and device IPs in logs and status")
-	censoredFlag = fs.Bool("censored", false, "censored-network profile: bridges are the only entries, no startup probes to listed relays, never any direct ledger call")
+	*censoredFlag = true // always on
 	bridge := fs.String("bridge", "", "bridge line(s) of unlisted entry relays, comma-separated (also read from SAIL_HOME/bridges.txt); bridges are preferred as entry")
 	fs.Parse(args)
 	if *rpcURL != "" || *rpcKey != "" {
@@ -598,22 +611,25 @@ func runClient(args []string) {
 	}
 	var m *manager
 	if *stealth && *regDir == "" {
-		m = newStealthManager(*hops, *exitCC, *anchor, *rate, *freeTag)
+		key0 := EnsureWallet()
+		_, noChain := os.Stat(filepath.Join(dataDir(), "chain-"+key0.Address[len(key0.Address)-8:]+".json"))
+		m = newStealthManager(*hops, *exitCC, *anchor, *rate, *freeTag, noChain != nil)
+		if noChain != nil {
+			log.Printf("first run: ledger reached directly until the wallet state is cached")
+		}
 	} else {
 		m = newManager(*hops, *exitCC, *anchor, *rate, *regDir, *freeTag)
 	}
 	m.opts.entry = *entry
 	SetNick(*nickFlag, m.key.Address)
+	m.SetExcludeExit(*excludeCC)
 	log.SetOutput(RedactingWriter{W: os.Stderr})
 	if bs := m.bridges(); len(bs) > 0 {
 		log.Printf("%d unlisted entry relay(s) (bridges) will be preferred as entry", len(bs))
 	}
-	if *censoredFlag {
-		if len(m.bridges()) == 0 {
-			log.Fatal("--censored needs at least one bridge line (--bridge or bridges.txt)")
-		}
-		m.SetCensored(true)
-		log.Printf("censored-network profile: bridges only, no probes, no direct ledger access")
+	m.SetCensored(true)
+	if len(m.bridges()) == 0 {
+		log.Fatal("no bridge known: add a bridge line (--bridge or bridges.txt)")
 	}
 	ln, err := net.Listen("tcp", *socks)
 	if err != nil {
@@ -657,9 +673,14 @@ func runClient(args []string) {
 // list comes from the cache and the anchor payment is signed from the cached
 // chain state and published by the entry relay. The local network never sees
 // a Nano node's name or address.
-func newStealthManager(hops int, exitCC, anchor, rate, freeTag string) *manager {
-	m := &manager{stealth: true}
+func newStealthManager(hops int, exitCC, anchor, rate, freeTag string, direct bool) *manager {
+	m := &manager{stealth: true, directBootstrap: direct, censored: true}
 	nc := newNano()
+	if direct {
+		// First run: the only direct connection ever made is to Sailnet's own
+		// website endpoint, never to a third-party Nano node.
+		nc.URLs = []string{nano.PrimaryRPC, nano.FallbackRPC}
+	}
 	// Keep the connection to the RPC open between calls: every call on its
 	// own stream cost BEGIN, an inner TLS handshake, the request and END,
 	// a dozen cells of upstream per circuit that the shaping measurement found.
@@ -702,6 +723,11 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 		log.Printf("%d relays from cache", n)
 	}
 	// Bridges come first: with one bridge line a client needs neither cache nor ledger.
+	for _, line := range strings.Split(builtinBridges, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			cliBridges = append(cliBridges, line)
+		}
+	}
 	for _, line := range cliBridges {
 		ri, err := relay.ParseBridgeLine(line)
 		if err != nil {
@@ -796,8 +822,10 @@ func (m *manager) serveSocks(conn net.Conn) {
 	// behind BEGIN, saving a full 3-hop round trip per connection.
 	conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 	done := make(chan struct{}, 2)
-	go func() { io.Copy(Up(st), conn); st.Close(); done <- struct{}{} }()
-	go func() { io.Copy(Down(conn), st); done <- struct{}{} }()
+	fl := newSocksFlow(conn.RemoteAddr(), target)
+	defer func() { socksFlowsMu.Lock(); fl.Open = false; socksFlowsMu.Unlock() }()
+	go func() { io.Copy(flowCounter{Up(st), fl, &fl.Up}, conn); st.Close(); done <- struct{}{} }()
+	go func() { io.Copy(flowCounter{Down(conn), fl, &fl.Down}, st); done <- struct{}{} }()
 	<-done
 }
 
@@ -877,16 +905,20 @@ func (m *manager) pocket() {
 // cliBridges holds --bridge lines until the registry exists.
 var cliBridges []string
 
+// builtinBridges are the founding entry relays, compiled in so every client
+// has an entry without reading the ledger or any server first.
+//
+//go:embed bridges_builtin.txt
+var builtinBridges string
+
 // censoredFlag is read after the manager exists.
 var censoredFlag = new(bool)
 
 // SetCensored switches the censored-network profile on (bridges only, no
 // probes, no direct ledger access); used by the app and --censored.
 func (m *manager) SetCensored(on bool) {
-	m.censored = on
-	if on {
-		m.directBootstrap = false
-	}
+	m.censored = true // always on: bridges as entries, no probes from the real address
+	_ = on
 }
 
 // gossipBootstrap asks the relays we can reach (bridges first) for the
@@ -997,7 +1029,15 @@ func NewManager(hops int, exitCC, anchor, rate, regDir, freeTag string) *Manager
 
 // NewStealthManager builds a manager whose ledger calls go through the circuit.
 func NewStealthManager(hops int, exitCC, anchor, rate, freeTag string) *Manager {
-	return newStealthManager(hops, exitCC, anchor, rate, freeTag)
+	return newStealthManager(hops, exitCC, anchor, rate, freeTag, false)
+}
+
+// NewStealthManagerBootstrap is NewStealthManager for a first run: with
+// direct set, the ledger is read directly (relay list, wallet state) until
+// the state is cached, instead of failing until a circuit exists. Without it
+// a fresh install only knew the built-in bridges and could not pick an exit.
+func NewStealthManagerBootstrap(hops int, exitCC, anchor, rate, freeTag string, direct bool) *Manager {
+	return newStealthManager(hops, exitCC, anchor, rate, freeTag, direct)
 }
 
 // AddBridge registers a bridge line before a manager is built.
@@ -1049,7 +1089,7 @@ func (m *manager) Path() string {
 	}
 	var parts []string
 	for _, p := range c.Path {
-		parts = append(parts, p.Country+"("+p.Desc.IP.String()+")")
+		parts = append(parts, p.Country+"("+short(p.Account)+")")
 	}
 	return strings.Join(parts, " → ")
 }
@@ -1162,3 +1202,120 @@ func (m *manager) ServeSOCKS(addr string) (net.Listener, error) {
 
 // ServeDNS answers DNS on addr by forwarding through the circuit to upstream.
 func (m *manager) ServeDNS(addr, upstream string) { m.serveDNS(addr, upstream) }
+
+// SetExcludeExit sets the exit countries that must never be used (comma or
+// space separated ISO codes). Exclusion is the user's real concern: "not
+// through there", rather than "only through here".
+func (m *manager) SetExcludeExit(list string) {
+	ex := map[string]bool{}
+	for _, c := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == ';' || r == '\n' }) {
+		if c = strings.ToUpper(strings.TrimSpace(c)); c != "" {
+			ex[c] = true
+		}
+	}
+	m.opts.exclude = ex
+}
+
+// Countries lists the distinct countries of the relays this client knows,
+// sorted, for a settings screen.
+func (m *manager) Countries() []string {
+	seen := map[string]bool{}
+	for _, r := range m.reg.All() {
+		if r.Country != "" && r.Country != "XX" {
+			seen[strings.ToUpper(r.Country)] = true
+		}
+	}
+	var out []string
+	for c := range seen {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CachedCountries is Countries without a running manager: it reads the
+// registry cache in SAIL_HOME, so a settings screen can offer the list
+// before the first connection.
+func CachedCountries() []string {
+	reg := &relay.Registry{CacheFile: filepath.Join(dataDir(), "registry.json")}
+	if reg.LoadCache() == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, r := range reg.All() {
+		if r.Country != "" && r.Country != "XX" {
+			seen[strings.ToUpper(r.Country)] = true
+		}
+	}
+	var out []string
+	for c := range seen {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Per-connection metering of the SOCKS proxy for the desktop Activity tab:
+// the source port identifies the local process (the app resolves it with the
+// OS), the destination and bytes say what it did.
+type socksFlow struct {
+	SrcPort int    `json:"srcPort"`
+	Dst     string `json:"dst"`
+	Up      int64  `json:"up"`
+	Down    int64  `json:"down"`
+	Started int64  `json:"started"`
+	Last    int64  `json:"last"`
+	Open    bool   `json:"open"`
+}
+
+var (
+	socksFlowsMu sync.Mutex
+	socksFlows   []*socksFlow
+)
+
+func newSocksFlow(src net.Addr, dst string) *socksFlow {
+	f := &socksFlow{Dst: dst, Started: time.Now().Unix(), Last: time.Now().Unix(), Open: true}
+	if a, ok := src.(*net.TCPAddr); ok {
+		f.SrcPort = a.Port
+	}
+	socksFlowsMu.Lock()
+	socksFlows = append(socksFlows, f)
+	if len(socksFlows) > 2000 {
+		socksFlows = socksFlows[len(socksFlows)-1000:]
+	}
+	socksFlowsMu.Unlock()
+	return f
+}
+
+type flowCounter struct {
+	w io.Writer
+	f *socksFlow
+	n *int64
+}
+
+func (c flowCounter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	if n > 0 {
+		socksFlowsMu.Lock()
+		*c.n += int64(n)
+		c.f.Last = time.Now().Unix()
+		socksFlowsMu.Unlock()
+	}
+	return n, err
+}
+
+// Flows returns the SOCKS connections of the last ten minutes as JSON.
+func Flows() string {
+	cut := time.Now().Add(-10 * time.Minute).Unix()
+	socksFlowsMu.Lock()
+	var out []*socksFlow
+	for _, f := range socksFlows {
+		if f.Last >= cut {
+			c := *f
+			out = append(out, &c)
+		}
+	}
+	socksFlowsMu.Unlock()
+	b, _ := json.Marshal(out)
+	return string(b)
+}

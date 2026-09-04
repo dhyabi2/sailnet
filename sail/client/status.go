@@ -59,7 +59,7 @@ func (m *manager) RelaysJSON() []map[string]any {
 	defer m.mu.Unlock()
 	var out []map[string]any
 	for _, r := range m.reg.All() {
-		e := map[string]any{"account": r.Account, "cc": r.Country, "asn": r.ASN, "addr": r.Desc.Addr(), "exit": r.Flags&2 != 0, "home": r.Flags&4 != 0, "bridge": r.Unlisted, "score": m.scoreOf(r.Account)}
+		e := map[string]any{"account": r.Account, "cc": r.Country, "asn": r.ASN, "port": r.Desc.Port, "exit": r.Flags&2 != 0, "home": r.Flags&4 != 0, "bridge": r.Unlisted, "score": m.scoreOf(r.Account)}
 		if rtt, ok := m.rtt[r.Account]; ok {
 			e["rttMs"] = rtt.Milliseconds()
 		}
@@ -107,6 +107,7 @@ func (m *manager) ServeStatus(addr string) {
 	}
 	mux.HandleFunc("/status", h(func() any { return m.StatusJSON() }))
 	mux.HandleFunc("/relays", h(func() any { return m.RelaysJSON() }))
+	mux.HandleFunc("/flows", h(func() any { var v []any; json.Unmarshal([]byte(Flows()), &v); return v }))
 	mux.HandleFunc("/rebuild", func(w http.ResponseWriter, r *http.Request) {
 		if !guard(w, r) {
 			return

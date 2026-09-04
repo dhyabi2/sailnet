@@ -281,8 +281,21 @@ cd sail && go build -o bin/sailnode ./cmd/sailnode && go build -o bin/sail ./cmd
 go test ./...
 ```
 
-Android: `.github/workflows/android-release.yml` shows the gomobile and
-Gradle steps. Every push of a `v*` tag builds the node binaries, the Docker
+Android APK from source (needs Go, JDK 17, the Android SDK with NDK 26 and
+platform 34):
+
+```
+go install golang.org/x/mobile/cmd/gomobile@latest golang.org/x/mobile/cmd/gobind@latest
+export ANDROID_HOME=$HOME/Android/Sdk ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264
+cd sail && gomobile init && mkdir -p ../android/app/libs
+gomobile bind -ldflags="-s -w" -target android/arm64,android/arm,android/amd64 -androidapi 24 \
+  -javapkg net.sailnet -o ../android/app/libs/sail.aar ./mobile
+cd ../android && ./gradlew assembleDebug
+ls app/build/outputs/apk/debug/        # app-universal-debug.apk and per-ABI APKs
+```
+
+Desktop app: `cd sail && go install fyne.io/tools/cmd/fyne@latest && cd cmd/sailgui && fyne package -os darwin|windows|linux -icon Icon.png`.
+The same steps run in `.github/workflows/android-release.yml` and `desktop.yml`. Every push of a `v*` tag builds the node binaries, the Docker
 image and the APK and attaches them to a release.
 
 ## Layout

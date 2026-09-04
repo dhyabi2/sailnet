@@ -34,7 +34,7 @@ class RelaysActivity : AppCompatActivity() {
                         if (r.optBoolean("home")) add("home")
                     }.joinToString(" ")
                     val rtt = if (r.has("rttMs")) "${r.getLong("rttMs")} ms" else "—"
-                    sb.append("${r.optString("cc")}  ${r.optString("addr")}  $kind\n")
+                    sb.append("${r.optString("cc")}  port ${r.optInt("port")}  $kind\n")
                     sb.append("   rtt $rtt   score %.2f   AS%d\n".format(r.optDouble("score", 0.0), r.optInt("asn")))
                     sb.append("   ${r.optString("account").take(24)}…\n\n")
                 }

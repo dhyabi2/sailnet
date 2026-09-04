@@ -88,9 +88,10 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:layout_marginTop="8dp">
-                    <Button android:id="@+id/newExit" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="New exit" />
-                    <Button android:id="@+id/relays" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Relays" />
-                    <Button android:id="@+id/log" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Log" />
+                    <Button android:id="@+id/newExit" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="New exit" />
+                    <Button android:id="@+id/relays" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="Relays" />
+                    <Button android:id="@+id/log" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="Log" />
+                    <Button android:id="@+id/activity" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="Activity" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

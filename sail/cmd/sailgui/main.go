@@ -32,6 +32,7 @@ var iconPNG []byte
 type prefs struct {
 	Hops     int    `json:"hops"`
 	ExitCC   string `json:"exitCC"`
+	Exclude  string `json:"excludeCC"` // exit countries never to use, comma-separated
 	Socks    string `json:"socks"`
 	Censored bool   `json:"censored"`
 	Bridges  string `json:"bridges"`
@@ -153,13 +154,9 @@ func main() {
 			}
 		}
 		_, noChain := os.Stat(filepath.Join(home(), "chain-"+key.Address[len(key.Address)-8:]+".json"))
-		m := client.NewStealthManager(p.Hops, p.ExitCC, "0.0005", "0", "")
-		if noChain != nil {
-			m.AllowDirectBootstrap(true)
-		}
-		if p.Censored {
-			m.SetCensored(true)
-		}
+		m := client.NewStealthManagerBootstrap(p.Hops, "", "0.0005", "0", "", noChain != nil)
+		m.SetExcludeExit(p.Exclude)
+		m.SetCensored(true)
 		l, err := m.ServeSOCKS(p.Socks)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("SOCKS port %s: %v", p.Socks, err), w)
@@ -206,9 +203,25 @@ func main() {
 	// Settings
 	hops := widget.NewSelect([]string{"2", "3", "4"}, nil)
 	hops.SetSelected(fmt.Sprint(p.Hops))
-	exit := widget.NewEntry()
-	exit.SetPlaceHolder("exit country, e.g. DE (blank = any)")
-	exit.SetText(p.ExitCC)
+	// Exit exclusion: one checkbox per country the client knows relays in.
+	excluded := map[string]bool{}
+	for _, c := range strings.Split(p.Exclude, ",") {
+		if c = strings.TrimSpace(strings.ToUpper(c)); c != "" {
+			excluded[c] = true
+		}
+	}
+	exclBox := container.NewVBox(widget.NewLabel("Never exit through:"))
+	var exclChecks []*widget.Check
+	countries := client.CachedCountries()
+	if len(countries) == 0 {
+		exclBox.Add(widget.NewLabel("No relays known yet; connect once, then choose."))
+	}
+	for _, c := range countries {
+		ch := widget.NewCheck(c, nil)
+		ch.SetChecked(excluded[c])
+		exclChecks = append(exclChecks, ch)
+		exclBox.Add(ch)
+	}
 	socks := widget.NewEntry()
 	socks.SetText(p.Socks)
 	nick := widget.NewEntry()
@@ -220,18 +233,26 @@ func main() {
 	rpcKey := widget.NewPasswordEntry()
 	rpcKey.SetPlaceHolder("rpc.nano.to API key (optional, sent only to that host)")
 	rpcKey.SetText(p.RPCKey)
-	censored := widget.NewCheck("Censored network: bridges only, no probes", nil)
-	censored.SetChecked(p.Censored)
 	bridges := widget.NewMultiLineEntry()
 	bridges.SetPlaceHolder("bridge lines, one per line")
 	bridges.SetText(p.Bridges)
 	bridges.SetMinRowsVisible(3)
 	save := widget.NewButton("SAVE", func() {
 		fmt.Sscan(hops.Selected, &p.Hops)
-		p.ExitCC = strings.ToUpper(strings.TrimSpace(exit.Text))
+		var ex []string
+		for _, ch := range exclChecks {
+			if ch.Checked {
+				ex = append(ex, ch.Text)
+			}
+		}
+		p.Exclude = strings.Join(ex, ",")
+		mu.Lock()
+		if mgr != nil {
+			mgr.SetExcludeExit(p.Exclude)
+		}
+		mu.Unlock()
 		p.Socks = strings.TrimSpace(socks.Text)
 		p.Nick = strings.TrimSpace(nick.Text)
-		p.Censored = censored.Checked
 		p.Bridges = bridges.Text
 		p.RPCURL = strings.TrimSpace(rpcURL.Text)
 		p.RPCKey = strings.TrimSpace(rpcKey.Text)
@@ -243,7 +264,7 @@ func main() {
 	settings := container.NewVBox(
 		widget.NewLabelWithStyle("SETTINGS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewGridWithColumns(2, widget.NewLabel("Hops"), hops),
-		exit, socks, nick, censored, bridges,
+		exclBox, socks, nick, bridges,
 		widget.NewLabelWithStyle("NANO RPC", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		rpcURL, rpcKey, save,
 	)
@@ -263,8 +284,12 @@ func main() {
 		widget.NewLabelWithStyle("LOG", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewVScroll(logView),
 	)
+	activity := widget.NewLabel("")
+	activity.Wrapping = fyne.TextWrapWord
+	activity.TextStyle = fyne.TextStyle{Monospace: true}
 	tabs := container.NewAppTabs(
 		container.NewTabItem("STATUS", main),
+		container.NewTabItem("ACTIVITY", container.NewVScroll(activity)),
 		container.NewTabItem("SETTINGS", container.NewVScroll(settings)),
 	)
 	w.SetContent(tabs)
@@ -275,8 +300,10 @@ func main() {
 			m := mgr
 			mu.Unlock()
 			txt := logs.text()
+			act := activityText()
 			fyne.Do(func() {
 				logView.SetText(txt)
+				activity.SetText(act)
 				if m == nil {
 					balance.SetText("")
 					return
