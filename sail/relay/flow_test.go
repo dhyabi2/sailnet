@@ -101,7 +101,7 @@ func TestWindowedStreams(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("stream B blocked behind stalled stream A")
 	}
-	if n := len(stA.rx); n == 0 || n > wire.StreamWindow {
+	if n := stA.rx.len(); n == 0 || n > wire.MaxStreamWindow {
 		t.Fatalf("stalled stream buffered %d cells", n)
 	}
 	stA.Close()

@@ -52,8 +52,8 @@ func (w *connWriter) SetCover(tick time.Duration, burst int) {
 	if burst < 1 {
 		burst = 1
 	}
-	if burst > 64 {
-		burst = 64
+	if burst > 4096 {
+		burst = 4096
 	}
 	w.cover.Store(&coverParams{tick: tick, burst: burst})
 	select { // wake the flusher so it moves to the cadence loop

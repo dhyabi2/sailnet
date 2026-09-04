@@ -165,6 +165,10 @@ type circuit struct {
 	poolAcct string // downstream relay whose pool this circuit consumes (metered per cell)
 	streams  map[uint16]*exitStream
 	pending  map[uint16][][]byte // data that arrived before the stream connected (optimistic BEGIN)
+	lowSent  bool                // a low-quota notice was pushed since the last top-up
+	rateAt   time.Time           // rate window start (for the low-quota threshold)
+	rateN    int64               // bytes relayed in the window
+	rate     int64               // bytes per second over the last window
 	mu       sync.Mutex
 	closed   bool
 }
@@ -178,8 +182,8 @@ type exitStream struct {
 	flow   bool
 	mu     sync.Mutex
 	cond   *sync.Cond
-	credit int64       // cells we may still send downstream
-	up     chan []byte // client → target, bounded by the client's window
+	credit int64      // cells we may still send downstream
+	up     *cellQueue // client → target, bounded by the window we granted
 	done   chan struct{}
 	once   sync.Once
 }
@@ -189,7 +193,7 @@ func newExitStream(conn net.Conn, flow bool) *exitStream {
 	if flow {
 		st.cond = sync.NewCond(&st.mu)
 		st.credit = wire.StreamWindow
-		st.up = make(chan []byte, wire.StreamWindow)
+		st.up = newCellQueue()
 	}
 	return st
 }
@@ -198,6 +202,9 @@ func (st *exitStream) Close() {
 	st.once.Do(func() {
 		close(st.done)
 		st.conn.Close()
+		if st.up != nil {
+			st.up.close()
+		}
 		if st.cond != nil {
 			st.mu.Lock()
 			st.cond.Broadcast()
@@ -236,12 +243,14 @@ func (st *exitStream) takeCredit(max int) int {
 
 // pumpUp drains the client's cells to the target and returns window.
 func (s *Server) pumpUp(c *circuit, sid uint16, st *exitStream, already int) {
-	consumed := already
+	if already > 0 { // optimistic data written before the pump started
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], uint32(already))
+		s.reply(c, wire.CmdCredit, sid, b[:])
+	}
 	for {
-		var d []byte
-		select {
-		case d = <-st.up:
-		case <-st.done:
+		d, credit := st.up.pop()
+		if d == nil {
 			return
 		}
 		st.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
@@ -249,11 +258,9 @@ func (s *Server) pumpUp(c *circuit, sid uint16, st *exitStream, already int) {
 			st.Close()
 			return
 		}
-		consumed++
-		if consumed >= wire.CreditEvery {
+		if credit > 0 {
 			var b [4]byte
-			binary.BigEndian.PutUint32(b[:], uint32(consumed))
-			consumed = 0
+			binary.BigEndian.PutUint32(b[:], credit)
 			s.reply(c, wire.CmdCredit, sid, b[:])
 		}
 	}
@@ -380,7 +387,11 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		}
 		if cell.Cmd == wire.CmdCover && cell.CircID == 0 && len(cell.Payload) >= 3 { // cadence mode on this link
 			tick := time.Duration(int(cell.Payload[0])<<8|int(cell.Payload[1])) * time.Millisecond
-			in.SetCover(tick, int(cell.Payload[2]))
+			burst := int(cell.Payload[2]) // v2 clients: one byte
+			if len(cell.Payload) >= 4 {   // v3: uint16
+				burst = int(cell.Payload[2])<<8 | int(cell.Payload[3])
+			}
+			in.SetCover(tick, burst)
 			continue
 		}
 		if cell.Cmd == wire.CmdRPC && cell.CircID == 0 { // ledger for a client that has no circuit yet
@@ -609,7 +620,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 		}
 	}
 	s.Metrics.Circuits.Add(1)
-	if s.Quota.Remaining(tag) <= 0 {
+	if rem := s.Quota.Remaining(tag); rem <= 0 && !s.overdraftOK(tag, rem) {
 		return nil, fmt.Errorf("prepaid quota for %s… is exhausted", tag[:8])
 	}
 	priv, pub, err := wire.GenX25519()
@@ -637,10 +648,38 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 	}
 	// Meter every cell that passes through this hop.
 	s.Metrics.BytesRelayed.Add(wire.CellSize)
-	if rem := s.Quota.Consume(c.tag, wire.CellSize); rem < 0 {
+	rem := s.Quota.Consume(c.tag, wire.CellSize)
+	if rem < 0 && !s.overdraftOK(c.tag, rem) {
 		s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
 		c.destroy()
 		return
+	}
+	// Tell the client before it runs dry: it tops the circuit up in place
+	// instead of losing every stream at the boundary. "Before" is measured
+	// in time, not bytes: a top-up needs a Nano block and a confirmation,
+	// so the warning goes out 30 s of the current rate ahead, and never
+	// later than a quarter of the quota.
+	c.mu.Lock()
+	now := time.Now()
+	if c.rateAt.IsZero() {
+		c.rateAt = now
+	}
+	c.rateN += wire.CellSize
+	if d := now.Sub(c.rateAt); d >= 2*time.Second {
+		c.rate = c.rateN * int64(time.Second) / int64(d)
+		c.rateN, c.rateAt = 0, now
+	}
+	warn := !c.lowSent && (rem < s.Quota.Total(c.tag)/4 || rem < c.rate*30)
+	if warn {
+		c.lowSent = true
+	}
+	c.mu.Unlock()
+	{
+		if warn {
+			var b [8]byte
+			binary.BigEndian.PutUint64(b[:], uint64(max64(rem, 0)))
+			s.reply(c, wire.CmdQuota, wire.QuotaLowStream, b[:]) // unsolicited: stream id marks it as a warning
+		}
 	}
 	if !terminal {
 		if c.next == nil {
@@ -657,6 +696,8 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 		var b [8]byte
 		binary.BigEndian.PutUint64(b[:], uint64(max64(s.Quota.Remaining(c.tag), 0)))
 		s.reply(c, wire.CmdQuota, sid, b[:])
+	case wire.CmdTopUp:
+		go s.handleTopUp(c, sid, data)
 	case wire.CmdExtend:
 		c.mu.Lock()
 		extended := c.next != nil
@@ -699,9 +740,7 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 		c.mu.Unlock()
 		if st != nil {
 			if st.flow {
-				select {
-				case st.up <- append([]byte(nil), data...):
-				default: // the client overran its window: protocol violation, drop the stream
+				if !st.up.push(append([]byte(nil), data...)) { // the client overran its window: protocol violation
 					st.Close()
 				}
 			} else {
@@ -897,6 +936,128 @@ func (s *Server) acceptSuppliedPayment(tag string, raw []byte) error {
 		time.Sleep(2 * time.Second)
 	}
 	return err
+}
+
+// overdraftOK lets a listed relay's pool run a little negative while its
+// top-up is in flight: a pool refill needs a Nano block and proof-of-work,
+// and a circuit must not die waiting for it. Clients get no overdraft; they
+// top up in place before the boundary (CmdTopUp).
+func (s *Server) overdraftOK(tag string, rem int64) bool {
+	const overdraft = 32 << 20
+	if rem < -overdraft || s.Registry == nil {
+		return false
+	}
+	owner := s.Quota.Owner(tag)
+	if owner == "" {
+		return false
+	}
+	for _, r := range s.Registry.All() {
+		if hex.EncodeToString(r.Pub[:]) == owner {
+			return true
+		}
+	}
+	return false
+}
+
+// handleTopUp adds a client's signed send block to its circuit's quota.
+func (s *Server) handleTopUp(c *circuit, sid uint16, raw []byte) {
+	fail := func(msg string) { s.reply(c, wire.CmdError, sid, []byte("top-up: "+msg)) }
+	if s.Nano == nil {
+		fail("no ledger")
+		return
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		fail("bad block json")
+		return
+	}
+	b, err := nano.BlockFromJSON(m)
+	if err != nil || !b.VerifySigned() {
+		fail("bad block")
+		return
+	}
+	if b.Link != s.Key.Public {
+		fail("send is not addressed to this relay")
+		return
+	}
+	if owner := s.Quota.Owner(c.tag); owner != "" {
+		pub, _ := nano.AddressToPubkey(b.Account)
+		if hex.EncodeToString(pub[:]) != owner {
+			fail("top-up must come from the wallet that paid the anchor")
+			return
+		}
+	}
+	h, _ := b.Hash()
+	hash := strings.ToUpper(hex.EncodeToString(h[:]))
+	if s.Quota.Known(hash) {
+		fail("block already used")
+		return
+	}
+	// The block is well-formed, signed by the anchor's owner and addressed
+	// to us: the circuit keeps flowing on a provisional credit while the
+	// ledger confirms it. A block that never confirms takes the credit back
+	// and the circuit ends at the boundary as before.
+	// Sized to outlast the confirmation at the circuit's current rate.
+	c.mu.Lock()
+	provisional := c.rate * 60
+	c.mu.Unlock()
+	if provisional < 48<<20 {
+		provisional = 48 << 20
+	}
+	if provisional > 1<<30 {
+		provisional = 1 << 30
+	}
+	s.Quota.Add(c.tag, provisional)
+	confirmed := false
+	defer func() {
+		if !confirmed {
+			s.Quota.Add(c.tag, -provisional)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, err := s.Nano.Process(ctx, b, "send"); err != nil && !strings.Contains(strings.ToLower(err.Error()), "old block") {
+		// The client may have published it already through its own ledger
+		// path; what counts is whether the ledger has it.
+		if err2 := s.creditFromLedger(hash); err2 != nil {
+			fail("publish: " + stripErr(err))
+			return
+		}
+	}
+	for i := 0; i < 8; i++ {
+		if err = s.creditFromLedger(hash); err == nil || !strings.Contains(err.Error(), "not yet confirmed") {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if err != nil {
+		fail(stripErr(err))
+		return
+	}
+	bytes := s.Quota.Remaining(hash)
+	s.Quota.Consume(hash, bytes) // the block's value moves onto the circuit's tag; it cannot open a second circuit
+	rem, ok := s.Quota.Add(c.tag, bytes-provisional)
+	if !ok {
+		fail("unknown circuit tag")
+		return
+	}
+	confirmed = true
+	c.mu.Lock()
+	c.lowSent = false
+	c.mu.Unlock()
+	s.Metrics.Payments.Add(1)
+	log.Printf("top-up accepted: +%d MiB on a circuit", bytes>>20)
+	var out [8]byte
+	binary.BigEndian.PutUint64(out[:], uint64(max64(rem, 0)))
+	s.reply(c, wire.CmdQuota, sid, out[:])
+}
+
+func stripErr(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "http"); i >= 0 {
+		msg = msg[:i]
+	}
+	return strings.TrimSpace(msg)
 }
 
 // creditFromLedger verifies on the Nano ledger that tag is a confirmed send to

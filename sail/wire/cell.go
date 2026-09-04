@@ -368,13 +368,26 @@ const (
 	// its own stream instead of the whole circuit.
 	CmdBegin2 byte = 24 // like CmdBegin, with flow control
 	CmdCredit byte = 25 // payload: uint32 cells consumed, add to the sender's window
+	// CmdTopUp (client → entry, inside the onion): payload is a signed XNO send
+	// block to the entry; the entry publishes it and adds its value to the
+	// circuit's existing quota, answering with CmdQuota. A circuit therefore
+	// never dies at a payment boundary: the client tops it up in place.
+	CmdTopUp byte = 26
+	// QuotaLowStream is the stream id of an unsolicited CmdQuota from the
+	// entry: the quota is under a quarter, top up now.
+	QuotaLowStream uint16 = 2
 )
 
 const (
-	// StreamWindow is the per-stream window in cells (about 2 MB): enough
-	// to fill a 600 ms circuit at several MB/s.
-	StreamWindow = 2048
-	// CreditEvery is how many consumed cells trigger a CREDIT.
+	// StreamWindow is the initial per-stream window in cells (about 2 MB).
+	// The receiver owns the buffer, so it may grow the window by granting
+	// more credit than it consumed, up to MaxStreamWindow (16 MB): a 600 ms
+	// circuit then carries 25 MB/s on one stream. It grows only while the
+	// consumer keeps draining the buffer, so a slow reader stays small.
+	StreamWindow    = 2048
+	MaxStreamWindow = 16384
+	// CreditEvery is how many consumed cells trigger a CREDIT at the initial
+	// window; it scales with the window (a quarter of it).
 	CreditEvery = StreamWindow / 4
 )
 

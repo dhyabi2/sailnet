@@ -33,8 +33,16 @@ type Circuit struct {
 	Built   time.Time
 	Bytes   int64
 	Flow    bool         // the exit understands BEGIN2 / CREDIT: open windowed streams
+	OnQuota func(int64)  // called when the entry pushes a low-quota notice
 	recv    atomic.Int64 // unix nanos of the last cell received
 	pingErr atomic.Value
+}
+
+// BytesMoved is the number of bytes received on the circuit so far.
+func (c *Circuit) BytesMoved() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Bytes
 }
 
 // LastRecv is when the circuit last received a cell from the entry.
@@ -62,9 +70,8 @@ type Stream struct {
 	ok   chan error
 
 	flow     bool
-	rx       chan []byte // windowed: cells from the exit
-	rbuf     []byte      // windowed: unread remainder of the last cell
-	consumed int         // windowed: cells read since the last CREDIT
+	rx       *cellQueue // windowed: cells from the exit
+	rbuf     []byte     // windowed: unread remainder of the last cell
 	done     chan struct{}
 	doneOnce sync.Once
 	cmu      sync.Mutex
@@ -76,7 +83,7 @@ func newStream(c *Circuit, id uint16) *Stream {
 	st := &Stream{c: c, id: id, ok: make(chan error, 1), done: make(chan struct{})}
 	if c.Flow {
 		st.flow = true
-		st.rx = make(chan []byte, wire.StreamWindow)
+		st.rx = newCellQueue()
 		st.credit = wire.StreamWindow
 		st.ccond = sync.NewCond(&st.cmu)
 	} else {
@@ -92,6 +99,9 @@ func (s *Stream) finish() {
 		close(s.done)
 		if s.pw != nil {
 			s.pw.Close()
+		}
+		if s.rx != nil {
+			s.rx.close()
 		}
 		if s.ccond != nil {
 			s.cmu.Lock()
@@ -133,10 +143,10 @@ func (s *Stream) beginCmd() byte {
 
 // CoverTick and CoverBurst set the cadence of the client→entry link: one
 // tick sends between one and CoverBurst cells, padding when idle. Zero
-// disables. 25 ms with 16 cells caps a link at about 650 KB/s.
+// disables. The burst is a ceiling per tick, set high enough never to bind.
 var (
 	CoverTick  = 25 * time.Millisecond
-	CoverBurst = 64
+	CoverBurst = 4096 // per tick: the cadence is a floor of one cell, not a rate cap (64 capped links at 2.6 MB/s)
 )
 
 func init() { // SAIL_COVER_MS=0 disables cadence mode (measurement only)
@@ -170,7 +180,7 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 	// tick from here on, so the link's rhythm no longer follows the user.
 	if CoverTick > 0 {
 		ms := int(CoverTick / time.Millisecond)
-		c.w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst)}})
+		c.w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst >> 8), byte(CoverBurst)}})
 		c.w.SetCover(CoverTick, CoverBurst)
 	}
 
@@ -340,9 +350,7 @@ func (c *Circuit) readLoop() {
 		case wire.CmdData:
 			if st != nil {
 				if st.flow {
-					select {
-					case st.rx <- data:
-					default: // the exit overran the window: protocol violation, drop the stream
+					if !st.rx.push(data) { // the exit overran the window: protocol violation, drop the stream
 						st.finish()
 					}
 				} else {
@@ -367,9 +375,13 @@ func (c *Circuit) readLoop() {
 			}
 		case wire.CmdQuota:
 			if len(data) >= 8 {
+				q := int64(binary.BigEndian.Uint64(data))
 				c.mu.Lock()
-				c.Quota = int64(binary.BigEndian.Uint64(data))
+				c.Quota = q
 				c.mu.Unlock()
+				if sid == wire.QuotaLowStream && hop == 0 && c.OnQuota != nil {
+					go c.OnQuota(q) // unsolicited: the entry says the quota is running low
+				}
 			}
 			select {
 			case c.ctl <- ctlMsg{hop: hop, cmd: cmd, sid: sid, data: data}:
@@ -425,6 +437,30 @@ func (c *Circuit) QueryQuota(timeout time.Duration) (int64, error) {
 	return int64(binary.BigEndian.Uint64(m.data)), nil
 }
 
+// TopUp hands the entry a signed send block and returns the circuit's new
+// remaining quota. The stream id 1 keeps its reply apart from keepalive
+// quota queries on id 0.
+func (c *Circuit) TopUp(payment []byte, timeout time.Duration) (int64, error) {
+	if err := c.sendTo(0, wire.CmdTopUp, 1, payment); err != nil {
+		return 0, err
+	}
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	for {
+		select {
+		case m := <-c.ctl:
+			if m.cmd == wire.CmdError && m.sid == 1 {
+				return 0, fmt.Errorf("%s", m.data)
+			}
+			if m.cmd == wire.CmdQuota && m.sid == 1 && len(m.data) >= 8 {
+				return int64(binary.BigEndian.Uint64(m.data)), nil
+			}
+		case <-t.C:
+			return 0, errors.New("top-up: no answer")
+		}
+	}
+}
+
 // Open begins a stream to host:port through the exit.
 func (c *Circuit) Open(target string, timeout time.Duration) (*Stream, error) {
 	c.mu.Lock()
@@ -476,31 +512,29 @@ func (s *Stream) Read(p []byte) (int, error) {
 		return s.pr.Read(p)
 	}
 	if len(s.rbuf) == 0 {
-		var d []byte
-		select { // buffered cells first, even after the exit ended the stream
-		case d = <-s.rx:
-		default:
-			select {
-			case d = <-s.rx:
-			case <-s.done:
-				select {
-				case d = <-s.rx:
-				default:
-					return 0, io.EOF
-				}
-			}
+		d, credit := s.rx.pop() // blocks; nil once the stream ended and the queue is empty
+		if d == nil {
+			return 0, io.EOF
 		}
 		s.rbuf = d
-		s.consumed++
-		if s.consumed >= wire.CreditEvery {
+		if credit > 0 {
 			var b [4]byte
-			binary.BigEndian.PutUint32(b[:], uint32(s.consumed))
-			s.consumed = 0
+			binary.BigEndian.PutUint32(b[:], credit)
 			s.c.send(wire.CmdCredit, s.id, b[:])
 		}
 	}
 	n := copy(p, s.rbuf)
 	s.rbuf = s.rbuf[n:]
+	// Fill the rest of p from cells already queued: fewer, larger reads.
+	for len(s.rbuf) == 0 && n < len(p) {
+		d := s.rx.tryPop()
+		if d == nil {
+			break
+		}
+		k := copy(p[n:], d)
+		s.rbuf = d[k:]
+		n += k
+	}
 	return n, nil
 }
 

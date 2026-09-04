@@ -60,9 +60,8 @@ nodes. The apps' settings let you use rpc.nano.to directly with your own key,
 or any node you run; the CLI takes `--rpc` and `--rpc-key` (or `NANO_RPC_URLS` and
 `NANO_RPC_KEY`).
 
-A relay works out of the box through Sailnet's endpoint. For the most
-private setup run your own Nano node (`deploy/nano-node.sh`) and pass
-`--rpc http://127.0.0.1:7076`.
+A relay works out of the box through Sailnet's endpoint; no Nano node to
+install. If you run one anyway, pass `--rpc http://127.0.0.1:7076`.
 
 Home PC behind NAT, no port forwarding: `sailnode earn --home --payout nano_…`.
 
@@ -316,5 +315,5 @@ image and the APK and attaches them to a release.
   layers, `relay/` relay server and circuit client, `client/` desktop client,
   `shape/` traffic shaping and its measurement rig, `cmd/` binaries
 - `android/`, `extension/` the apps
-- `docker/`, `deploy/` images and server bootstrap
+- `docker/` image and compose files
 

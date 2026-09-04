@@ -87,7 +87,7 @@ func runRelay(args []string) {
 	rate := fs.String("rate", "0.00002", "price, XNO per MiB")
 	exit := fs.Bool("exit", true, "offer exit service")
 	register := fs.Bool("register", false, "publish REGISTER + DESCRIPTOR on the ledger")
-	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node (payments and peers are then disclosed to a third-party RPC provider)")
+	allowPublicRPC := fs.Bool("allow-public-rpc", false, "no effect (kept for old command lines): relays use Sailnet's endpoint unless --rpc names your own node")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")

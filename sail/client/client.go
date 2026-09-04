@@ -116,6 +116,7 @@ type manager struct {
 	rtt     map[string]time.Duration // measured TCP connect time per public relay
 	cur     *relay.Circuit
 	drain   bool                          // the current circuit is nearly out of prepaid quota: new streams get a fresh one
+	topMu   sync.Mutex                    // one top-up at a time
 	live    atomic.Pointer[relay.Circuit] // same as cur, readable without m.mu
 	tag     [32]byte
 	entry   *relay.RelayInfo
@@ -584,6 +585,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		}
 		log.Printf("circuit built in %s: %s%s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "), mode)
 		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
+		c.OnQuota = func(q int64) { m.quotaLow(c, q) }
 		m.cur = c
 		m.rotate = 0 // fresh lifetime for the new circuit
 		m.live.Store(c)
@@ -620,19 +622,109 @@ func (m *manager) keepalive(c *relay.Circuit) {
 			c.Close()
 			return
 		}
-		if q, err := c.QueryQuota(8 * time.Second); err == nil {
+		if !m.topMu.TryLock() {
+			continue // a top-up is talking to the entry right now
+		}
+		q, err := c.QueryQuota(8 * time.Second)
+		m.topMu.Unlock()
+		if err == nil {
 			need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4
 			if q < need {
-				log.Printf("quota low (%d bytes left): new streams get a fresh circuit", q)
-				m.mu.Lock()
-				m.tag = [32]byte{}
-				if m.cur == c {
-					m.drain = true
-				}
-				m.mu.Unlock()
+				m.quotaLow(c, q)
 			}
 		}
 	}
+}
+
+// quotaLow runs when the circuit's prepaid quota is nearly spent, from the
+// keepalive or from the entry's own low-quota push. The circuit is topped
+// up in place so no stream is cut; only if that fails do new streams move
+// to a fresh circuit while this one drains.
+func (m *manager) quotaLow(c *relay.Circuit, q int64) {
+	if !m.topMu.TryLock() {
+		return
+	}
+	defer m.topMu.Unlock()
+	if c.Closed() {
+		return
+	}
+	rate := c.BytesMoved() / int64(math.Max(time.Since(c.Built).Seconds(), 1))
+	if need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4; q >= need && q >= 8<<20 && q >= rate*30 {
+		return // plenty left: a stray notice
+	}
+	if rem, err := m.topUp(c); err == nil {
+		log.Printf("quota topped up in place: %d MiB left on the circuit", rem>>20)
+		return
+	} else {
+		log.Printf("quota low (%d bytes left) and top-up failed (%v): new streams get a fresh circuit", q, err)
+	}
+	// The tag is kept: a top-up that lands late still credits it, and the
+	// next build tries it first, paying a new anchor only if the entry
+	// says it is really spent.
+	m.mu.Lock()
+	if m.cur == c {
+		m.drain = true
+	}
+	m.mu.Unlock()
+}
+
+// topUp pays the entry again for the running circuit. The amount covers
+// about five minutes at the circuit's recent rate, never less than one
+// anchor, never more than the wallet can spare.
+func (m *manager) topUp(c *relay.Circuit) (int64, error) {
+	if m.opts.freeTag != "" {
+		return 0, errors("free tag: nothing to top up")
+	}
+	entry := c.Path[0]
+	rateRaw := token.RateToRaw(entry.MinRate)
+	if rateRaw.Sign() <= 0 {
+		return 0, errors("entry is free: nothing to top up")
+	}
+	elapsed := time.Since(c.Built).Seconds()
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	used := c.BytesMoved()
+	want := int64(float64(used) / elapsed * 300) // five minutes of runway at the recent rate
+	if limit := 10 * relay.BytesFor(m.opts.anchor, rateRaw); want > limit {
+		want = limit // never more than ten anchors in one go
+	}
+	amount := new(big.Int).Mul(big.NewInt((want+(1<<20)-1)/(1<<20)), rateRaw)
+	if amount.Cmp(m.opts.anchor) < 0 {
+		amount.Set(m.opts.anchor)
+	}
+	_, bal, _, _, ok := chainState(m.key).Get()
+	if !ok || bal.Sign() <= 0 {
+		return 0, errors("wallet state unknown")
+	}
+	half := new(big.Int).Rsh(bal, 1)
+	if amount.Cmp(half) > 0 {
+		amount.Set(half)
+	}
+	if amount.Cmp(m.opts.anchor) < 0 && bal.Cmp(m.opts.anchor) >= 0 {
+		amount.Set(m.opts.anchor)
+	}
+	if amount.Sign() <= 0 || bal.Cmp(amount) < 0 {
+		return 0, errors("wallet has no XNO for a top-up")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	acct := &nano.Account{Key: m.key, Client: m.nc, State: chainState(m.key)}
+	h, blk, err := acct.SendBlock(ctx, entry.Account, amount)
+	var pe *nano.PublishError
+	if err != nil && stdErrors.As(err, &pe) && blk != nil {
+		err = nil // signed offline; the entry publishes it
+	}
+	if err != nil {
+		return 0, err
+	}
+	payment, _ := json.Marshal(blk.JSON())
+	rem, err := c.TopUp(payment, 2*time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	log.Printf("paid %s XNO → %s (top-up %s)", token.FormatXNO(amount), entry.Account, h[:8])
+	return rem, nil
 }
 
 func runClient(args []string) {
@@ -723,12 +815,14 @@ func runClient(args []string) {
 		go m.serveCapture(strings.TrimSpace(ca[1]), false)
 		go m.serveCapture(strings.TrimSpace(ca[2]), true)
 		if *subvert {
+			revertDNS() // a previous run that died without restoring leaves a backup behind: repair first
 			if err := subvertDNS(); err != nil {
 				log.Fatal("capture: ", err)
 			}
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 			go func() { <-sig; revertDNS(); os.Exit(0) }()
+			defer revertDNS()
 		}
 	}
 	log.Printf("SOCKS5 proxy on %s (wallet %s)", *socks, m.key.Address)
@@ -1304,28 +1398,24 @@ func RunUDPTest(args []string) {
 	}
 }
 
-// RequireLocalNode is the live-network prerequisite for running a relay or
-// home node: a Nano node on this machine or private network, answering RPC
-// and synced. Without it, every payer account, tag and peer a relay looks up
-// is disclosed to a third-party RPC provider, service is granted on that
-// provider's word, and the provider's rate limits decide uptime.
-// allowPublic is for tests only.
+// RequireLocalNode checks that some Nano RPC answers before a relay or home
+// node starts serving. Sailnet's own endpoint is the default and needs no
+// setup; a relay operator who wants ledger lookups to stay private can run a
+// node and pass --rpc http://127.0.0.1:7076. allowPublic is kept for old
+// command lines and changes nothing.
 func RequireLocalNode(nc *nano.Client, allowPublic bool) {
+	_ = allowPublic
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st, err := nc.Probe(ctx)
 	switch {
-	case err != nil && allowPublic:
-		log.Printf("WARNING: no Nano RPC answered (%v); continuing because --allow-public-rpc is set", err)
-		return
 	case err != nil:
-		log.Fatalf("Nano RPC: %v. A relay needs its own Nano node: run deploy/nano-node.sh, then set NANO_RPC_URLS=http://127.0.0.1:7076 (or pass --allow-public-rpc for tests only)", err)
+		log.Printf("WARNING: no Nano RPC answered yet (%v); payments will be verified once one does", err)
+		return
 	case !st.Local && (strings.HasPrefix(st.URL, nano.PrimaryRPC) || strings.HasPrefix(st.URL, nano.FallbackRPC)):
-		log.Printf("Nano RPC: Sailnet's endpoint %s (run your own node and pass --rpc http://127.0.0.1:7076 to keep lookups private)", st.URL)
-	case !st.Local && !allowPublic:
-		log.Fatalf("Nano RPC %s is a public endpoint. A live relay must use its own node (it would otherwise disclose every payer, tag and peer it looks up to that provider, and trust it for confirmations). Run deploy/nano-node.sh and set NANO_RPC_URLS=http://127.0.0.1:7076, or pass --allow-public-rpc for tests only", st.URL)
+		log.Printf("Nano RPC: Sailnet's endpoint %s (optional: run your own node and pass --rpc http://127.0.0.1:7076)", st.URL)
 	case !st.Local:
-		log.Printf("WARNING: using public Nano RPC %s (--allow-public-rpc): payments and peers are visible to that provider; do not run this way live", st.URL)
+		log.Printf("Nano RPC: %s", st.URL)
 	case !st.Synced():
 		log.Fatalf("local Nano node %s (%s) is not synced: %d of %d blocks cemented. Wait for it to catch up before serving", st.URL, st.Version, st.Cemented, st.Count)
 	default:

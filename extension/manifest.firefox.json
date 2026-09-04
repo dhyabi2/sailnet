@@ -2,16 +2,18 @@
   "manifest_version": 3,
   "name": "Sailnet",
   "version": "0.2",
-  "description": "Route this browser through your local Sailnet client: SOCKS5 with remote DNS, WebRTC leak protection, live circuit status.",
+  "description": "Route this browser through your local Sailnet client: SOCKS5 with remote DNS, WebRTC leak protection, live circuit status. Fails safe: the proxy is set only while the client is running.",
   "permissions": [
     "proxy",
     "privacy",
     "storage",
-    "alarms"
+    "alarms",
+    "webRequest"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "<all_urls>"
   ],
   "background": {
     "scripts": [

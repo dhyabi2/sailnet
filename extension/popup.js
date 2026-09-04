@@ -18,7 +18,7 @@ function human(b) {
 }
 
 async function render() {
-  const { settings, status } = await send({ type: "status" });
+  const { settings, status, applied } = await send({ type: "status" });
   const on = settings.enabled;
   $("toggle").textContent = on ? "Turn off" : "Turn on";
   if (!on) {
@@ -33,9 +33,12 @@ async function render() {
   } else if (status) {
     setState("Building circuit", "wait", "warn");
     $("hint").textContent = "Paying the entry relay and extending the circuit. Pages will load in a few seconds.";
-  } else {
+  } else if (applied === "blocked") {
     setState("Client not running", "blocked", "warn");
-    $("hint").textContent = "The proxy is fixed to the client's port, so nothing leaks: pages will not load until you start `sailnode client`.";
+    $("hint").textContent = "Kill switch is on: pages will not load until you start the Sailnet app. Turn the kill switch off in Settings to browse directly meanwhile.";
+  } else {
+    setState("Client not running", "direct", "warn");
+    $("hint").textContent = "Browsing directly for now. Start the Sailnet app and this browser goes through the circuit again by itself.";
   }
   if (status) {
     $("path").textContent = status.path || "—";
@@ -51,6 +54,7 @@ async function render() {
   $("socksHost").value = settings.socksHost;
   $("socksPort").value = settings.socksPort;
   $("statusUrl").value = settings.statusUrl;
+  $("killSwitch").checked = !!settings.killSwitch;
 }
 
 $("toggle").onclick = async () => {
@@ -61,7 +65,7 @@ $("toggle").onclick = async () => {
 $("rebuild").onclick = async () => { await send({ type: "rebuild" }); setTimeout(render, 1500); };
 $("copy").onclick = () => navigator.clipboard.writeText($("address").textContent);
 $("save").onclick = async () => {
-  await send({ type: "save", settings: { socksHost: $("socksHost").value.trim(), socksPort: Number($("socksPort").value), statusUrl: $("statusUrl").value.trim().replace(/\/$/, "") } });
+  await send({ type: "save", settings: { socksHost: $("socksHost").value.trim(), socksPort: Number($("socksPort").value), statusUrl: $("statusUrl").value.trim().replace(/\/$/, ""), killSwitch: $("killSwitch").checked } });
   render();
 };
 

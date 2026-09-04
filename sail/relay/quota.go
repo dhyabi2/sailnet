@@ -92,6 +92,28 @@ func (q *Quota) Credit(tag string, bytes int64, owner string) bool {
 	return true
 }
 
+// Add credits more bytes to an existing tag (a top-up) and returns the
+// remaining quota. Unknown tags are not created here: a top-up must land on
+// a circuit that was paid for in the first place.
+func (q *Quota) Add(tag string, bytes int64) (int64, bool) {
+	k := key(tag)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, seen := q.credit[k]; !seen {
+		return 0, false
+	}
+	q.credit[k] += bytes
+	q.logLine("credit", k, bytes, q.owner[k])
+	return q.credit[k] - q.consumed[k], true
+}
+
+// Total is the bytes ever credited to a tag.
+func (q *Quota) Total(tag string) int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.credit[key(tag)]
+}
+
 // Known reports whether a tag has ever been credited.
 func (q *Quota) Known(tag string) bool {
 	q.mu.Lock()
