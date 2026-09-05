@@ -74,7 +74,9 @@ jobs:
       - name: Build APK
         working-directory: android
         env:
-          SAIL_KEYSTORE: ${{ steps.keystore.outputs.present == 'true' && 'release.jks' || '' }}
+          # Absolute: Gradle resolves a signing-config path relative to the
+          # app module, not the directory this step runs in.
+          SAIL_KEYSTORE: ${{ steps.keystore.outputs.present == 'true' && format('{0}/android/release.jks', github.workspace) || '' }}
           SAIL_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           SAIL_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           SAIL_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
