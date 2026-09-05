@@ -6,6 +6,12 @@ docker/.env
 **/wallet.json
 **/*-wallet.json
 release.jks
+# the Android signing key: the app's identity. Losing it means no user can
+# ever upgrade in place again; publishing it means anyone can forge updates.
+deploy/android/
+*.p12
+*.jks
+keystore-password.txt
 # build output
 sail/bin/
 android/build/

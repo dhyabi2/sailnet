@@ -88,10 +88,15 @@ class MainActivity : AppCompatActivity() {
         }
         ui.post(refresh)
         title = "Sailnet · " + Prefs.nick(this)
-        if (!SailVpnService.running) prepareAndStart() // opening the app means "protect me"
+        checkFunds(andConnect = true)
     }
 
 
+
+    override fun onResume() {
+        super.onResume()
+        if (!funded && !checkingFunds && !SailVpnService.running) checkFunds(andConnect = false)
+    }
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -104,10 +109,11 @@ class MainActivity : AppCompatActivity() {
                 val stage = s.optString("stage")
                 val p = s.optString("path")
                 val bal = s.optString("balance")
-                val needsFunds = running && p.isEmpty() && s.optBoolean("needsFunds")
-                if (needsFunds && !askedFunds) { askedFunds = true; askFunds() }
+                val needsFunds = (running && p.isEmpty() && s.optBoolean("needsFunds")) ||
+                    (!running && !starting && !funded && !checkingFunds)
                 status.text = when {
                     running && p.isNotEmpty() -> "Connected"
+                    checkingFunds && !funded -> "Checking your wallet"
                     needsFunds -> "Waiting for XNO"
                     starting || running -> if (stage.isNotEmpty() && stage != "Connected") "Connecting: $stage" else "Connecting…"
                     SailVpnService.lastError.isNotEmpty() -> "Failed"
@@ -115,7 +121,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 statusDetail.text = when {
                     running && p.isNotEmpty() -> "Exit is the last hop. All apps go through it."
-                    needsFunds -> "Your wallet has no XNO yet. Get some from a faucet and send it to the address below; Sailnet connects by itself when it arrives."
+                    checkingFunds && !funded -> "Reading your balance and claiming your free trial. Connect unlocks as soon as the wallet can pay."
+                    needsFunds -> if (fundNote.isNotEmpty()) fundNote + " Send XNO to the address below; Sailnet connects by itself when it arrives."
+                        else "Your wallet has no XNO yet. Send XNO to the address below; Sailnet connects by itself when it arrives."
                     starting || running -> if (stage.isNotEmpty()) "Step by step: relay list, relay timing, payment, then the circuit hop by hop. Nothing leaves the device until the circuit is up." else lastLogLine(s.optString("log"))
                     SailVpnService.lastError.isNotEmpty() -> "Could not connect: ${SailVpnService.lastError}. Tap Connect to try again."
                     else -> "Tap Connect to route this device through Sailnet."
@@ -129,12 +137,57 @@ class MainActivity : AppCompatActivity() {
                 toggle.text = when {
                     running -> "Disconnect"
                     starting -> "Cancel"
+                    checkingFunds && !funded -> "Checking wallet…"
+                    !funded -> "Waiting for XNO"
                     else -> "Connect"
                 }
+                toggle.isEnabled = running || starting || funded
             } catch (_: Exception) {}
             ui.postDelayed(this, 1500)
         }
     }
+
+
+    /**
+     * The wallet comes before the button.
+     *
+     * A circuit is prepaid, so an empty wallet cannot connect and offering
+     * Connect anyway only produces a failure the user cannot act on. On
+     * opening, and again whenever the app comes back to the front, the
+     * wallet is read and the free trial claimed if it is needed — none of
+     * which the user has to ask for. Connect stays out of reach until the
+     * answer is yes.
+     */
+    private fun checkFunds(andConnect: Boolean) {
+        if (checkingFunds) return
+        checkingFunds = true
+        funded = false
+        toggle.isEnabled = false
+        Thread {
+            val f = try {
+                JSONObject(Mobile.funds(filesDir.absolutePath))
+            } catch (e: Exception) {
+                JSONObject().put("needsFunds", true).put("required", "0.0005")
+            }
+            ui.post {
+                checkingFunds = false
+                funded = !f.optBoolean("needsFunds", true)
+                fundNote = f.optString("faucet")
+                toggle.isEnabled = funded || SailVpnService.running || SailVpnService.starting
+                if (funded) {
+                    if (andConnect && !SailVpnService.running) prepareAndStart() // opening the app means "protect me"
+                } else {
+                    // Keep looking: money may arrive from the faucet, or by
+                    // hand from the address on screen.
+                    ui.postDelayed({ checkFunds(andConnect) }, 15000)
+                }
+            }
+        }.start()
+    }
+
+    private var checkingFunds = false
+    private var funded = false
+    private var fundNote = ""
 
     private var askedFunds = false
 

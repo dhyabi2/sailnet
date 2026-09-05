@@ -218,3 +218,61 @@ func TestWalletWriteIsAtomic(t *testing.T) {
 		t.Fatalf("wallet is mode %v, want 0600: a seed must not be world-readable", fi.Mode().Perm())
 	}
 }
+
+// A restore keeps the wallet it replaced. If the live wallet then goes
+// missing — an interrupted restore, a file deleted by hand — the backup is
+// picked up automatically rather than a new empty wallet being minted
+// beside somebody's money.
+func TestAMissingWalletIsRecoveredFromItsOwnBackup(t *testing.T) {
+	walletHome(t)
+	_, _, _ = CreateWalletIfMissing()
+	originalSeed, _, _ := ExportWallet()
+
+	// Restore a different wallet, which sets the first one aside...
+	walletHome(t)
+	other, _, _ := CreateWalletIfMissing()
+	otherSeed, _, _ := ExportWallet()
+	if _, err := ImportWallet(originalSeed); err != nil {
+		t.Fatal(err)
+	}
+	// ...then lose the live wallet.
+	if err := os.Remove(WalletPath()); err != nil {
+		t.Fatal(err)
+	}
+	addr, created, err := CreateWalletIfMissing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("a new wallet was minted while a backup of the old one sat beside it")
+	}
+	if addr != other {
+		t.Fatalf("recovered %s, want the wallet that was set aside, %s", addr, other)
+	}
+	if seed, _, _ := ExportWallet(); !strings.EqualFold(seed, otherSeed) {
+		t.Fatal("the recovered wallet does not hold the seed it was backed up with")
+	}
+}
+
+// Recovery only ever puts back this directory's own wallet. Nothing is
+// pulled in from anywhere else: two relays on one machine each keep their
+// own account, which is what stops two nodes sharing one chain.
+func TestNothingIsAdoptedFromAnotherDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SAIL_WALLET", "")
+
+	t.Setenv("SAIL_HOME", filepath.Join(home, ".sail"))
+	elsewhere, created, err := CreateWalletIfMissing()
+	if err != nil || !created {
+		t.Fatalf("setting up the first wallet: %v", err)
+	}
+	t.Setenv("SAIL_HOME", filepath.Join(home, "second-node"))
+	addr, created, err := CreateWalletIfMissing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || addr == elsewhere {
+		t.Fatalf("a second data directory took the first one's wallet (%s)", addr)
+	}
+}

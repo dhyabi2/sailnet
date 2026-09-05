@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -404,6 +405,38 @@ func main() {
 		container.NewTabItem("SETTINGS", container.NewVScroll(settings)),
 	)
 	w.SetContent(tabs)
+
+	// The wallet comes before the button. A circuit is prepaid, so an empty
+	// wallet cannot connect; offering CONNECT anyway only produces a failure
+	// nobody can act on. Read the balance and claim the free trial first —
+	// automatically, before the user is asked to do anything — and keep
+	// CONNECT out of reach until the wallet can pay.
+	toggle.Disable()
+	toggle.SetText("CHECKING WALLET…")
+	go func() {
+		for {
+			f := client.EnsureFunded(context.Background())
+			fyne.Do(func() {
+				if !f.NeedsFunds {
+					toggle.Enable()
+					toggle.SetText("CONNECT")
+					return
+				}
+				toggle.Disable()
+				toggle.SetText("WAITING FOR XNO")
+				note := f.Faucet
+				if note == "" {
+					note = "Send " + f.Required + " XNO to the address above; Sailnet connects by itself when it arrives."
+				}
+				state.SetText("NEEDS XNO")
+				log.Print(note)
+			})
+			if !f.NeedsFunds {
+				return
+			}
+			time.Sleep(20 * time.Second) // money may still arrive, by faucet or by hand
+		}
+	}()
 
 	go func() {
 		lastLog, lastSteps := "", ""

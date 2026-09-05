@@ -5,6 +5,7 @@
 package mobile
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -560,5 +561,24 @@ func ImportWallet(home, text string) (out string) {
 
 func errJSON(err error) string {
 	b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+	return string(b)
+}
+
+// Funds checks the wallet and claims the free trial if it cannot yet pay,
+// without starting a tunnel. The app calls this when it opens: the Connect
+// button stays out of reach until the answer says the wallet can pay, so
+// nobody is invited to connect with an empty wallet.
+//
+// Returns JSON: {address, balance, needsFunds, required, faucet, error}.
+func Funds(home string) (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = `{"needsFunds":true,"required":"` + client.AnchorXNO + `","error":"could not check the wallet"}`
+		}
+	}()
+	os.Setenv("SAIL_HOME", home)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	b, _ := json.Marshal(client.EnsureFunded(ctx))
 	return string(b)
 }

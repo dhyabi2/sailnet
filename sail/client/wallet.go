@@ -4,9 +4,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -200,6 +202,14 @@ func CreateWalletIfMissing() (address string, created bool, err error) {
 		// money: leave it exactly where it is and say so.
 		return "", false, fmt.Errorf("a wallet already exists at %s but cannot be read; restore from your backup rather than losing it", path)
 	}
+	// Before minting anything, look for a wallet that already exists. A new
+	// seed is only ever the last resort: a wallet the user still has is
+	// money, and quietly starting a fresh one beside it is how a balance
+	// gets stranded.
+	if addr, from, ok := adoptExistingWallet(path); ok {
+		log.Printf("using the wallet already at %s", from)
+		return addr, false, nil
+	}
 	seed, err := nano.NewSeed()
 	if err != nil {
 		return "", false, err
@@ -212,4 +222,64 @@ func CreateWalletIfMissing() (address string, created bool, err error) {
 		return "", false, err
 	}
 	return k.Address, true, nil
+}
+
+// adoptExistingWallet recovers a wallet this installation already had,
+// rather than minting a new one beside somebody's money.
+//
+// The only case it acts on is the unambiguous one: a restore always keeps
+// the wallet it replaced as wallet.json.replaced-<time>, so if the live
+// wallet is gone — a restore interrupted halfway, a file deleted by hand —
+// the backup in the same directory is put back.
+//
+// It deliberately does not go looking in other directories. Two relays on
+// one machine, each with its own data directory, are a normal setup, and
+// adopting one's wallet into the other's directory would put two nodes on a
+// single account: forked chains, one registration, and earnings that land
+// in a place their owner is not looking. A wallet somewhere else is
+// restored by its seed, on purpose, not by guesswork.
+func adoptExistingWallet(path string) (address, from string, ok bool) {
+	backups, _ := filepath.Glob(path + ".replaced-*")
+	sort.Sort(sort.Reverse(sort.StringSlice(backups))) // newest first
+	for _, b := range backups {
+		if addr, okB := readWalletAddress(b); okB && writeCopy(b, path) {
+			return addr, b, true
+		}
+	}
+	return "", "", false
+}
+
+// readWalletAddress reports the address of a wallet file, if it is readable.
+func readWalletAddress(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var wf walletBlob
+	if json.Unmarshal(data, &wf) != nil || wf.Seed == "" {
+		return "", false
+	}
+	k, err := keyFromSeed(wf.Seed, wf.Index)
+	if err != nil {
+		return "", false
+	}
+	return k.Address, true
+}
+
+// writeCopy copies a wallet into place, atomically and readable only by its
+// owner. The original is left where it is.
+func writeCopy(src, dst string) bool {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false
+	}
+	var wf walletBlob
+	if json.Unmarshal(data, &wf) != nil {
+		return false
+	}
+	k, err := keyFromSeed(wf.Seed, wf.Index)
+	if err != nil {
+		return false
+	}
+	return writeWallet(dst, walletBlob{Seed: strings.ToUpper(seedRE.FindString(wf.Seed)), Index: wf.Index, Address: k.Address}) == nil
 }

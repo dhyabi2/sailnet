@@ -68,6 +68,7 @@ jobs:
         working-directory: android
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.jks
+          test -s release.jks
           echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
@@ -77,13 +78,21 @@ jobs:
           SAIL_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           SAIL_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           SAIL_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          SAIL_KEYSTORE_TYPE: ${{ secrets.ANDROID_KEYSTORE_TYPE }}
         run: |
           chmod +x gradlew
-          if [ -n "$SAIL_KEYSTORE" ]; then ./gradlew assembleRelease --no-daemon; else ./gradlew assembleDebug --no-daemon; fi
+          if [ -z "$SAIL_KEYSTORE" ]; then
+            echo "::error::No release keystore. Every CI run generates a different debug key, so"
+            echo "::error::the APK could not be installed over an existing one and users would have"
+            echo "::error::to uninstall — losing the wallet in their app data. Set the"
+            echo "::error::ANDROID_KEYSTORE_BASE64 / _PASSWORD / ANDROID_KEY_ALIAS / _PASSWORD secrets."
+            exit 1
+          fi
+          ./gradlew assembleRelease --no-daemon
           mkdir -p out
           cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
-          cd out && mv *.apk Sailnet-Android.apk   # one universal APK with a stable name: releases/latest/download/Sailnet-Android.apk
-          sha256sum Sailnet-Android.apk > Sailnet-Android.apk.sha256
+          cd out && for f in *.apk; do mv "$f" "sailnet-${GITHUB_REF_NAME#v}-${f#app-}"; done
+          for f in *.apk; do sha256sum "$f" > "$f.sha256"; done
           ls -la && cat *.sha256
 
       - name: Upload artifact

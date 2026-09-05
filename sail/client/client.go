@@ -1155,6 +1155,16 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 			m.reg.Refresh(context.Background())
 		}
 	}()
+	// Check the wallet and claim the free trial before anyone is offered a
+	// Connect button, so the first thing a new user meets is either a
+	// working app or a clear "waiting for XNO", never a button that fails.
+	go func() {
+		f := EnsureFunded(context.Background())
+		if f.NeedsFunds {
+			m.setStage("Waiting for XNO")
+			m.EnsureFundsWatch() // connects by itself when the money lands
+		}
+	}()
 	go func() { // seniority/performance weights: once a day, from the ledger, same answer everywhere
 		time.Sleep(90 * time.Second)
 		for {
@@ -1927,6 +1937,9 @@ func (m *manager) claimFaucetOnce() {
 	}
 	m.faucetAt = time.Now()
 	m.mu.Unlock()
+	if !faucetAllowed() {
+		return // the startup check has already asked for this wallet
+	}
 	go func() {
 		// The faucet is a convenience, never a dependency: whatever it does,
 		// including answering nonsense or nothing at all, the app carries on

@@ -34,6 +34,9 @@ android {
                 storePassword = System.getenv("SAIL_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("SAIL_KEY_ALIAS")
                 keyPassword = System.getenv("SAIL_KEY_PASSWORD")
+                // PKCS12 by default: it is the portable format, and it can be
+                // produced without a JDK on the machine that holds the key.
+                storeType = System.getenv("SAIL_KEYSTORE_TYPE") ?: "PKCS12"
             }
         }
     }
