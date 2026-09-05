@@ -7,7 +7,9 @@ name: Android release
 # Secrets needed (Settings → Secrets and variables → Actions):
 #   ANDROID_KEYSTORE_BASE64  base64 of the release keystore (.jks)
 #   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
-# Without them the workflow falls back to the debug-signed universal APK.
+# Without them the build fails: an APK signed with a throwaway debug key
+# cannot be installed over an existing one, so publishing it would force
+# every user to uninstall, losing the wallet stored in the app's data.
 
 on:
   push:
@@ -93,8 +95,12 @@ jobs:
           ./gradlew assembleRelease --no-daemon
           mkdir -p out
           cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
-          cd out && for f in *.apk; do mv "$f" "sailnet-${GITHUB_REF_NAME#v}-${f#app-}"; done
-          for f in *.apk; do sha256sum "$f" > "$f.sha256"; done
+          cd out
+          # One universal APK under a name that does not change between
+          # releases, so https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-Android.apk
+          # keeps working — the website and the README both link to it.
+          mv *.apk Sailnet-Android.apk
+          sha256sum Sailnet-Android.apk > Sailnet-Android.apk.sha256
           ls -la && cat *.sha256
 
       - name: Upload artifact
