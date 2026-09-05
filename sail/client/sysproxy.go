@@ -68,13 +68,13 @@ func SetSystemProxy(addr string) error {
 		}
 		var firstErr error
 		for svc := range b.Services {
-			if out, err := exec.Command("networksetup", "-setsocksfirewallproxy", svc, host, port).CombinedOutput(); err != nil {
+			if out, err := command("networksetup", "-setsocksfirewallproxy", svc, host, port).CombinedOutput(); err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("%s: %v (%s)", svc, err, strings.TrimSpace(string(out)))
 				}
 				continue
 			}
-			exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
+			command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
 		}
 		return firstErr
 	case "windows":
@@ -83,10 +83,10 @@ func SetSystemProxy(addr string) error {
 			return err
 		}
 		key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
-		if out, err := exec.Command("reg", "add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "socks="+host+":"+port, "/f").CombinedOutput(); err != nil {
+		if out, err := command("reg", "add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "socks="+host+":"+port, "/f").CombinedOutput(); err != nil {
 			return fmt.Errorf("reg add: %v (%s)", err, strings.TrimSpace(string(out)))
 		}
-		if out, err := exec.Command("reg", "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f").CombinedOutput(); err != nil {
+		if out, err := command("reg", "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f").CombinedOutput(); err != nil {
 			return fmt.Errorf("reg add: %v (%s)", err, strings.TrimSpace(string(out)))
 		}
 		winRefreshProxy()
@@ -97,15 +97,15 @@ func SetSystemProxy(addr string) error {
 		}
 		b.Gnome = map[string]string{}
 		for _, k := range []string{"org.gnome.system.proxy mode", "org.gnome.system.proxy.socks host", "org.gnome.system.proxy.socks port"} {
-			out, _ := exec.Command("gsettings", append([]string{"get"}, strings.Fields(k)...)...).Output()
+			out, _ := command("gsettings", append([]string{"get"}, strings.Fields(k)...)...).Output()
 			b.Gnome[k] = strings.TrimSpace(string(out))
 		}
 		if err := writeSysProxyBackup(b); err != nil {
 			return err
 		}
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "host", host).Run()
-		exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "port", port).Run()
-		return exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual").Run()
+		command("gsettings", "set", "org.gnome.system.proxy.socks", "host", host).Run()
+		command("gsettings", "set", "org.gnome.system.proxy.socks", "port", port).Run()
+		return command("gsettings", "set", "org.gnome.system.proxy", "mode", "manual").Run()
 	}
 	return fmt.Errorf("system proxy not supported on %s", runtime.GOOS)
 }
@@ -126,36 +126,36 @@ func RestoreSystemProxy() {
 	case "darwin":
 		for svc, st := range b.Services {
 			if st.Enabled && st.Server != "" {
-				exec.Command("networksetup", "-setsocksfirewallproxy", svc, st.Server, st.Port).Run()
-				exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
+				command("networksetup", "-setsocksfirewallproxy", svc, st.Server, st.Port).Run()
+				command("networksetup", "-setsocksfirewallproxystate", svc, "on").Run()
 			} else {
-				exec.Command("networksetup", "-setsocksfirewallproxystate", svc, "off").Run()
+				command("networksetup", "-setsocksfirewallproxystate", svc, "off").Run()
 			}
 		}
 	case "windows":
 		key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 		if b.Windows != nil {
 			if b.Windows.Server == "" {
-				exec.Command("reg", "delete", key, "/v", "ProxyServer", "/f").Run()
+				command("reg", "delete", key, "/v", "ProxyServer", "/f").Run()
 			} else {
-				exec.Command("reg", "add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", b.Windows.Server, "/f").Run()
+				command("reg", "add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", b.Windows.Server, "/f").Run()
 			}
 			enable := "0"
 			if strings.HasSuffix(strings.TrimSpace(b.Windows.Enable), "1") {
 				enable = "1"
 			}
-			exec.Command("reg", "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", enable, "/f").Run()
+			command("reg", "add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", enable, "/f").Run()
 			winRefreshProxy()
 		}
 	case "linux":
 		if mode, ok := b.Gnome["org.gnome.system.proxy mode"]; ok {
-			exec.Command("gsettings", "set", "org.gnome.system.proxy", "mode", strings.Trim(mode, "'")).Run()
+			command("gsettings", "set", "org.gnome.system.proxy", "mode", strings.Trim(mode, "'")).Run()
 		}
 		if h, ok := b.Gnome["org.gnome.system.proxy.socks host"]; ok {
-			exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "host", strings.Trim(h, "'")).Run()
+			command("gsettings", "set", "org.gnome.system.proxy.socks", "host", strings.Trim(h, "'")).Run()
 		}
 		if p, ok := b.Gnome["org.gnome.system.proxy.socks port"]; ok && p != "" {
-			exec.Command("gsettings", "set", "org.gnome.system.proxy.socks", "port", p).Run()
+			command("gsettings", "set", "org.gnome.system.proxy.socks", "port", p).Run()
 		}
 	}
 	os.Remove(sysProxyBackupPath())
@@ -169,7 +169,7 @@ func writeSysProxyBackup(b sysProxyBackup) error {
 }
 
 func macServices() []string {
-	out, err := exec.Command("networksetup", "-listallnetworkservices").Output()
+	out, err := command("networksetup", "-listallnetworkservices").Output()
 	if err != nil {
 		return nil
 	}
@@ -185,7 +185,7 @@ func macServices() []string {
 }
 
 func macGetSocks(svc string) macSocksState {
-	out, _ := exec.Command("networksetup", "-getsocksfirewallproxy", svc).Output()
+	out, _ := command("networksetup", "-getsocksfirewallproxy", svc).Output()
 	st := macSocksState{}
 	for _, l := range strings.Split(string(out), "\n") {
 		k, v, ok := strings.Cut(l, ":")
@@ -206,7 +206,7 @@ func macGetSocks(svc string) macSocksState {
 }
 
 func regQuery(name string) string {
-	out, err := exec.Command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", name).Output()
+	out, err := command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", name).Output()
 	if err != nil {
 		return ""
 	}
@@ -225,5 +225,5 @@ func regQuery(name string) string {
 func winRefreshProxy() {
 	// PowerShell one-liner calling InternetSetOption(INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH).
 	ps := `$s='[DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h,int o,IntPtr b,int l);'; $t=Add-Type -MemberDefinition $s -Name W -Namespace N -PassThru; $t::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0) | Out-Null; $t::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0) | Out-Null`
-	exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps).Run()
+	command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps).Run()
 }

@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -240,7 +239,7 @@ func subvertDNS() error {
 	backup := filepath.Join(dataDir(), "dns-backup.json")
 	switch runtime.GOOS {
 	case "darwin":
-		out, err := exec.Command("networksetup", "-listallnetworkservices").Output()
+		out, err := command("networksetup", "-listallnetworkservices").Output()
 		if err != nil {
 			return err
 		}
@@ -250,7 +249,7 @@ func subvertDNS() error {
 			if svc == "" || strings.HasPrefix(svc, "*") || strings.Contains(svc, "asterisk") {
 				continue
 			}
-			cur, _ := exec.Command("networksetup", "-getdnsservers", svc).Output()
+			cur, _ := command("networksetup", "-getdnsservers", svc).Output()
 			var list []string
 			for _, l := range strings.Split(string(cur), "\n") {
 				if ip := net.ParseIP(strings.TrimSpace(l)); ip != nil {
@@ -258,14 +257,14 @@ func subvertDNS() error {
 				}
 			}
 			saved[svc] = list
-			if err := exec.Command("networksetup", "-setdnsservers", svc, "127.0.0.1").Run(); err != nil {
+			if err := command("networksetup", "-setdnsservers", svc, "127.0.0.1").Run(); err != nil {
 				return fmt.Errorf("networksetup %s: %v (run with sudo)", svc, err)
 			}
 		}
 		data, _ := json.MarshalIndent(saved, "", "  ")
 		os.WriteFile(backup, data, 0o600)
-		exec.Command("dscacheutil", "-flushcache").Run()
-		exec.Command("killall", "-HUP", "mDNSResponder").Run()
+		command("dscacheutil", "-flushcache").Run()
+		command("killall", "-HUP", "mDNSResponder").Run()
 		log.Printf("capture: system DNS now 127.0.0.1 on %d service(s); backup in %s", len(saved), backup)
 		return nil
 	case "linux":
@@ -301,10 +300,10 @@ func revertDNS() {
 			if len(list) == 0 {
 				args = append(args, "Empty")
 			}
-			exec.Command("networksetup", args...).Run()
+			command("networksetup", args...).Run()
 		}
-		exec.Command("dscacheutil", "-flushcache").Run()
-		exec.Command("killall", "-HUP", "mDNSResponder").Run()
+		command("dscacheutil", "-flushcache").Run()
+		command("killall", "-HUP", "mDNSResponder").Run()
 	case "linux":
 		os.WriteFile("/etc/resolv.conf", data, 0o644)
 	}
