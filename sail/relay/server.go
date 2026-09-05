@@ -1649,7 +1649,12 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 	acct.ReceiveAll(ctx)
 	if info, ok, err := s.Nano.AccountInfo(ctx, s.Key.Address); err == nil && ok {
 		if bal, ok := new(big.Int).SetString(info.Balance, 10); ok {
-			reserve := new(big.Int).Exp(big.NewInt(10), big.NewInt(25), nil) // 0.00001 XNO stays for the next block
+			// Down to dust, deliberately: the float exists to prepay the next
+			// hop, and a peer that is carrying our traffic must never be left
+			// unpaid so that our own operator can be paid first. What the node
+			// earns above the float is swept afterwards (RULES.md, rule 1: no
+			// change may make another operator earn less for the same work).
+			reserve := new(big.Int).Exp(big.NewInt(10), big.NewInt(25), nil) // 0.00001 XNO for the next block itself
 			avail := new(big.Int).Sub(bal, reserve)
 			if avail.Cmp(amount) < 0 {
 				amount = avail
