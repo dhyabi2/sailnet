@@ -306,9 +306,9 @@ func (c *Circuit) seal(n int, cmd byte, sid uint16, data []byte) (*wire.Cell, er
 		return nil, err
 	}
 	cell := &wire.Cell{CircID: 1, Cmd: wire.CmdData, Payload: box}
-	if len(c.ring) >= 2048 {
+	if len(c.ring) >= 8192 { // above the link queue (4096): everything unsent at a drop is still here
 		copy(c.ring, c.ring[1:])
-		c.ring = c.ring[:2047]
+		c.ring = c.ring[:8191]
 	}
 	c.ring = append(c.ring, sentCell{c.hops[0].SentFwd(), cell})
 	return cell, nil
@@ -407,7 +407,7 @@ func (c *Circuit) tryResume() bool {
 		if err != nil || ack.Cmd != wire.CmdResumed {
 			w.stop()
 			conn.Close()
-			if err == nil { // a definite refusal: the circuit is gone at the entry
+			if err == nil && attempt >= 2 { // refused twice with time between: the circuit is gone at the entry
 				return false
 			}
 			continue

@@ -182,6 +182,7 @@ type circuit struct {
 	resume   [32]byte            // proves ownership when the client reattaches after a dropped link
 	parkedAt time.Time
 	sealMu   sync.Mutex // seal + ring push, so ring order is sequence order
+	parkCond *sync.Cond // wakes deliver() when the client link is back (or the circuit is destroyed)
 	ring     []ringCell // last backward cells sent, for retransmission after a reattach
 	rateAt   time.Time  // rate window start (for the low-quota threshold)
 	rateN    int64      // bytes relayed in the window
@@ -808,7 +809,7 @@ type ringCell struct {
 	cell *wire.Cell
 }
 
-const ringCells = 2048 // 2 MB per busy circuit: covers what was in flight on the dead link
+const ringCells = 8192 // above the link queue (4096): everything unsent at a drop is still here
 
 // sealBackward seals one reply and records it for retransmission.
 func (c *circuit) sealBackward(cmd byte, sid uint16, data []byte) (*wire.Cell, error) {
@@ -845,11 +846,19 @@ func (c *circuit) remember(seq uint64, cell *wire.Cell) {
 }
 
 // deliver sends cells toward the client. While the client's link is being
-// reattached nothing is written: every sent cell is in the ring, and the
-// reattachment retransmits from the client's last accepted sequence.
+// reattached the caller waits (back-pressure on the exit): every sent cell
+// is in the ring, and the reattachment retransmits from the client's last
+// accepted sequence, so nothing is dropped and nothing is duplicated.
 func (c *circuit) deliver(cells ...*wire.Cell) {
 	c.mu.Lock()
 	in := c.in
+	for in == nil && !c.closed {
+		if c.parkCond == nil {
+			c.parkCond = sync.NewCond(&c.mu)
+		}
+		c.parkCond.Wait()
+		in = c.in
+	}
 	if in == nil {
 		c.mu.Unlock()
 		return
@@ -905,12 +914,20 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 	}
 	var id [32]byte
 	copy(id[:], cell.Payload[:32])
-	s.parkMu.Lock()
-	c := s.parks[id]
-	if c != nil {
-		delete(s.parks, id)
+	// The client often reconnects before the dead connection's reader has
+	// noticed and parked the circuit: give the park a moment.
+	var c *circuit
+	for wait := 0; wait < 30 && c == nil; wait++ {
+		s.parkMu.Lock()
+		c = s.parks[id]
+		if c != nil {
+			delete(s.parks, id)
+		}
+		s.parkMu.Unlock()
+		if c == nil {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
-	s.parkMu.Unlock()
 	if c == nil {
 		return nil
 	}
@@ -936,12 +953,15 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 			again = append(again, r.cell)
 		}
 	}
+	if len(again) > 0 {
+		in.writeBatch(again...) // before anyone blocked in deliver() may write new cells
+	}
 	c.in = in
+	if c.parkCond != nil {
+		c.parkCond.Broadcast()
+	}
 	c.mu.Unlock()
 	c.sealMu.Unlock()
-	if len(again) > 0 {
-		in.writeBatch(again...)
-	}
 	return c
 }
 
@@ -1825,6 +1845,9 @@ func (c *circuit) destroy() {
 		return
 	}
 	c.closed = true
+	if c.parkCond != nil {
+		c.parkCond.Broadcast()
+	}
 	for _, st := range c.streams {
 		st.Close()
 	}

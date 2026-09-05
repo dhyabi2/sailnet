@@ -19,7 +19,13 @@ type Relay struct {
 	Flags      uint16
 	Descriptor [12]byte
 	Height     uint64
+	LastSeen   int64 // unix time of the relay's last REGISTER, DESCRIPTOR or ALIVE block (0 when the ledger gave no time)
 }
+
+// AliveTTL is how long a registration stays listed without a fresh block
+// from the relay. Relays send an ALIVE block daily, so three days means
+// "gone", not "quiet".
+const AliveTTL = 72 * 60 * 60
 
 // State is the deterministic Sailnet registry.
 type State struct {
@@ -40,6 +46,7 @@ type Event struct {
 	Recipient  string
 	SendHash   string
 	SendHeight uint64
+	Time       int64 // unix time the ledger recorded for the block (0 if unknown)
 }
 
 // Apply folds one registry op.
@@ -57,17 +64,35 @@ func (s *State) Apply(e *Event) error {
 			s.Relays[e.Sender] = r
 		}
 		r.Country, r.ASN, r.MinRate, r.Flags, r.Height = cc, asn, rate, flags, e.SendHeight
+		r.touch(e.Time)
 	case OpDescriptor:
 		r := s.Relays[e.Sender]
 		if r == nil {
 			return fmt.Errorf("DESCRIPTOR before REGISTER")
 		}
 		r.Descriptor = e.Op.Aux
+		r.touch(e.Time)
+	case OpAlive:
+		if r := s.Relays[e.Sender]; r != nil {
+			r.touch(e.Time)
+		}
 	case OpNop:
 	default:
 		return fmt.Errorf("op %d is not a registry op", e.Op.Code)
 	}
 	return nil
+}
+
+func (r *Relay) touch(t int64) {
+	if t > r.LastSeen {
+		r.LastSeen = t
+	}
+}
+
+// Alive reports whether a relay's last block is within AliveTTL of now.
+// Relays whose blocks carry no ledger time are kept (nothing to judge by).
+func (r *Relay) Alive(now int64) bool {
+	return r.LastSeen == 0 || now-r.LastSeen <= AliveTTL
 }
 
 // Root is the canonical registry fingerprint.

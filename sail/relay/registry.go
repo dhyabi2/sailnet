@@ -101,7 +101,11 @@ func (r *Registry) Refresh(ctx context.Context) error {
 		return err
 	}
 	m := map[string]*RelayInfo{}
+	now := time.Now().Unix()
 	for _, rel := range st.Relays {
+		if !rel.Alive(now) {
+			continue // no REGISTER, DESCRIPTOR or ALIVE block for three days: retired
+		}
 		d, ok := DecodeDescriptor(rel.Descriptor)
 		if !ok {
 			continue

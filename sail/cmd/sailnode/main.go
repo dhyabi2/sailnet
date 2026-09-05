@@ -239,6 +239,7 @@ func runRelay(args []string) {
 			cancel()
 		}
 		go keepRegistered(nc, key, strings.ToUpper(*cc), uint32(*asn), rateU, flags, desc)
+		go heartbeat(nc, key) // a daily ALIVE block: registrations without one for three days drop off the registry
 	}
 
 	q, err := relay.NewQuota(filepath.Join(client.DataDir(), "quota.wal"), rateRaw)
@@ -416,6 +417,33 @@ func runRelay(args []string) {
 func a(s string) string { return strings.TrimSpace(s) }
 
 // registered reports whether the ledger already carries this relay's current record.
+// heartbeat publishes an ALIVE block (1 raw to the treasury) at start and
+// then daily, so the registry can retire relays that stopped without
+// anyone having to clean up. Failures are logged and retried next round.
+func heartbeat(nc *nano.Client, key *nano.Key) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("heartbeat stopped after an internal error: %v", r)
+		}
+	}()
+	time.Sleep(5 * time.Minute) // after registration has had its turn
+	for {
+		acct := &nano.Account{Key: key, Client: nc}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		rep, _ := token.Encode(token.Op{Code: token.OpAlive})
+		if h, err := acct.Send(ctx, client.Treasury, big.NewInt(1), &rep); err == nil {
+			log.Printf("ALIVE published %s", h[:8])
+		} else {
+			log.Printf("ALIVE not published (%v); retrying in an hour", err)
+			cancel()
+			time.Sleep(time.Hour)
+			continue
+		}
+		cancel()
+		time.Sleep(24 * time.Hour)
+	}
+}
+
 // keepRegistered publishes REGISTER and DESCRIPTOR until the ledger shows
 // exactly this record; it retries on a 10-minute backoff and never panics.
 func keepRegistered(nc *nano.Client, key *nano.Key, cc string, asn, rate uint32, flags uint16, desc relay.Descriptor) {

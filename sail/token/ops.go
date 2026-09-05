@@ -24,6 +24,7 @@ const (
 	OpClaim      = 0x06
 	OpNop        = 0x07
 	OpReward     = 0x08 // levy payout for an epoch: Aux[0:4] = epoch number (UTC day)
+	OpAlive      = 0x09 // relay heartbeat: "still serving"; a relay without one for AliveTTL is retired from the registry
 
 	Decimals = 6
 	Unit     = 1_000_000 // legacy: micro units in aux fields

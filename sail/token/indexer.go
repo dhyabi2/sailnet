@@ -75,7 +75,9 @@ func (ix *Indexer) Run(ctx context.Context) (*State, error) {
 				continue
 			}
 			h, _ := strconv.ParseUint(b.Height, 10, 64)
-			_ = st.Apply(&Event{Op: op, Sender: acct, Recipient: b.Account, SendHash: b.Hash, SendHeight: h})
+			var ts int64
+			fmt.Sscan(b.LocalTimestamp, &ts)
+			_ = st.Apply(&Event{Op: op, Sender: acct, Recipient: b.Account, SendHash: b.Hash, SendHeight: h, Time: ts})
 		}
 	}
 	return st, nil
