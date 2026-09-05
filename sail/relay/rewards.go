@@ -518,13 +518,44 @@ func (s *Server) RunPayout(to string, keep *big.Int, every time.Duration) {
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		amt, err := SweepTo(ctx, s.Nano, s.Key, to, keep)
-		cancel()
 		switch {
 		case err != nil:
 			log.Printf("payout: %v", err)
 		case amt != nil:
 			log.Printf("payout: %s XNO forwarded (float kept: %s XNO)", formatXNO(amt), formatXNO(keep))
+		default:
+			// Nothing forwarded. Say why, with the numbers: an operator who
+			// sees no payout must be able to tell "I earned nothing yet" from
+			// "my earnings are held as float".
+			if bal, err := Earnings(ctx, s.Nano, s.Key); err == nil {
+				if bal.Sign() == 0 {
+					log.Printf("payout: nothing earned yet; earnings appear here as traffic is relayed")
+				} else {
+					log.Printf("payout: %s XNO earned so far, all of it held as operating float (--payout-keep %s XNO); it is forwarded once earnings pass that", formatXNO(bal), formatXNO(keep))
+				}
+			}
 		}
+		cancel()
 		time.Sleep(every)
 	}
+}
+
+// Earnings pockets anything receivable and returns the node wallet's balance.
+// Safe to call on a node with no payout address: it is what makes earnings
+// visible in the wallet at all.
+func Earnings(ctx context.Context, nc *nano.Client, key *nano.Key) (*big.Int, error) {
+	acct := &nano.Account{Key: key, Client: nc}
+	acct.ReceiveAll(ctx)
+	info, ok, err := nc.AccountInfo(ctx, key.Address)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return new(big.Int), nil
+	}
+	bal, good := new(big.Int).SetString(info.Balance, 10)
+	if !good {
+		return nil, errors.New("bad balance from node")
+	}
+	return bal, nil
 }

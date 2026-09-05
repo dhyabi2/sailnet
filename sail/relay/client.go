@@ -191,7 +191,11 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 	// tick from here on, so the link's rhythm no longer follows the user.
 	if CoverTick > 0 {
 		ms := int(CoverTick / time.Millisecond)
-		c.w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), byte(CoverBurst >> 8), byte(CoverBurst)}})
+		// Byte 2 is what a relay from before the burst grew reads: 255 lands
+		// on its own maximum, so an old relay still carries as much as it
+		// ever did instead of dropping to 16 cells a tick. Bytes 3 and 4
+		// carry the real value for relays that understand it.
+		c.w.write(&wire.Cell{Cmd: wire.CmdCover, Payload: []byte{byte(ms >> 8), byte(ms), 255, byte(CoverBurst >> 8), byte(CoverBurst)}})
 		c.w.SetCover(CoverTick, CoverBurst)
 	}
 

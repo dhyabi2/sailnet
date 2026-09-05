@@ -101,11 +101,11 @@ func (r *Registry) Refresh(ctx context.Context) error {
 		return err
 	}
 	m := map[string]*RelayInfo{}
-	now := time.Now().Unix()
 	for _, rel := range st.Relays {
-		if !rel.Alive(now) {
-			continue // no REGISTER, DESCRIPTOR or ALIVE block for three days: retired
-		}
+		// Every registration stays listed, however old. A relay that never
+		// upgrades publishes no heartbeat, and dropping it here would take
+		// it out of the network (see COMPATIBILITY.md). Whether a relay is
+		// actually there is decided by probes and gossip, not by block age.
 		d, ok := DecodeDescriptor(rel.Descriptor)
 		if !ok {
 			continue

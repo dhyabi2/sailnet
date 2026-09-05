@@ -200,19 +200,13 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	if len(all) < m.opts.hops {
 		return nil, fmt.Errorf("only %d relays on the ledger, need %d", len(all), m.opts.hops)
 	}
-	// Price: the customer is the buyer. Every hop must be at or under the
-	// cap (by default three times the median published price, so the cap
-	// follows the market rather than a number baked into a binary), and the
-	// draw is weighted by (median / price)^2, so a relay that doubles its
-	// price gets a quarter of the traffic. That, plus the fact that anyone
-	// can register a cheaper relay, is what keeps a cartel from holding.
-	median, cap := m.priceCap(all)
-	usable := all[:0:0]
 	// Proof of life first: a relay counts as alive when it is a bridge we
 	// know, answered our probe, or signed a gossip record in the last three
-	// hours. Dead registrations stay on the ledger; they must not cost a
+	// hours. Dead registrations stay on the ledger (they must, so that a
+	// relay which never upgrades is never dropped); they must not cost a
 	// user a 6-second timeout each. Only when that leaves too few relays do
-	// unknown ones come back in.
+	// unknown ones come back in. Every judgement below is this client's own
+	// measurement: no list, no authority, nobody to ask.
 	alive := func(r *relay.RelayInfo) bool {
 		_, probed := m.rtt[r.Account]
 		return r.Unlisted || probed || time.Since(m.reg.LastSeen(r.Account)) < 3*time.Hour
@@ -224,6 +218,28 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		}
 	}
 	requireAlive := liveCount >= m.opts.hops+1
+	// Price: the customer is the buyer. Every hop must be at or under the
+	// cap (by default five times the median published price, so the cap
+	// follows the market rather than a number baked into a binary), and the
+	// draw is weighted by (median / price)^2, so a relay that doubles its
+	// price gets a quarter of the traffic. That, plus the fact that anyone
+	// can register a cheaper relay, is what keeps a cartel from holding.
+	//
+	// The median counts only relays that are actually there. A registration
+	// costs one raw, so a thousand records naming a price of nothing would
+	// otherwise drag the median down and put every real relay over the cap,
+	// which would empty the network at almost no cost to the attacker.
+	priced := all
+	if requireAlive {
+		priced = all[:0:0]
+		for _, r := range all {
+			if alive(r) {
+				priced = append(priced, r)
+			}
+		}
+	}
+	median, cap := m.priceCap(priced)
+	usable := all[:0:0]
 	for _, r := range all {
 		if requireAlive && !alive(r) {
 			continue
@@ -416,7 +432,13 @@ func (m *manager) priceCap(all []*relay.RelayInfo) (median, cap uint32) {
 	}
 	cap = m.opts.rate
 	if cap == 0 {
-		cap = 3 * median
+		// Five times the median, not three: we lowered our own default price
+		// on 2026-09-05, and a relay still running the previous default
+		// (four times the new one) must stay eligible. Nobody who never
+		// upgrades may be priced out of the network by our own change
+		// (COMPATIBILITY.md). It is still a cap: a relay asking more than
+		// five times what the market asks is skipped.
+		cap = 5 * median
 		if cap == 0 {
 			cap = math.MaxUint32
 		}

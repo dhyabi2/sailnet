@@ -22,9 +22,10 @@ type Relay struct {
 	LastSeen   int64 // unix time of the relay's last REGISTER, DESCRIPTOR or ALIVE block (0 when the ledger gave no time)
 }
 
-// AliveTTL is how long a registration stays listed without a fresh block
-// from the relay. Relays send an ALIVE block daily, so three days means
-// "gone", not "quiet".
+// AliveTTL is the age past which a relay's last ledger block stops being
+// evidence of life. It is only ever used to *raise* confidence in a relay:
+// registrations never expire, because a node that does not upgrade publishes
+// no heartbeat and must keep working (see COMPATIBILITY.md).
 const AliveTTL = 72 * 60 * 60
 
 // State is the deterministic Sailnet registry.

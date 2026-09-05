@@ -97,7 +97,7 @@ func runRelay(args []string) {
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
-	payoutKeep := fs.String("payout-keep", "0.02", "XNO kept on the node as operating float for pools and the levy")
+	payoutKeep := fs.String("payout-keep", "0.002", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
 	certFile := fs.String("cert", "", "PEM certificate chain to present (e.g. Let's Encrypt for --host); default: a generated self-signed cert")
@@ -239,7 +239,7 @@ func runRelay(args []string) {
 			cancel()
 		}
 		go keepRegistered(nc, key, strings.ToUpper(*cc), uint32(*asn), rateU, flags, desc)
-		go heartbeat(nc, key) // a daily ALIVE block: registrations without one for three days drop off the registry
+		go heartbeat(nc, key) // an optional daily ALIVE block: extra evidence of life, never a requirement
 	}
 
 	q, err := relay.NewQuota(filepath.Join(client.DataDir(), "quota.wal"), rateRaw)
@@ -312,6 +312,16 @@ func runRelay(args []string) {
 	s.LoadPools()
 	if *regDir == "" {
 		go func() { time.Sleep(3 * time.Minute); s.RunLevy(*levy) }()
+		go func() { // earnings arrive as receivable blocks: pocket them whether or not a payout address is set, so the node's wallet shows what it earned
+			for {
+				time.Sleep(20 * time.Minute)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				if bal, err := relay.Earnings(ctx, nc, key); err == nil && bal.Sign() > 0 {
+					log.Printf("earned so far: %s XNO in this node's wallet", token.FormatXNO(bal))
+				}
+				cancel()
+			}
+		}()
 		if *payout != "" {
 			keep, err := token.ParseXNO(*payoutKeep)
 			if err != nil {

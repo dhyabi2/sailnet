@@ -425,8 +425,10 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 		}
 		if cell.Cmd == wire.CmdCover && cell.CircID == 0 && len(cell.Payload) >= 3 { // cadence mode on this link
 			tick := time.Duration(int(cell.Payload[0])<<8|int(cell.Payload[1])) * time.Millisecond
-			burst := int(cell.Payload[2]) // v2 clients: one byte
-			if len(cell.Payload) >= 4 {   // v3: uint16
+			burst := int(cell.Payload[2]) // oldest clients: a single byte
+			if len(cell.Payload) >= 5 {   // current: byte 2 is a legacy marker, the value is in 3..4
+				burst = int(cell.Payload[3])<<8 | int(cell.Payload[4])
+			} else if len(cell.Payload) >= 4 { // the shape shipped on 2026-09-04
 				burst = int(cell.Payload[2])<<8 | int(cell.Payload[3])
 			}
 			in.SetCover(tick, burst)
@@ -1702,12 +1704,31 @@ func (s *Server) WarmPools() {
 		if rel.Account == s.Key.Address || s.Registry.Unpaid(rel.Account) || !s.Registry.Listed(rel.Account) {
 			continue // never prepay an account that is not on the ledger (gossip can be forged cheaply)
 		}
+		// Prepay only relays that answer. A registration costs one raw to
+		// publish, so anyone can list a hundred addresses they do not own and
+		// collect a pool from every honest relay; and a pool paid to a relay
+		// that never carries a cell is money given away. A recent gossip
+		// record or an open TCP connection is proof enough, and both are
+		// things an old relay produces too.
+		if time.Since(s.Registry.LastSeen(rel.Account)) > 3*time.Hour && !reachable(rel, 4*time.Second) {
+			continue
+		}
 		if _, ready := s.poolTag(rel); !ready {
 			if _, err := s.ensurePool(rel); err != nil {
 				log.Printf("pool to %s: %v", short(rel.Account), err)
 			}
 		}
 	}
+}
+
+// reachable reports whether a TCP connection to the relay opens.
+func reachable(rel *RelayInfo, timeout time.Duration) bool {
+	c, err := (&net.Dialer{Timeout: timeout, Control: DialControl}).Dial("tcp", rel.Desc.Addr())
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
 }
 
 // ensurePool makes sure we have prepaid quota at the downstream relay by
