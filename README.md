@@ -124,6 +124,11 @@ sailnode wallet import SEED # put a saved wallet back (also accepts a file, or -
 sailnode wallet where       # the path it is stored at
 ```
 
+Run from a shell on a relay, these find the wallet the installed service
+actually uses, not the one your login account would have: the unit is read
+for its data directory. Nothing is guessed, and an explicit `SAIL_HOME` or
+`SAIL_WALLET` always wins.
+
 The apps have the same two actions. On Windows, macOS and Linux they are in
 Settings under **Wallet**: *Back up wallet* shows the seed and can save it to
 a file, *Restore wallet* takes it back. On Android they are in Settings under
