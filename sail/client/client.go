@@ -208,7 +208,26 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	// can register a cheaper relay, is what keeps a cartel from holding.
 	median, cap := m.priceCap(all)
 	usable := all[:0:0]
+	// Proof of life first: a relay counts as alive when it is a bridge we
+	// know, answered our probe, or signed a gossip record in the last three
+	// hours. Dead registrations stay on the ledger; they must not cost a
+	// user a 6-second timeout each. Only when that leaves too few relays do
+	// unknown ones come back in.
+	alive := func(r *relay.RelayInfo) bool {
+		_, probed := m.rtt[r.Account]
+		return r.Unlisted || probed || time.Since(m.reg.LastSeen(r.Account)) < 3*time.Hour
+	}
+	liveCount := 0
 	for _, r := range all {
+		if alive(r) {
+			liveCount++
+		}
+	}
+	requireAlive := liveCount >= m.opts.hops+1
+	for _, r := range all {
+		if requireAlive && !alive(r) {
+			continue
+		}
 		if m.scoreOf(r.Account) >= 0.3 && !m.opts.avoid[r.Account] && !m.skip[r.Account] && r.MinRate <= cap {
 			usable = append(usable, r)
 		}
@@ -571,6 +590,12 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 				// fault, but retrying the same path is useless: nudge its score down so
 				// the next attempt routes around it (scores drift back within minutes).
 				m.mark(path[c.Failed].Account, false)
+				if strings.Contains(err.Error(), "dial") || strings.Contains(err.Error(), "unknown relay") || strings.Contains(err.Error(), "not on the ledger") {
+					// Nobody could even reach it: treat it as gone, not as flaky.
+					// The score drifts back over a couple of hours, so a relay that
+					// really returns is retried eventually.
+					m.score[path[c.Failed].Account] = 0
+				}
 				if c.Failed > 0 {
 					m.skip[path[c.Failed].Account] = true // try a different hop this time
 				}

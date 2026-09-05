@@ -1151,7 +1151,7 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			return
 		}
 	}
-	conn, err := DialRelay(dialTarget, 15*time.Second)
+	conn, err := DialRelay(dialTarget, 6*time.Second) // a relay that does not answer in 6 s is not worth a longer wait for the user
 	if err != nil {
 		s.reply(c, wire.CmdError, sid, []byte("dial next: "+err.Error()))
 		return

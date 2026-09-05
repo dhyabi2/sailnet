@@ -103,6 +103,17 @@ func main() {
 	log.SetOutput(client.RedactingWriter{W: logs})
 	p := loadPrefs()
 	client.RestoreSystemProxy() // a previous run that crashed while connected left the system proxy on: repair first
+	if l, err := net.Listen("tcp", "127.0.0.1:1090"); err != nil {
+		// The status port is taken: another Sailnet is already running. Two
+		// copies would fight over the SOCKS, DNS and status ports.
+		w.SetFixedSize(false)
+		w.Resize(fyne.NewSize(460, 120))
+		w.SetContent(widget.NewLabel("Sailnet is already running.\nUse the window that is open, or quit it first."))
+		w.ShowAndRun()
+		return
+	} else {
+		l.Close()
+	}
 	key := client.EnsureWallet()
 	client.SetNick(p.Nick, key.Address)
 
