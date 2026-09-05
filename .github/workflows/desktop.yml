@@ -39,7 +39,7 @@ jobs:
         run: |
           mkdir -p ../../../out
           for arch in arm64 amd64; do
-            CGO_ENABLED=1 GOARCH=$arch fyne package -os darwin -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
+            CGO_ENABLED=1 GOARCH=$arch fyne package -os darwin -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release -app-version "${GITHUB_REF_NAME#v}"
             mv Sailnet.app "../../../out/Sailnet-$arch.app"
           done
       - name: Import certificate
@@ -115,7 +115,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../../../out
-          CGO_ENABLED=1 fyne package -os windows -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release
+          CGO_ENABLED=1 fyne package -os windows -name Sailnet -app-id net.sailnet.desktop -icon Icon.png -release -app-version "${GITHUB_REF_NAME#v}"
           mv Sailnet.exe ../../../out/Sailnet-Windows.exe
       - name: Sign
         if: env.HAS_WIN_CERT == 'true'
