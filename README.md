@@ -109,6 +109,25 @@ install. If you run one anyway, pass `--rpc http://127.0.0.1:7076`.
 
 Home PC behind NAT, no port forwarding: `sailnode earn --home --payout nano_…`.
 
+## Upgrading the app
+
+**Relays (Linux).** `sailnode upgrade` is the whole procedure. It verifies the
+published SHA-256 before replacing anything, keeps the previous binary beside
+the new one, and never touches your wallet or any other file in `SAIL_HOME`.
+Upgrading is optional: a relay that never upgrades keeps working, keeps being
+chosen, and keeps earning.
+
+**Desktop (Windows, macOS).** Download and install over the top. The wallet
+lives in `~/.sail`, outside the app, so it survives.
+
+**Android — one-time reinstall.** Every release before v0.2.53 was signed with
+a throwaway key that changed on each build, so Android refuses to install a
+newer version over an older one. Moving to v0.2.53 needs an uninstall and a
+fresh install, once. **Back up your seed first** (Settings → Back up wallet)
+if the wallet holds anything you want to keep — uninstalling deletes it. From
+v0.2.53 onward every release is signed with the same key and installs over the
+last one normally.
+
 ## Your wallet, and backing it up
 
 A relay's earnings and a client's balance live in one secret: a 32-byte seed

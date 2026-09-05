@@ -175,6 +175,7 @@ class MainActivity : AppCompatActivity() {
                 fundNote = f.optString("faucet")
                 toggle.isEnabled = funded || SailVpnService.running || SailVpnService.starting
                 if (funded) {
+                    remindToBackUp()
                     if (andConnect && !SailVpnService.running) prepareAndStart() // opening the app means "protect me"
                 } else {
                     // Keep looking: money may arrive from the faucet, or by
@@ -183,6 +184,33 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+
+    /**
+     * Ask once, early, for the one thing only the user can do.
+     *
+     * Uninstalling an Android app deletes everything it stored, this wallet
+     * with it, and no server anywhere keeps a copy of the seed. The moment
+     * to say so is when the wallet first has money in it, not after it is
+     * gone, so this fires once — the first time the wallet can pay — and
+     * never again.
+     */
+    private fun remindToBackUp() {
+        val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        if (p.getBoolean("backup_reminded", false)) return
+        p.edit().putBoolean("backup_reminded", true).apply()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Save your wallet")
+            .setMessage(
+                "Your XNO lives in a seed kept only on this phone. Uninstalling " +
+                "the app deletes it, and nobody can recover it for you.\n\n" +
+                "Settings → Back up wallet shows the seed. Write it down before " +
+                "you put real money in."
+            )
+            .setPositiveButton("Back up now") { _, _ -> startActivity(Intent(this, SettingsActivity::class.java)) }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     private var checkingFunds = false
