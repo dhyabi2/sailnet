@@ -40,7 +40,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-    }
+
 
         // A wallet is one seed, and this phone is the only place it exists.
         // Android deletes an app's files when it is uninstalled, so without
@@ -114,4 +114,5 @@ class SettingsActivity : AppCompatActivity() {
                 .show()
         }
 
+    }
 }
