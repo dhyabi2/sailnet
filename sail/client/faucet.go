@@ -15,7 +15,7 @@ import (
 
 // FaucetURL pays the registration amount to a new wallet, once per account
 // per day and ten times per public IP per day.
-const FaucetURL = "https://www.sailnet.space/api/faucet"
+var FaucetURL = "https://www.sailnet.space/api/faucet"
 
 // FaucetReply is the faucet's answer. Amount is always set: what a wallet
 // needs when the faucet cannot pay, so the message can say so.
@@ -68,6 +68,19 @@ func claimFaucet(ctx context.Context, hc *http.Client, account string, kind stri
 	return &fr, nil
 }
 
+// shortHash trims a block hash for a log line. The faucet's answer comes from
+// the network, so nothing about its shape may be assumed: an app must never
+// die because a reply was empty or truncated.
+func shortHash(h string) string {
+	if len(h) > 8 {
+		return h[:8]
+	}
+	if h == "" {
+		return "no hash"
+	}
+	return h
+}
+
 func redactErr(err error) string {
 	return strings.ReplaceAll(err.Error(), FaucetURL, "faucet")
 }
@@ -93,5 +106,5 @@ func FundFromFaucet(ctx context.Context, hc *http.Client, nc *nano.Client, key *
 		}
 		time.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("faucet paid %s XNO (%s) but it has not arrived yet; the node keeps waiting", fr.Amount, fr.Hash[:8])
+	return fmt.Errorf("faucet paid %s XNO (%s) but it has not arrived yet; the node keeps waiting", fr.Amount, shortHash(fr.Hash))
 }

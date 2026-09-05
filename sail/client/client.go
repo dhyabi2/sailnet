@@ -137,6 +137,8 @@ type manager struct {
 	fundsWatch      func()       // stops the confirmation watch while waiting for funds
 	faucetAt        time.Time    // last faucet claim (one per day)
 	polling         bool         // startFundsPoll is running
+	mu2             sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
+	effCap          uint32       // the price cap the last path selection actually used
 	stage           atomic.Value // what the client is doing right now, for screens
 }
 
@@ -1818,6 +1820,14 @@ func (m *manager) claimFaucetOnce() {
 	m.faucetAt = time.Now()
 	m.mu.Unlock()
 	go func() {
+		// The faucet is a convenience, never a dependency: whatever it does,
+		// including answering nonsense or nothing at all, the app carries on
+		// waiting for funds exactly as it would without one.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("faucet: skipped after an internal error (%v); fund the wallet by hand to connect now", r)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if fr, err := ClaimFaucet(ctx, m.nc.HTTP, m.key.Address); err != nil {
@@ -1826,7 +1836,7 @@ func (m *manager) claimFaucetOnce() {
 			m.faucetAt = time.Now().Add(-24*time.Hour + 10*time.Minute) // a failed claim is retried in ten minutes, not tomorrow
 			m.mu.Unlock()
 		} else {
-			log.Printf("faucet: %s XNO on its way (%s); connecting when it confirms", fr.Amount, fr.Hash[:8])
+			log.Printf("faucet: %s XNO on its way (%s); connecting when it confirms", fr.Amount, shortHash(fr.Hash))
 		}
 	}()
 }
