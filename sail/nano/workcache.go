@@ -25,10 +25,20 @@ var workCache = struct {
 	m      map[string]string // root hex → work hex
 }{m: map[string]string{}}
 
+// workCachePath is the one file this package writes, and it belongs with
+// everything else the node keeps. Without the home fallback a node started
+// with no SAIL_HOME set dropped it in whatever directory it happened to be
+// launched from, which is not somewhere an operator would think to look, back
+// up, or clear.
 func workCachePath() string {
 	home := os.Getenv("SAIL_HOME")
 	if home == "" {
-		home = "."
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return "work-cache.json"
+		}
+		home = filepath.Join(h, ".sail")
+		os.MkdirAll(home, 0o700)
 	}
 	return filepath.Join(home, "work-cache.json")
 }

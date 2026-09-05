@@ -338,7 +338,12 @@ func (s *Server) ListenAndServe(addr string) error {
 		tcfg.GetCertificate = s.GetCertificate
 		tcfg.NextProtos = append(tcfg.NextProtos, "acme-tls/1") // TLS-ALPN-01 validation on :443
 	}
-	srv := &http.Server{Addr: addr, Handler: s.Handler(), TLSConfig: tcfg, ReadHeaderTimeout: 10 * time.Second, TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}
+	srv := &http.Server{Addr: addr, Handler: s.Handler(), TLSConfig: tcfg, ReadHeaderTimeout: 10 * time.Second, TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		// Go's default error log prints the address of anyone whose TLS
+		// handshake fails, which on a relay is a record of who connected to
+		// it, kept in the system journal for weeks. A relay must not build
+		// that list. The failures themselves are still counted.
+		ErrorLog: log.New(handshakeLog{s: s}, "", 0)}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -967,6 +972,35 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 	c.mu.Unlock()
 	c.sealMu.Unlock()
 	return c
+}
+
+// handshakeLog swallows the transport errors that name a peer's address and
+// keeps a count instead, so a relay never accumulates a list of who talked to
+// it. Anything else the HTTP server reports is passed through.
+type handshakeLog struct{ s *Server }
+
+func (h handshakeLog) Write(p []byte) (int, error) {
+	line := string(p)
+	if strings.Contains(line, "TLS handshake error") || strings.Contains(line, "http: URL query contains") {
+		h.s.Metrics.RejectedSpam.Add(0) // counted, not named
+		return len(p), nil
+	}
+	log.Print(strings.TrimRight(redactAddrs(line), "\n"))
+	return len(p), nil
+}
+
+// redactAddrs removes host:port pairs from a line the HTTP server produced.
+func redactAddrs(line string) string {
+	var out []string
+	for _, f := range strings.Fields(line) {
+		trimmed := strings.Trim(f, "\"',;:")
+		if host, port, err := net.SplitHostPort(trimmed); err == nil && net.ParseIP(host) != nil && port != "" {
+			out = append(out, "a peer")
+			continue
+		}
+		out = append(out, f)
+	}
+	return strings.Join(out, " ")
 }
 
 // serveStats answers a public, coarse summary of what this relay sees: how
