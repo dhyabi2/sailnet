@@ -288,12 +288,13 @@ func (c *Client) Receivables(ctx context.Context, account string, count int) ([]
 
 // BlockInfo is block_info / blocks_info contents.
 type BlockInfo struct {
-	BlockAccount string `json:"block_account"`
-	Amount       string `json:"amount"`
-	Subtype      string `json:"subtype"`
-	Confirmed    string `json:"confirmed"`
-	Height       string `json:"height"`
-	Contents     struct {
+	BlockAccount   string `json:"block_account"`
+	Amount         string `json:"amount"`
+	Subtype        string `json:"subtype"`
+	Confirmed      string `json:"confirmed"`
+	Height         string `json:"height"`
+	LocalTimestamp string `json:"local_timestamp"`
+	Contents       struct {
 		Type           string `json:"type"`
 		Account        string `json:"account"`
 		Previous       string `json:"previous"`

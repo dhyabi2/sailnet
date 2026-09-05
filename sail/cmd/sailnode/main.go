@@ -257,7 +257,9 @@ func runRelay(args []string) {
 	// relay that just came up already knows whom to EXTEND to, and refreshed
 	// from the ledger in the background. Reads through Sailnet's endpoint need
 	// not crawl at public-node pace.
-	reg := &relay.Registry{Client: nc, Treasury: client.Treasury, CacheFile: filepath.Join(client.DataDir(), "registry.json")}
+	reg := &relay.Registry{Client: nc, Treasury: client.Treasury,
+		CacheFile:   filepath.Join(client.DataDir(), "registry.json"),
+		LedgerCache: filepath.Join(client.DataDir(), "ledger-cache.json")}
 	if n := reg.LoadCache(); n > 0 {
 		log.Printf("registry: %d relays from cache", n)
 	}

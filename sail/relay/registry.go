@@ -83,20 +83,26 @@ type Registry struct {
 	Client    *nano.Client
 	Treasury  string
 	CacheFile string // if set, the last good relay list is kept here and loaded when the ledger is unreachable
-	mu        sync.RWMutex
-	relays    map[string]*RelayInfo
-	bridges   map[string]*RelayInfo    // unlisted entries; survive Refresh
-	gossip    map[string]*SignedRecord // signed records learned from peers; ledger and bridges win
-	unpaid    map[string]bool          // relays that skipped the (optional) levy
-	weights   map[string]float64       // legacy combined routing weight (rewards.go)
-	ageTerm   map[string]float64       // Age/maxAge per relay, from the daily ledger table
-	perfTerm  map[string]float64       // Perf/maxPerf per relay
-	loaded    time.Time
+	// LedgerCache, if set, is where the indexer remembers the ledger blocks
+	// it has already read. Blocks are immutable, so a restart re-reads only
+	// what is new instead of the whole registry.
+	LedgerCache string
+	mu          sync.RWMutex
+	relays      map[string]*RelayInfo
+	bridges     map[string]*RelayInfo    // unlisted entries; survive Refresh
+	gossip      map[string]*SignedRecord // signed records learned from peers; ledger and bridges win
+	unpaid      map[string]bool          // relays that skipped the (optional) levy
+	weights     map[string]float64       // legacy combined routing weight (rewards.go)
+	ageTerm     map[string]float64       // Age/maxAge per relay, from the daily ledger table
+	perfTerm    map[string]float64       // Perf/maxPerf per relay
+	loaded      time.Time
 }
 
 // Refresh replays the ledger and rebuilds the list.
 func (r *Registry) Refresh(ctx context.Context) error {
-	st, err := token.NewIndexer(r.Client, r.Treasury).Run(ctx)
+	ix := token.NewIndexer(r.Client, r.Treasury)
+	ix.CacheFile = r.LedgerCache
+	st, err := ix.Run(ctx)
 	if err != nil {
 		return err
 	}

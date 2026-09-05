@@ -126,11 +126,12 @@ type manager struct {
 	// censored: bridges are the only entries, nothing is probed or fetched
 	// from listed relays before a circuit exists, and the ledger is never
 	// contacted directly, not even on first run (the bridge grant covers it).
-	censored bool
-	skip     map[string]bool // hops that failed during the current build; not retried in the same build
-	lastFail time.Time       // when the last build gave up; callers back off for a few seconds
-	rotate   time.Duration
-	anchors  map[string][]time.Time // recent anchor payments per entry: an entry that keeps claiming "quota exhausted" is not paid again
+	censored      bool
+	skip          map[string]bool // hops that failed during the current build; not retried in the same build
+	lastFail      time.Time       // when the last build gave up; callers back off for a few seconds
+	rotate        time.Duration
+	anchors       map[string][]time.Time // recent anchor payments per entry: an entry that keeps claiming "quota exhausted" is not paid again
+	anchorOffline bool                   // the wallet could not publish the anchor itself; the entry relay will
 	// directBootstrap lets a stealth client reach the ledger directly while it
 	// has no cached chain state at all (first run on a fresh device).
 	directBootstrap bool
@@ -542,9 +543,10 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	}
 	h, blk, err := acct.SendBlock(ctx, entry.Account, m.opts.anchor)
 	var pe *nano.PublishError
+	m.anchorOffline = false
 	if err != nil && stdErrors.As(err, &pe) && blk != nil {
 		log.Printf("payment signed offline; the entry relay will publish it")
-		err = nil
+		m.anchorOffline, err = true, nil
 	}
 	if err != nil {
 		return err
@@ -558,6 +560,37 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	log.Printf("paid %s XNO → %s (tag %s)", token.FormatXNO(m.opts.anchor), entry.Account, h[:8])
 	m.setStage("Paid the entry relay; waiting for the ledger")
 	return nil
+}
+
+// awaitAnchor waits for the anchor payment to be visible on the ledger,
+// which is what the entry relay is waiting for too.
+//
+// This used to be a flat four-second sleep. Nano usually confirms in well
+// under a second, so almost all of that was time a user spent watching
+// nothing happen; and on the rare slow confirmation four seconds was not
+// enough anyway, which the retry path already handles. Asking is both
+// quicker and more honest than guessing.
+//
+// A payment the wallet could not publish itself (the entry relay publishes
+// it instead) will not be on the ledger yet, so waiting for it is pointless:
+// that case returns at once and the build's own retry covers it.
+func (m *manager) awaitAnchor(max time.Duration) {
+	if m.tag == ([32]byte{}) || m.anchorOffline {
+		return
+	}
+	hash := strings.ToUpper(hex.EncodeToString(m.tag[:]))
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		infos, err := m.nc.BlocksInfo(ctx, []string{hash})
+		cancel()
+		if err == nil {
+			if bi, ok := infos[hash]; ok && bi.Confirmed == "true" {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // The current anchor (entry relay, payment tag, signed block) is kept on
@@ -644,7 +677,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 						return nil, err
 					}
 				} else {
-					time.Sleep(4 * time.Second) // let the indexer see the blocks
+					m.awaitAnchor(4 * time.Second)
 				}
 			}
 		}
@@ -1045,7 +1078,9 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 	}
 	m.key, m.nc, m.score = EnsureWallet(), nc, map[string]float64{}
 	m.opts = clientOpts{hops: hops, exitCC: exitCC, anchor: a, rate: r, timeout: 25 * time.Second, regDir: regDir, freeTag: freeTag}
-	m.reg = &relay.Registry{Client: m.nc, Treasury: Treasury, CacheFile: filepath.Join(dataDir(), "registry.json")}
+	m.reg = &relay.Registry{Client: m.nc, Treasury: Treasury,
+		CacheFile:   filepath.Join(dataDir(), "registry.json"),
+		LedgerCache: filepath.Join(dataDir(), "ledger-cache.json")}
 	if regDir != "" {
 		if err := m.reg.LoadDir(regDir); err != nil {
 			log.Fatal("registry-dir:", err)
@@ -1059,8 +1094,9 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 		}()
 		return m
 	}
-	if n := m.reg.LoadCache(); n > 0 {
-		log.Printf("%d relays from cache", n)
+	cached := m.reg.LoadCache()
+	if cached > 0 {
+		log.Printf("%d relays from cache", cached)
 	}
 	// Bridges come first: with one bridge line a client needs neither cache nor ledger.
 	for _, line := range strings.Split(builtinBridges, "\n") {
@@ -1078,7 +1114,27 @@ func newManagerWith(m *manager, nc *nano.Client, hops int, exitCC, anchor, rate,
 	if n, err := m.reg.LoadBridges(filepath.Join(dataDir(), "bridges.txt")); err == nil && n > 0 {
 		log.Printf("%d bridge(s) from bridges.txt", n)
 	}
-	if err := m.reg.Refresh(context.Background()); err != nil {
+	// Reading the registry from the ledger is the slowest thing a client
+	// does at startup. With a usable list already in hand there is no reason
+	// to make the user wait for it: registrations are permanent and never
+	// expire (COMPATIBILITY.md), and whether a relay is actually there is
+	// decided by probes and gossip, so a list a few minutes old picks the
+	// same paths. The refresh runs behind the first circuit and the relays
+	// it adds are measured as they arrive.
+	// Only when the cached list is a real one. Bridges alone would satisfy a
+	// bare hop count while giving a first circuit no diversity at all — the
+	// same operator at entry and exit — so a genuinely first run still waits
+	// for the ledger. Every run after it starts at once.
+	if cached >= 8 {
+		go func() {
+			if err := m.reg.Refresh(context.Background()); err != nil {
+				log.Printf("registry: %v; using the cached list", err)
+				return
+			}
+			log.Printf("%d relays on the ledger", len(m.reg.All()))
+			m.measureRTT()
+		}()
+	} else if err := m.reg.Refresh(context.Background()); err != nil {
 		if len(m.reg.All()) == 0 {
 			log.Fatal("registry: ", err, " (no cached relay list and no bridge: run once where the ledger is reachable, or add a bridge line)")
 		}
