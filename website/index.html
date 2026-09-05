@@ -117,7 +117,7 @@
     <div class="cell"><h3 id="stCountries">—</h3><p>countries: <span id="stCcList">—</span></p></div>
     <div class="cell"><h3 id="stPrice">—</h3><p>XNO per MiB, the median price relays ask</p></div>
   </div>
-  <p style="margin-top:16px;font-size:14px" id="stNote">Figures come from the relays themselves, not from us: every relay answers the same summary, and this page asks several and shows the fullest answer.</p>
+  <p style="margin-top:16px;font-size:14px" id="stNote">Figures come from the relays themselves, not from us.</p>
   <script>
   (async function () {
     var g = function (id) { return document.getElementById(id); };
@@ -131,7 +131,6 @@
       g('stCountries').textContent = (j.countries || []).length;
       g('stCcList').textContent = (j.countries || []).join(' ') || 'none reporting';
       g('stPrice').textContent = j.priceXnoPerMiB;
-      g('stNote').textContent = 'Answered by ' + j.answered + ' of ' + j.asked + ' relays asked. A relay counts as answering when it has been heard from in the last three hours; registrations stay on the ledger for ever, so the two numbers differ.';
     } catch (e) {
       g('stNote').textContent = 'Live figures are unavailable right now. The network does not depend on this page.';
     }
