@@ -28,6 +28,17 @@
             android:defaultValue="" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Wallet">
+        <Preference
+            android:key="wallet_backup"
+            android:title="Back up wallet"
+            android:summary="Show the seed that holds your balance. Write it down: uninstalling this app deletes it, and no server keeps a copy." />
+        <Preference
+            android:key="wallet_restore"
+            android:title="Restore wallet"
+            android:summary="Put back a wallet from a seed you saved. The wallet on this phone is kept, not deleted." />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Payments">
     </PreferenceCategory>
 </PreferenceScreen>

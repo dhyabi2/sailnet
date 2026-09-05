@@ -1529,17 +1529,14 @@ func (streamConn) SetWriteDeadline(time.Time) error { return nil }
 func NewStreamConn(st *relay.Stream) net.Conn { return streamConn{st} }
 
 // EnsureWallet creates the wallet file if none exists and returns the key.
+// EnsureWallet returns this process's wallet, creating one only when there
+// is none. An existing wallet is always reused, whatever else has changed
+// around it: reinstalling an app, upgrading a relay or moving a data
+// directory never mints a new seed over the top of an old one. See
+// wallet.go for why that matters and how a person backs one up.
 func EnsureWallet() *nano.Key {
-	os.MkdirAll(dataDir(), 0o700)
-	wp := filepath.Join(dataDir(), "wallet.json")
-	if os.Getenv("SAIL_WALLET") != "" {
-		wp = os.Getenv("SAIL_WALLET")
-	}
-	if _, err := os.Stat(wp); err != nil {
-		seed, _ := nano.NewSeed()
-		k, _ := nano.DeriveKey(seed, 0)
-		data, _ := json.MarshalIndent(map[string]any{"seed": hex.EncodeToString(seed), "index": 0, "address": k.Address}, "", "  ")
-		os.WriteFile(wp, data, 0o600)
+	if _, _, err := CreateWalletIfMissing(); err != nil {
+		log.Fatalf("%v", err)
 	}
 	return loadKey()
 }

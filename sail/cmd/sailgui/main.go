@@ -372,6 +372,11 @@ func main() {
 		sysProxy,
 		exclBox, socks, nick, bridges,
 		save,
+		walletSection(w, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return mgr != nil
+		}),
 	)
 
 	top := container.NewVBox(

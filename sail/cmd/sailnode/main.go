@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -62,12 +62,14 @@ func main() {
 		client.RunFetch(os.Args[2:])
 	case "udptest":
 		client.RunUDPTest(os.Args[2:])
+	case "wallet":
+		runWallet(os.Args[2:])
 	case "upgrade":
 		runUpgrade(os.Args[2:])
 	case "earn":
 		runEarn(os.Args[2:])
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|upgrade ...")
 		os.Exit(2)
 	}
 }
@@ -577,17 +579,14 @@ func runEarn(args []string) {
 	if *rpcURL != "" || *rpcKey != "" {
 		nano.ConfigureRPC(*rpcURL, *rpcKey)
 	}
-	os.MkdirAll(client.DataDir(), 0o700)
-	wp := filepath.Join(client.DataDir(), "wallet.json")
-	if os.Getenv("SAIL_WALLET") != "" {
-		wp = os.Getenv("SAIL_WALLET")
-	}
-	if _, err := os.Stat(wp); err != nil {
-		seed, _ := nano.NewSeed()
-		k, _ := nano.DeriveKey(seed, 0)
-		data, _ := json.MarshalIndent(map[string]any{"seed": hex.EncodeToString(seed), "index": 0, "address": k.Address}, "", "  ")
-		os.WriteFile(wp, data, 0o600)
-		fmt.Println("created wallet", wp)
+	// An existing wallet is always reused. A reinstall, an upgrade or a
+	// second run of this command never mints a new seed over an operator's
+	// earnings; a wallet is created only when the file is genuinely absent.
+	if addr, created, err := client.CreateWalletIfMissing(); err != nil {
+		log.Fatalf("%v", err)
+	} else if created {
+		fmt.Println("created wallet", client.WalletPath(), addr)
+		fmt.Println("back it up now:  sailnode wallet export")
 	}
 	key := client.LoadKey()
 	nc := client.NewNano()

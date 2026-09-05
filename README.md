@@ -109,6 +109,40 @@ install. If you run one anyway, pass `--rpc http://127.0.0.1:7076`.
 
 Home PC behind NAT, no port forwarding: `sailnode earn --home --payout nano_…`.
 
+## Your wallet, and backing it up
+
+A relay's earnings and a client's balance live in one secret: a 32-byte seed
+in `wallet.json`. Nobody else has a copy. There is no account to recover and
+no support address that can give it back, because a network where somebody
+could return your money is a network where somebody could take it.
+
+So write it down.
+
+```
+sailnode wallet export      # show the address and the seed to keep
+sailnode wallet import SEED # put a saved wallet back (also accepts a file, or -)
+sailnode wallet where       # the path it is stored at
+```
+
+The apps have the same two actions. On Windows, macOS and Linux they are in
+Settings under **Wallet**: *Back up wallet* shows the seed and can save it to
+a file, *Restore wallet* takes it back. On Android they are in Settings under
+**Wallet** as well, and they matter most there: uninstalling an Android app
+deletes everything it stored, this wallet included.
+
+Two guarantees hold everywhere:
+
+- **An existing wallet is always reused.** Installing again, upgrading, or
+  starting a relay for the tenth time never mints a new seed over an old one.
+  A wallet file that is present but unreadable is left exactly as it is and
+  reported, never replaced.
+- **A restore keeps what it replaces.** The wallet that was there is renamed
+  beside the new one as `wallet.json.replaced-<time>`, so a seed typed from
+  the wrong piece of paper is not the end of the story.
+
+Restore with the tunnel disconnected. Circuits already open are prepaid out
+of the wallet you are replacing.
+
 ## Use the network
 
 ```

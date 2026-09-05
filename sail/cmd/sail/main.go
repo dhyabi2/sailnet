@@ -1,6 +1,6 @@
 // sail — wallet CLI for Sailnet (payments are plain XNO sends).
 //
-//	sail wallet new|show                 local wallet (~/.sail/wallet.json or $SAIL_WALLET)
+//	sail wallet new|show|export|import                 local wallet (~/.sail/wallet.json or $SAIL_WALLET)
 //	sail receive                         pocket receivable XNO
 //	sail send <to> <xno>                 plain XNO transfer
 //	sail pay <relay> <xno>               pay a relay; prints the payment tag (block hash)
@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/dhyabi2/sail/client"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -95,6 +96,26 @@ func main() {
 			fmt.Println(k.Address)
 			return
 		}
+		if len(args) > 0 && (args[0] == "export" || args[0] == "backup") {
+			seed, addr, err := client.ExportWallet()
+			die(err)
+			fmt.Println("address:", addr)
+			fmt.Println("seed:   ", seed)
+			fmt.Println("\nWrite the seed down. Anyone holding it holds the money, and no")
+			fmt.Println("one can recover it for you. Restore with: sail wallet import <seed>")
+			return
+		}
+		if len(args) > 0 && (args[0] == "import" || args[0] == "restore") {
+			text := strings.Join(args[1:], " ")
+			if b, err := os.ReadFile(strings.TrimSpace(text)); err == nil {
+				text = string(b)
+			}
+			addr, err := client.ImportWallet(text)
+			die(err)
+			fmt.Println("restored:", addr)
+			fmt.Println("stored at", client.WalletPath())
+			return
+		}
 		k, err := loadWallet()
 		die(err)
 		info, ok, err := c.AccountInfo(ctx, k.Address)
@@ -171,7 +192,7 @@ func main() {
 }
 
 const usage = `
-sail wallet new|show
+sail wallet new|show|export|import
 sail receive
 sail send <to> <xno>
 sail pay <relay> <xno>          (prints the payment tag = block hash)

@@ -518,3 +518,47 @@ func logHTTPRefused() {
 	httpRefusedAt = time.Now()
 	log.Printf("refused a plain HTTP (port 80) connection: only encrypted traffic leaves the exit")
 }
+
+// ExportWallet returns the seed to write down, as JSON:
+// {"ok":true,"seed":"...","address":"nano_..."} or {"ok":false,"error":"..."}.
+//
+// Uninstalling an Android app deletes everything it stored, this wallet
+// included, and no server anywhere keeps a copy of the seed. So the app has
+// to be able to show it, and to take it back.
+func ExportWallet(home string) string {
+	defer func() { recover() }()
+	os.Setenv("SAIL_HOME", home)
+	seed, addr, err := client.ExportWallet()
+	if err != nil {
+		return errJSON(err)
+	}
+	b, _ := json.Marshal(map[string]any{"ok": true, "seed": seed, "address": addr})
+	return string(b)
+}
+
+// ImportWallet restores a wallet from a backup and returns
+// {"ok":true,"address":"nano_..."} or {"ok":false,"error":"..."}.
+//
+// The tunnel is stopped first: circuits in flight are paid for out of the
+// wallet being replaced. The wallet that was there is kept beside the new
+// one, never deleted.
+func ImportWallet(home, text string) (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = errJSON(fmt.Errorf("could not restore that backup"))
+		}
+	}()
+	os.Setenv("SAIL_HOME", home)
+	Stop()
+	addr, err := client.ImportWallet(text)
+	if err != nil {
+		return errJSON(err)
+	}
+	b, _ := json.Marshal(map[string]any{"ok": true, "address": addr})
+	return string(b)
+}
+
+func errJSON(err error) string {
+	b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+	return string(b)
+}
