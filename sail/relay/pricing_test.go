@@ -74,3 +74,29 @@ func TestPricingNeverPanics(t *testing.T) {
 		t.Fatal("zero-value pricing gave rate 0")
 	}
 }
+
+// Demand moves the price, but the operator's own choice overrides it: when
+// the configured starting price changes, the saved one is abandoned.
+func TestConfiguredPriceChangeWins(t *testing.T) {
+	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	file := filepath.Join(t.TempDir(), "pricing.json")
+	p := &Pricing{File: file, Days: 10, Min: 1, Max: 200000, Now: func() time.Time { return now }}
+	p.Load(50000, 0)
+	now = now.Add(10 * 24 * time.Hour)
+	p.Tick(1 << 30)
+	now = now.Add(10 * 24 * time.Hour)
+	moved, _ := p.Tick(1 << 20) // usage fell: demand pushed the price down
+	if moved >= 50000 {
+		t.Fatalf("expected demand to lower the price, got %d", moved)
+	}
+	// Same configured price: the demand-adjusted one is kept.
+	again := (&Pricing{File: file, Days: 10, Min: 1, Max: 200000, Now: func() time.Time { return now }}).Load(50000, 0)
+	if again != moved {
+		t.Fatalf("restart with the same price: want %d, got %d", moved, again)
+	}
+	// Changed configured price: it wins.
+	changed := (&Pricing{File: file, Days: 10, Min: 1, Max: 2000000, Now: func() time.Time { return now }}).Load(500000, 0)
+	if changed != 500000 {
+		t.Fatalf("operator raised the price to 500000, got %d", changed)
+	}
+}

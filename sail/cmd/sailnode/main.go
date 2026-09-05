@@ -87,7 +87,7 @@ func runRelay(args []string) {
 	host := fs.String("host", "", "TLS name the relay presents (a real domain pointing here is best; default: a plausible generated name)")
 	cc := fs.String("cc", "XX", "country code")
 	asn := fs.Uint("asn", 0, "autonomous system number")
-	rate := fs.String("rate", "0.000005", "starting price, XNO per MiB (about $0.002 per GB)")
+	rate := fs.String("rate", "0.00005", "starting price, XNO per MiB (about $0.02 per GB: above a cheap VPS's own bandwidth cost, and still far under what a commercial VPN charges a light user)")
 	reprice := fs.Bool("reprice", true, "adjust the price to demand every --reprice-days: down 10% when usage falls, up 3% when it grows, never above four times the starting price")
 	repriceDays := fs.Int("reprice-days", 10, "length of a repricing window in days")
 	exit := fs.Bool("exit", true, "offer exit service")

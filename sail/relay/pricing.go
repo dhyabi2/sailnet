@@ -30,6 +30,7 @@ type Pricing struct {
 
 type pricingState struct {
 	Rate        uint32    `json:"rate"`
+	Start       uint32    `json:"start"` // the price the operator configured; a change to it resets the price
 	WindowStart time.Time `json:"windowStart"`
 	StartBytes  int64     `json:"startBytes"`
 	PrevBytes   int64     `json:"prevBytes"` // relayed in the previous full window
@@ -47,16 +48,19 @@ func (p *Pricing) Load(rate uint32, bytesNow int64) uint32 {
 	if p.File != "" {
 		if data, err := os.ReadFile(p.File); err == nil {
 			var st pricingState
-			if json.Unmarshal(data, &st) == nil && st.Rate > 0 && !st.WindowStart.IsZero() {
+			if json.Unmarshal(data, &st) == nil && st.Rate > 0 && !st.WindowStart.IsZero() && st.Start == rate {
 				p.st = st
 				// Counters restart with the process: measure from here, and
 				// let the current window run its remaining time.
 				p.st.StartBytes = bytesNow
 				return p.clamp(p.st.Rate)
 			}
+			// st.Start != rate: the operator changed the configured price.
+			// Their choice wins over anything demand did to the old one, and
+			// a fresh window starts from it.
 		}
 	}
-	p.st = pricingState{Rate: p.clamp(rate), WindowStart: p.Now(), StartBytes: bytesNow}
+	p.st = pricingState{Rate: p.clamp(rate), Start: rate, WindowStart: p.Now(), StartBytes: bytesNow}
 	p.save()
 	return p.st.Rate
 }
