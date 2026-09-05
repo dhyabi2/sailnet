@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,35 @@ func TestPriceCapNeverEmptiesTheNetwork(t *testing.T) {
 	}
 	if len(path) != 3 {
 		t.Fatalf("path length %d", len(path))
+	}
+}
+
+// A bridge is an entry the user chose out of band. Stale registrations that
+// drag the market price down must not make the client refuse to pay it, which
+// is what stopped new clients connecting when we raised our own price.
+func TestBridgeIsNotVetoedByTheMarketPrice(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	m := &manager{reg: &relay.Registry{}, rtt: map[string]time.Duration{}, key: EnsureWallet(), nc: newNano()}
+	m.opts.hops = 3
+	m.opts.anchor = big.NewInt(1)
+	// A balance on record, so the price gate is what the test exercises and
+	// not the wallet check behind it.
+	chainState(m.key).Set([32]byte{1}, big.NewInt(1_000_000_000), [32]byte{2}, true)
+	m.reg.Add(&relay.RelayInfo{Account: "bridge1", MinRate: 500000, Unlisted: true, Flags: token.FlagPublic | token.FlagExit,
+		Country: "DE", ASN: 1, Desc: relay.Descriptor{IP: net.IPv4(10, 0, 0, 1), Port: 443}})
+	for i := 0; i < 40; i++ {
+		m.reg.Add(&relay.RelayInfo{Account: fmt.Sprintf("stale%d", i), MinRate: 50000, Flags: token.FlagPublic | token.FlagExit,
+			Country: "XX", ASN: 9999, Desc: relay.Descriptor{IP: net.IPv4(203, 0, 113, byte(i)), Port: 443}})
+	}
+	if _, err := m.choosePath(); err != nil {
+		t.Fatalf("choosePath: %v", err)
+	}
+	bridge := m.reg.Get("bridge1")
+	if bridge == nil {
+		t.Fatal("bridge missing from the registry")
+	}
+	err := m.anchorTo(bridge)
+	if err != nil && strings.Contains(err.Error(), "above your cap") {
+		t.Fatalf("the bridge the user configured was refused on price: %v", err)
 	}
 }

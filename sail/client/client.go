@@ -279,10 +279,13 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			}
 		}
 	}
+	m.mu2.Lock()
+	m.effCap = cap // the payment step refuses at the same price this one accepted, never a fresher, stricter one
+	m.mu2.Unlock()
 	usable := candidates[:0:0]
 	for _, r := range candidates {
-		if r.MinRate <= cap {
-			usable = append(usable, r)
+		if r.Unlisted || r.MinRate <= cap {
+			usable = append(usable, r) // a bridge was chosen by the user out of band: the market's price cap does not veto it
 		}
 	}
 	if len(usable) < m.opts.hops {
@@ -491,7 +494,18 @@ func (e errors) Error() string { return string(e) }
 // the circuit tag, and the signed block is handed to the relay so it can
 // publish and verify it without the client touching any RPC.
 func (m *manager) anchorTo(entry *relay.RelayInfo) error {
-	if _, cap := m.priceCap(m.reg.All()); entry.MinRate > cap {
+	// The cap the path was chosen with, not a fresh one: recomputing it here
+	// over every ledger record let stale cheap registrations veto a payment
+	// to a relay the client had just decided to use, which stopped new
+	// clients connecting at all. A bridge is exempt: the user chose it out of
+	// band, so the market's opinion of its price is not a reason to refuse.
+	m.mu2.Lock()
+	cap := m.effCap
+	m.mu2.Unlock()
+	if cap == 0 {
+		_, cap = m.priceCap(m.reg.All())
+	}
+	if !entry.Unlisted && entry.MinRate > cap {
 		return fmt.Errorf("entry %s wants %s XNO/MiB, above your cap", entry.Account, token.FormatXNO(token.RateToRaw(entry.MinRate)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
