@@ -31,18 +31,18 @@ type FaucetReply struct {
 // transport, which carries the request to its entry relay). A refusal comes
 // back as an error that names the amount to send by hand.
 func ClaimFaucet(ctx context.Context, hc *http.Client, account string) (*FaucetReply, error) {
-	return claimFaucet(ctx, hc, account, false)
+	return claimFaucet(ctx, hc, account, "trial")
 }
 
 // ClaimFaucetNode is ClaimFaucet for a relay: it asks for four claims'
 // worth in one go (0.002 XNO), the float a new relay needs to open pools
 // to its peers before its own earnings arrive.
 func ClaimFaucetNode(ctx context.Context, hc *http.Client, account string) (*FaucetReply, error) {
-	return claimFaucet(ctx, hc, account, true)
+	return claimFaucet(ctx, hc, account, "node")
 }
 
-func claimFaucet(ctx context.Context, hc *http.Client, account string, node bool) (*FaucetReply, error) {
-	body, _ := json.Marshal(map[string]any{"action": "faucet", "account": account, "node": node})
+func claimFaucet(ctx context.Context, hc *http.Client, account string, kind string) (*FaucetReply, error) {
+	body, _ := json.Marshal(map[string]any{"action": "faucet", "account": account, "node": kind == "node", "kind": kind})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FaucetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

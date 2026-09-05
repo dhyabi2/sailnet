@@ -96,6 +96,9 @@ func runRelay(args []string) {
 	faucetWallet := fs.String("faucet-wallet", "", "serve a faucet at /faucet paying the registration amount from this wallet file (empty = no faucet)")
 	faucetAmount := fs.String("faucet-amount", "0.0005", "XNO per faucet claim (the registration amount: one anchor)")
 	faucetPerIP := fs.Int("faucet-per-ip", 10, "faucet claims per public IP per day")
+	trialWallet := fs.String("trial-wallet", "", "wallet file for the first-run trial grant, paid to a client opening an app for the first time (empty = no trial grant)")
+	trialAmount := fs.String("trial-amount", "0.1", "XNO per first-run trial grant")
+	trialPerIP := fs.Int("trial-per-ip", 3, "trial grants per public IP")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
@@ -379,6 +382,18 @@ func runRelay(args []string) {
 		}
 		s.Faucet = &relay.Faucet{Key: fk, Nano: nc, State: client.ChainState(fk), Amount: amt, PerIP: *faucetPerIP, Secret: os.Getenv("FAUCET_SECRET"), File: filepath.Join(client.DataDir(), "faucet-state.json")}
 		log.Printf("faucet: %s XNO per claim, %d per IP per day, from %s", *faucetAmount, *faucetPerIP, client.Short(fk.Address))
+		if *trialWallet != "" {
+			tk, err := client.LoadKeyFrom(*trialWallet)
+			if err != nil {
+				log.Fatalf("--trial-wallet: %v", err)
+			}
+			tamt, err := token.ParseXNO(*trialAmount)
+			if err != nil || tamt.Sign() <= 0 {
+				log.Fatalf("bad --trial-amount %q", *trialAmount)
+			}
+			s.Faucet.TrialKey, s.Faucet.TrialState, s.Faucet.TrialAmount, s.Faucet.TrialPerIP = tk, client.ChainState(tk), tamt, *trialPerIP
+			log.Printf("trial grant: %s XNO to a first-run app, %d per IP, from %s", *trialAmount, *trialPerIP, client.Short(tk.Address))
+		}
 	}
 	log.Printf("sailnode relay %s on %s (ip %s, cc %s, asn %d, rate %s XNO/MiB, exit=%v, certfp %x)", key.Address, *listen, *ip, *cc, *asn, *rate, *exit, fp)
 	go func() { // a restart is announced: clients move to another entry before this process exits

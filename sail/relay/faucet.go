@@ -29,8 +29,17 @@ type Faucet struct {
 	State  *nano.ChainState
 	Amount *big.Int
 	PerIP  int
-	Secret string // header X-Faucet-Secret from the forwarder; proves X-Forwarded-For
-	File   string // counters survive restarts
+
+	// A separate, larger grant so that someone opening the app for the first
+	// time can simply use the network instead of having to buy XNO first. It
+	// has its own wallet, so the money for trials can run out without taking
+	// the registration grant with it, and its own per-address limit.
+	TrialKey    *nano.Key
+	TrialState  *nano.ChainState
+	TrialAmount *big.Int
+	TrialPerIP  int
+	Secret      string // header X-Faucet-Secret from the forwarder; proves X-Forwarded-For
+	File        string // counters survive restarts
 
 	mu   sync.Mutex
 	once sync.Once
@@ -114,6 +123,7 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Account string `json:"account"`
 		Node    bool   `json:"node"` // a relay asking for its float: four claims' worth, so it can open pools at once
+		Kind    string `json:"kind"` // "trial" for a first-run client; anything else is the registration grant
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		answer(400, faucetReply{Error: "bad request body"})
@@ -140,25 +150,34 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		answer(429, faucetReply{Error: "this wallet already received the registration amount today", RetryAfterS: int(24*time.Hour/time.Second) - int(time.Since(time.Unix(last, 0)).Seconds())})
 		return
 	}
+	trial := req.Kind == "trial" && f.TrialKey != nil && f.TrialAmount != nil
 	pay := new(big.Int).Set(f.Amount)
-	claims := 1
-	if req.Node {
+	claims, limit, key, ipKey := 1, f.PerIP, f.Key, ip
+	state := f.State
+	if trial {
+		pay = new(big.Int).Set(f.TrialAmount)
+		limit, key, ipKey, state = f.TrialPerIP, f.TrialKey, "trial|"+ip, f.TrialState
+	} else if req.Node {
 		claims = 4
 		pay.Mul(pay, big.NewInt(4))
 	}
-	if f.st.IPs[ip]+claims > f.PerIP {
+	if f.st.IPs[ipKey]+claims > limit {
 		f.mu.Unlock()
-		answer(429, faucetReply{Error: "this network address has used its " + itoa(f.PerIP) + " faucet claims for today; send the registration amount yourself or try tomorrow", RetryAfterS: secondsToMidnight()})
+		if trial {
+			answer(429, faucetReply{Amount: token.FormatXNO(pay), Error: "this network address has had its " + itoa(limit) + " free trials; fund the wallet to keep going"})
+			return
+		}
+		answer(429, faucetReply{Error: "this network address has used its " + itoa(limit) + " faucet claims for today; send the registration amount yourself or try tomorrow", RetryAfterS: secondsToMidnight()})
 		return
 	}
-	f.st.IPs[ip] += claims // counted even if the send fails: no free retries against a dry faucet
+	f.st.IPs[ipKey] += claims // counted even if the send fails: no free retries against a dry faucet
 	f.st.Accounts[acct] = time.Now().Unix()
 	f.saveLocked()
 	f.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	a := &nano.Account{Key: f.Key, Client: f.Nano, State: f.State}
+	a := &nano.Account{Key: key, Client: f.Nano, State: state}
 	a.ReceiveAll(ctx)
 	h, err := a.Send(ctx, acct, pay, nil)
 	if err != nil {
@@ -168,7 +187,7 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("faucet: send failed: %v", err)
 		f.mu.Lock()
-		f.st.IPs[ip] -= claims
+		f.st.IPs[ipKey] -= claims
 		delete(f.st.Accounts, acct)
 		f.saveLocked()
 		f.mu.Unlock()
