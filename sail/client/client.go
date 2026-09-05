@@ -1369,12 +1369,53 @@ func (m *manager) pocket() {
 	} else if err != nil {
 		log.Printf("pocket: %v", err)
 	}
-	if _, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
+	if info, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
 		m.directBootstrap = false // chain state is cached now: no more direct ledger calls
+		if cacheAccountInfo(chainState(m.key), info) {
+			log.Printf("wallet state read from the ledger")
+		}
 		if _, bal, _, _, cached := chainState(m.key).Get(); cached {
 			log.Printf("wallet balance %s XNO", token.FormatXNO(bal))
 		}
 	}
+}
+
+// cacheAccountInfo copies what the ledger reports about a wallet into its
+// cached chain state, and reports whether it did.
+//
+// The balance every decision is made from is read out of that cache, and
+// until now only sending or pocketing a block ever wrote to it. A wallet
+// restored from a seed onto a new device has no pending block to pocket —
+// its money was received long ago — so nothing could tell the client it had
+// any, and it waited forever for a payment that had already arrived.
+//
+// It writes only into an empty cache. A local state can legitimately be
+// ahead of what the ledger reports, when a block was sent moments ago and is
+// not yet confirmed; overwriting that with an older frontier would build the
+// next block on a stale one.
+func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
+	if st == nil {
+		return false
+	}
+	if _, _, _, _, cached := st.Get(); cached {
+		return false
+	}
+	front, err := hex.DecodeString(strings.TrimSpace(info.Frontier))
+	if err != nil || len(front) != 32 {
+		return false
+	}
+	bal, ok := new(big.Int).SetString(strings.TrimSpace(info.Balance), 10)
+	if !ok || bal.Sign() < 0 {
+		return false
+	}
+	rep, err := nano.AddressToPubkey(info.Representative)
+	if err != nil {
+		return false
+	}
+	var f [32]byte
+	copy(f[:], front)
+	st.Set(f, bal, rep, true)
+	return true
 }
 
 // cliBridges holds --bridge lines until the registry exists.
