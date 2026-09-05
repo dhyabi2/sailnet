@@ -239,12 +239,47 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		}
 	}
 	median, cap := m.priceCap(priced)
-	usable := all[:0:0]
+	// Everything the client would use if price were no object.
+	candidates := all[:0:0]
 	for _, r := range all {
 		if requireAlive && !alive(r) {
 			continue
 		}
-		if m.scoreOf(r.Account) >= 0.3 && !m.opts.avoid[r.Account] && !m.skip[r.Account] && r.MinRate <= cap {
+		if m.scoreOf(r.Account) >= 0.3 && !m.opts.avoid[r.Account] && !m.skip[r.Account] {
+			candidates = append(candidates, r)
+		}
+	}
+	// A price cap may never empty the network. Registrations are cheap and
+	// permanent, so a pile of stale or forged records naming a low price
+	// drags the median down until every relay that is really there looks
+	// expensive, and a client that trusted the cap would refuse to connect
+	// at all. When the cap admits fewer relays than a circuit needs, it is
+	// widened to the cheapest ones that exist: still a cap, still ordered by
+	// price, but never a reason to have no network (RULES.md rule 4).
+	if m.opts.rate == 0 {
+		var rates []int
+		for _, r := range candidates {
+			rates = append(rates, int(r.MinRate))
+		}
+		sort.Ints(rates)
+		if need := m.opts.hops; len(rates) >= need {
+			admits := 0
+			for _, x := range rates {
+				if uint32(x) <= cap {
+					admits++
+				}
+			}
+			if admits < need {
+				if widened := uint32(rates[need-1]); widened > cap {
+					log.Printf("price cap %s XNO/MiB would leave %d relays, fewer than the %d a circuit needs; using %s instead", token.FormatXNO(token.RateToRaw(cap)), admits, need, token.FormatXNO(token.RateToRaw(widened)))
+					cap = widened
+				}
+			}
+		}
+	}
+	usable := candidates[:0:0]
+	for _, r := range candidates {
+		if r.MinRate <= cap {
 			usable = append(usable, r)
 		}
 	}

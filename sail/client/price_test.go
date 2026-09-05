@@ -68,3 +68,32 @@ func TestFakeCheapRegistrationsCannotPriceOutRealRelays(t *testing.T) {
 		t.Fatal("this test proves nothing: the median over every record did not exclude the real price")
 	}
 }
+
+// A price cap must never leave a client with no network. Stale records
+// naming a low price drag the median down; when the cap that follows would
+// admit fewer relays than a circuit needs, it widens to the cheapest relays
+// that actually exist.
+func TestPriceCapNeverEmptiesTheNetwork(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	m := &manager{reg: &relay.Registry{}, rtt: map[string]time.Duration{}, key: EnsureWallet()}
+	m.opts.hops = 3
+	m.opts.anchor = big.NewInt(1)
+	for i := 0; i < 4; i++ { // the relays that are really there, at the market price
+		m.reg.Add(&relay.RelayInfo{Account: fmt.Sprintf("live%d", i), MinRate: 500000, Flags: token.FlagPublic | token.FlagExit,
+			Country: fmt.Sprintf("C%d", i), ASN: uint32(i + 1), Desc: relay.Descriptor{IP: net.IPv4(10, 0, 0, byte(i)), Port: 443}})
+	}
+	for i := 0; i < 40; i++ { // stale records at a tenth of it, none of them reachable
+		m.reg.Add(&relay.RelayInfo{Account: fmt.Sprintf("stale%d", i), MinRate: 50000, Flags: token.FlagPublic | token.FlagExit,
+			Country: "XX", ASN: 9999, Desc: relay.Descriptor{IP: net.IPv4(203, 0, 113, byte(i)), Port: 443}})
+	}
+	if _, cap := m.priceCap(m.reg.All()); cap >= 500000 {
+		t.Fatal("this test proves nothing: the plain cap already admits the live price")
+	}
+	path, err := m.choosePath()
+	if err != nil {
+		t.Fatalf("a client with four reachable relays must still get a path: %v", err)
+	}
+	if len(path) != 3 {
+		t.Fatalf("path length %d", len(path))
+	}
+}

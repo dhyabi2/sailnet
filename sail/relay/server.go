@@ -1289,6 +1289,7 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			if len(out) == 0 {
 				continue
 			}
+			s.Metrics.BytesRelayed.Add(int64(len(out)) * wire.CellSize)                                              // downloads count too: without this a relay that carries only replies looks idle
 			if rem := s.Quota.Consume(c.tag, int64(len(out))*wire.CellSize); rem < 0 && !s.overdraftOK(c.tag, rem) { // downloads are paid for, not just uploads
 				c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
 				return
