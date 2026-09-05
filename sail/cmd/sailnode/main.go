@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -62,10 +62,12 @@ func main() {
 		client.RunFetch(os.Args[2:])
 	case "udptest":
 		client.RunUDPTest(os.Args[2:])
+	case "upgrade":
+		runUpgrade(os.Args[2:])
 	case "earn":
 		runEarn(os.Args[2:])
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|upgrade ...")
 		os.Exit(2)
 	}
 }
@@ -330,8 +332,12 @@ func runRelay(args []string) {
 			if _, err := nano.AddressToPubkey(*payout); err != nil || *payout == key.Address {
 				log.Fatal("--payout: not a valid address, or this node's own wallet")
 			}
-			log.Printf("payout: earnings above %s XNO go to %s every hour", *payoutKeep, client.Short(*payout))
-			go func() { time.Sleep(5 * time.Minute); s.RunPayout(*payout, keep, time.Hour) }()
+			log.Printf("payout: earnings above %s XNO go to %s, checked every 15 minutes", *payoutKeep, client.Short(*payout))
+			// Two minutes after start, then every fifteen: a node that is
+			// restarted often (an upgrade, a reboot) must not keep losing the
+			// hour it had already waited, and an operator should not have to
+			// wait an hour to see that payouts work at all.
+			go func() { time.Sleep(2 * time.Minute); s.RunPayout(*payout, keep, 15*time.Minute) }()
 		}
 	}
 	go func() { // gossip: learn peers from peers, so the network knows itself without the ledger
