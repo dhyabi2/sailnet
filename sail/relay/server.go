@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -289,6 +290,7 @@ func (s *Server) Handler() http.Handler {
 	if s.Faucet != nil {
 		mux.Handle("/faucet", s.Faucet)
 	}
+	mux.HandleFunc("/stats", s.serveStats)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// The tunnel looks like a WebSocket upgrade. Only a request whose path
 		// carries today's token (and the bridge secret, if any) is a tunnel;
@@ -965,6 +967,66 @@ func (s *Server) handleResume(cell *wire.Cell, in *connWriter) *circuit {
 	c.mu.Unlock()
 	c.sealMu.Unlock()
 	return c
+}
+
+// serveStats answers a public, coarse summary of what this relay sees: how
+// many relays are registered, how many it has evidence are actually there,
+// what the market charges, and what this node has carried. Any relay can
+// answer it, so a page that shows the network's size does not depend on us
+// (RULES.md rule 2). Nothing here is per-user: no addresses, no circuits, no
+// destinations, no timing, only counters this node already keeps.
+func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if s.Registry == nil {
+		w.WriteHeader(503)
+		w.Write([]byte(`{"error":"no registry"}`))
+		return
+	}
+	all := s.Registry.All()
+	countries := map[string]int{}
+	var rates []int
+	alive, exits := 0, 0
+	for _, rel := range all {
+		if rel.Unlisted {
+			continue // bridges are not published, by design
+		}
+		if rel.MinRate > 0 {
+			rates = append(rates, int(rel.MinRate))
+		}
+		live := time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour
+		if live {
+			alive++
+			if rel.Country != "" {
+				countries[strings.ToUpper(rel.Country)]++
+			}
+			if rel.Flags&token.FlagExit != 0 {
+				exits++
+			}
+		}
+	}
+	sort.Ints(rates)
+	median := 0
+	if len(rates) > 0 {
+		median = rates[len(rates)/2]
+	}
+	cc := make([]string, 0, len(countries))
+	for k := range countries {
+		cc = append(cc, k)
+	}
+	sort.Strings(cc)
+	json.NewEncoder(w).Encode(map[string]any{
+		"registered":       len(all),
+		"alive":            alive,
+		"exits":            exits,
+		"countries":        cc,
+		"priceXnoPerMiB":   formatXNO(token.RateToRaw(uint32(median))),
+		"relayedMiB":       s.Metrics.BytesRelayed.Load() >> 20,
+		"circuits":         s.Metrics.Circuits.Load(),
+		"uptimeSeconds":    int(time.Since(s.Metrics.Started).Seconds()),
+		"reportedBy":       s.Key.Address,
+		"aliveWindowHours": 3,
+	})
 }
 
 // buffered reports how many bytes a connection has already read into its

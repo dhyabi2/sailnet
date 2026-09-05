@@ -70,7 +70,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout nano_…` | forward earnings to this wallet every hour |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
-| `--payout-keep 0.02` | XNO kept on the node as float (default 0.02) |
+| `--payout-keep 0.002` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded (default 0.002) |
 | `--rate 0.000005` | starting price in XNO per MiB (about $0.002 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
@@ -78,6 +78,24 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--exit=false` | middle relay only |
 | `--rpc http://127.0.0.1:7076` | Nano RPC endpoint(s), comma-separated, tried in order; default Sailnet's endpoint, then public nodes |
 | `--rpc-key …` | API key, only if `--rpc` is rpc.nano.to |
+
+## Upgrading
+
+```
+sailnode upgrade            # fetch the newest published build, verify it, install it, restart
+sailnode upgrade -check     # say what is installed and what is published, change nothing
+sailnode upgrade -restart=false   # install now, restart when you choose
+```
+
+The download is checked against the SHA-256 published beside it and nothing is
+replaced until it matches, so a failed or tampered download leaves the running
+node untouched. The previous binary is kept next to the new one as
+`sailnode.previous`. Your wallet, your quota log and everything else in
+`SAIL_HOME` are never read or written by an upgrade.
+
+Upgrading is optional. A relay that never upgrades keeps working, keeps being
+chosen for circuits, and keeps earning: the network is built so that no
+release can require an operator to act.
 
 **Nano RPC.** Clients and relays read the ledger through
 `https://www.sailnet.space/node/api` by default, Sailnet's own endpoint,
