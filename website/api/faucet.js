@@ -1,11 +1,17 @@
 // Sailnet faucet endpoint: https://www.sailnet.space/api/faucet
 //
 // POST {"account":"nano_..."} → {"ok":true,"hash":...,"amount":"0.0005"}
-// The faucet itself runs on a Sailnet relay (FAUCET_UPSTREAM, a Vercel
-// environment variable) and pays the registration amount: enough for a
-// first circuit or a relay's REGISTER block. This function forwards the
-// request with the caller's public IP under a shared secret, so the relay
-// can hold the limit of 10 claims per IP per day.
+// The faucet itself runs on Sailnet relays (FAUCET_UPSTREAM, a Vercel
+// environment variable, one host or several separated by commas) and pays
+// the registration amount: enough for a first circuit or a relay's REGISTER
+// block. This function forwards the request with the caller's public IP
+// under a shared secret, so the relay can hold the per-IP daily limit.
+//
+// With more than one host it tries them in order and moves on when a faucet
+// is unreachable or broken — including when its wallet has run dry, which is
+// a 503. It does not move on when a faucet answers 4xx: a refusal is a real
+// answer, and retrying it elsewhere would quietly double the daily limit
+// every rate limit is there to hold.
 //
 // When the faucet cannot pay, the answer is a 503 that names the amount the
 // wallet needs, so an app can show "send 0.0005 XNO to <address>" instead
@@ -16,11 +22,11 @@ import { URL } from "url";
 
 const AMOUNT = process.env.FAUCET_AMOUNT || "0.0005";
 
-function forward(body, ip) {
+function forward(body, ip, host) {
   return new Promise((resolve) => {
     let upstream;
     try {
-      upstream = new URL("/faucet", process.env.FAUCET_UPSTREAM);
+      upstream = new URL("/faucet", host);
     } catch (e) {
       return resolve({ status: 503, body: { ok: false, amount: AMOUNT, error: "faucet not configured (FAUCET_UPSTREAM)" } });
     }
@@ -71,6 +77,14 @@ export default async function handler(req, res) {
   if (!body) {
     return res.status(400).json({ ok: false, amount: AMOUNT, error: "missing body" });
   }
-  const out = await forward(body, ip);
+  const hosts = (process.env.FAUCET_UPSTREAM || "").split(",").map((h) => h.trim()).filter(Boolean);
+  if (hosts.length === 0) {
+    return res.status(503).json({ ok: false, amount: AMOUNT, error: "faucet not configured (FAUCET_UPSTREAM)" });
+  }
+  let out;
+  for (const host of hosts) {
+    out = await forward(body, ip, host);
+    if (out.status < 500) break; // an answer, including a refusal
+  }
   res.status(out.status).json(out.body);
 }
