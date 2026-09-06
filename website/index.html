@@ -119,21 +119,65 @@
   </div>
   <p style="margin-top:16px;font-size:14px" id="stNote">Figures come from the relays themselves, not from us.</p>
   <script>
-  (async function () {
+  // The figures refresh themselves while the page is open, and never blank
+  // out: if a poll fails the numbers already on screen stay, and the line
+  // underneath says how old they are. The network is not affected either
+  // way — this is a window onto it, not a part of it.
+  (function () {
     var g = function (id) { return document.getElementById(id); };
-    try {
-      var r = await fetch('/api/stats', { cache: 'no-store' });
-      var j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'unavailable');
-      g('stAlive').textContent = j.alive;
-      g('stReg').textContent = j.registered;
-      g('stExits').textContent = j.exits;
-      g('stCountries').textContent = (j.countries || []).length;
-      g('stCcList').textContent = (j.countries || []).join(' ') || 'none reporting';
-      g('stPrice').textContent = j.priceXnoPerMiB;
-    } catch (e) {
-      g('stNote').textContent = 'Live figures are unavailable right now. The network does not depend on this page.';
+    var EVERY = 45000, lastGood = null, failures = 0;
+
+    function ago(iso) {
+      var s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+      if (s < 60) return s + " seconds ago";
+      var m = Math.round(s / 60);
+      if (m < 60) return m + (m === 1 ? " minute ago" : " minutes ago");
+      var h = Math.round(m / 60);
+      return h + (h === 1 ? " hour ago" : " hours ago");
     }
+
+    function paint(j) {
+      g("stAlive").textContent = j.alive;
+      g("stReg").textContent = j.registered;
+      g("stExits").textContent = j.exits;
+      g("stCountries").textContent = (j.countries || []).length;
+      g("stCcList").textContent = (j.countries || []).join(" ") || "none reporting";
+      g("stPrice").textContent = j.priceXnoPerMiB;
+      var when = j.asOf ? ", measured " + ago(j.asOf) : "";
+      g("stNote").textContent = j.stale
+        ? "Relays are not answering our page just now; these are the last figures we have" + when + "."
+        : "Figures come from the relays themselves, not from us" + when + ".";
+    }
+
+    async function poll() {
+      try {
+        var r = await fetch("/api/stats", { cache: "no-store" });
+        var j = await r.json();
+        if (!j || !j.ok) throw new Error(j && j.error ? j.error : "unavailable");
+        lastGood = j;
+        failures = 0;
+        paint(j);
+      } catch (e) {
+        failures++;
+        if (lastGood) {
+          paint(Object.assign({}, lastGood, { stale: true }));
+        } else if (failures === 1) {
+          g("stNote").textContent = "Live figures are unavailable right now. The network does not depend on this page.";
+        }
+      }
+    }
+
+    poll();
+    var timer = setInterval(poll, EVERY);
+    // Don't poll a page nobody is looking at; catch up when they come back.
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        clearInterval(timer);
+      } else {
+        poll();
+        timer = setInterval(poll, EVERY);
+      }
+    });
   })();
   </script>
 </div></section>

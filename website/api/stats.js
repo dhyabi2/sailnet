@@ -1,19 +1,56 @@
 // Sailnet network stats: https://www.sailnet.space/api/stats
 //
 // Every relay answers a coarse summary of what it sees on the ledger at
-// /stats. This function asks a few of them and returns the first answer, so
-// the page shows the network's size without anyone having to trust a number
-// we keep ourselves. The relays to ask come from STATS_RELAYS (a Vercel
-// environment variable, comma-separated https://host); if it is unset or all
-// of them are unreachable, the page simply says the figures are unavailable.
+// /stats. This function asks several of them at once and merges the answers,
+// so the page shows the network's size without anyone having to trust a
+// number we keep ourselves. The relays to ask come from STATS_RELAYS (a
+// Vercel environment variable, comma-separated https://host).
+//
+// Robustness is the point of most of what follows. The figures are a nicety
+// on a marketing page — the network does not depend on them — so this
+// endpoint should never be the reason the page looks broken:
+//
+//   - answers are cached in the instance and in /tmp, and served from the
+//     CDN with stale-while-revalidate, which is the layer that survives a
+//     cold start or a redeploy;
+//   - when no relay answers, the last good figures are returned with
+//     stale:true and the time they were taken, instead of an error;
+//   - only when nothing has ever been cached does it admit it has nothing.
 
 import https from "https";
+import fs from "fs";
+import path from "path";
+import os from "os";
 import { URL } from "url";
 
-const CACHE_SECONDS = 60;
-let cached = null;
-let cachedAt = 0;
+const FRESH_MS = 60_000; // how long an answer is considered current
+const ASK_TIMEOUT_MS = 6_000; // a slow relay must not hold up the page
+const DISK = path.join(os.tmpdir(), "sailnet-stats.json");
 
+let memory = null; // { at: epoch_ms, data: {...} }
+
+function loadCache() {
+  if (memory) return memory;
+  try {
+    const raw = JSON.parse(fs.readFileSync(DISK, "utf8"));
+    if (raw && raw.at && raw.data) memory = raw;
+  } catch (e) {
+    /* no cache yet, or unreadable: ask the relays */
+  }
+  return memory;
+}
+
+function saveCache(data) {
+  memory = { at: Date.now(), data };
+  try {
+    fs.writeFileSync(DISK, JSON.stringify(memory));
+  } catch (e) {
+    /* a read-only or full /tmp costs us the cross-invocation cache, nothing more */
+  }
+  return memory;
+}
+
+// ask one relay for its view of the network.
 function ask(base) {
   return new Promise((resolve) => {
     let u;
@@ -31,12 +68,17 @@ function ask(base) {
         // A relay serves a certificate for its decoy hostname, not for its
         // address; the figures here are public and unsigned either way.
         rejectUnauthorized: false,
-        servername: u.hostname,
-        timeout: 8000,
+        // An SNI name may not be an IP address (RFC 6066), and relays are
+        // usually addressed by one; sending it anyway is deprecated in Node.
+        servername: /^[0-9.]+$|:/.test(u.hostname) ? undefined : u.hostname,
+        timeout: ASK_TIMEOUT_MS,
       },
       (res) => {
         let data = "";
-        res.on("data", (c) => (data += c));
+        res.on("data", (c) => {
+          data += c;
+          if (data.length > 1 << 20) req.destroy(); // a relay cannot flood this function
+        });
         res.on("end", () => {
           try {
             const j = JSON.parse(data);
@@ -53,38 +95,61 @@ function ask(base) {
   });
 }
 
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60");
-  if (req.method === "OPTIONS") return res.status(204).end();
-
-  if (cached && Date.now() - cachedAt < CACHE_SECONDS * 1000) {
-    return res.status(200).json(cached);
-  }
-  const relays = (process.env.STATS_RELAYS || "").split(",").filter(Boolean);
-  if (relays.length === 0) {
-    return res.status(503).json({ ok: false, error: "no relays configured to ask" });
-  }
-  const answers = (await Promise.all(relays.map(ask))).filter(Boolean);
-  if (answers.length === 0) {
-    return res.status(503).json({ ok: false, error: "no relay answered" });
-  }
-  // Take the widest view: relays disagree only by how much gossip each has
-  // seen, and the fullest picture is the most useful one.
+// merge takes the widest view. Relays disagree only by how much gossip each
+// has seen, and the fullest picture is the most useful one; traffic counters
+// are per-relay, so those add up.
+function merge(answers, asked) {
   const best = answers.reduce((a, b) => (b.alive > a.alive ? b : a));
-  const out = {
+  const countries = [...new Set(answers.flatMap((a) => a.countries || []))].sort();
+  return {
     ok: true,
     registered: best.registered,
     alive: best.alive,
     exits: best.exits,
-    countries: best.countries || [],
+    countries,
     priceXnoPerMiB: best.priceXnoPerMiB,
     relayedMiB: answers.reduce((n, a) => n + (a.relayedMiB || 0), 0),
     circuits: answers.reduce((n, a) => n + (a.circuits || 0), 0),
-    asked: relays.length,
+    asked,
     answered: answers.length,
   };
-  cached = out;
-  cachedAt = Date.now();
-  res.status(200).json(out);
+}
+
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  // The CDN keeps the last good body for a day and refreshes it behind the
+  // reader's back, so a cold start or an unreachable relay is invisible here.
+  res.setHeader("Cache-Control", "public, max-age=15, s-maxage=60, stale-while-revalidate=86400");
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  const cached = loadCache();
+  if (cached && Date.now() - cached.at < FRESH_MS) {
+    return res.status(200).json({ ...cached.data, asOf: new Date(cached.at).toISOString(), stale: false });
+  }
+
+  const relays = (process.env.STATS_RELAYS || "").split(",").filter(Boolean);
+  let answers = [];
+  if (relays.length > 0) {
+    answers = (await Promise.all(relays.map(ask))).filter(Boolean);
+  }
+
+  if (answers.length > 0) {
+    const fresh = saveCache(merge(answers, relays.length));
+    return res.status(200).json({ ...fresh.data, asOf: new Date(fresh.at).toISOString(), stale: false });
+  }
+
+  // Nothing answered. Old figures, honestly labelled, beat an error on a page
+  // whose job is to describe a network that is still running perfectly well.
+  if (cached) {
+    return res.status(200).json({
+      ...cached.data,
+      asOf: new Date(cached.at).toISOString(),
+      stale: true,
+      note: "no relay answered just now; these are the last figures we have",
+    });
+  }
+  return res.status(503).json({
+    ok: false,
+    error: relays.length === 0 ? "no relays configured to ask" : "no relay answered",
+  });
 }
