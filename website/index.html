@@ -116,6 +116,7 @@
     <div class="cell"><h3 id="stExits">—</h3><p>of them offering exit service</p></div>
     <div class="cell"><h3 id="stCountries">—</h3><p>countries: <span id="stCcList">—</span></p></div>
     <div class="cell"><h3 id="stPrice">—</h3><p>XNO per MiB, the median price relays ask</p></div>
+    <div class="cell" id="stFaucetCell" hidden><h3 id="stTrials">—</h3><p id="stTrialsNote">free trials handed out today</p></div>
   </div>
   <p style="margin-top:16px;font-size:14px" id="stNote">Figures come from the relays themselves, not from us.</p>
   <script>
@@ -143,6 +144,19 @@
       g("stCountries").textContent = (j.countries || []).length;
       g("stCcList").textContent = (j.countries || []).join(" ") || "none reporting";
       g("stPrice").textContent = j.priceXnoPerMiB;
+      // The faucet is only reported by the relay that runs one; if no relay
+      // we asked runs one, the figure is absent rather than zero.
+      if (typeof j.faucetPaidToday === "number") {
+        g("stFaucetCell").hidden = false;
+        g("stTrials").textContent = j.faucetPaidToday;
+        var note = "free trials handed out today";
+        if (j.faucetRefusedToday > 0) {
+          note += ", " + j.faucetRefusedToday + " turned away";
+        }
+        g("stTrialsNote").textContent = note;
+      } else {
+        g("stFaucetCell").hidden = true;
+      }
       var when = j.asOf ? ", measured " + ago(j.asOf) : "";
       g("stNote").textContent = j.stale
         ? "Relays are not answering our page just now; these are the last figures we have" + when + "."

@@ -50,6 +50,14 @@ type faucetState struct {
 	Day      string           `json:"day"`
 	IPs      map[string]int   `json:"ips"`
 	Accounts map[string]int64 `json:"accounts"` // account → unix time of last claim
+
+	// Counts for today, so an operator can see the faucet working without
+	// reading a log. Refusals matter as much as grants: a faucet that turns
+	// everyone away looks exactly like a faucet nobody asked, and the second
+	// is fine while the first is an emergency.
+	Paid     int   `json:"paid"`
+	Refused  int   `json:"refused"`
+	LastPaid int64 `json:"lastPaid"` // unix time of the most recent grant, any day
 }
 
 type faucetReply struct {
@@ -83,6 +91,22 @@ func (f *Faucet) saveLocked() {
 	}
 	data, _ := json.Marshal(f.st)
 	os.WriteFile(f.File, data, 0o600)
+}
+
+// Counters reports what the faucet has done today, for the relay's /stats.
+// A day that has not started yet reads as zero rather than yesterday's
+// figures, which would otherwise linger until the first claim arrives.
+func (f *Faucet) Counters() (paid, refusedCount int, lastPaid int64) {
+	if f == nil {
+		return 0, 0, 0
+	}
+	f.load()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.st.Day != time.Now().UTC().Format("2006-01-02") {
+		return 0, 0, f.st.LastPaid
+	}
+	return f.st.Paid, f.st.Refused, f.st.LastPaid
 }
 
 // refused records a claim that was turned away. Somebody who opens an app
@@ -170,14 +194,19 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	if f.st.Day != day {
 		f.st.Day, f.st.IPs = day, map[string]int{}
+		f.st.Paid, f.st.Refused = 0, 0
 	}
 	if last := f.st.Accounts[acct]; time.Since(time.Unix(last, 0)) < 24*time.Hour {
+		f.st.Refused++
+		f.saveLocked()
 		f.mu.Unlock()
 		refused(trial, acct, "this wallet already claimed within the last day")
 		answer(429, faucetReply{Error: "this wallet already received the registration amount today", RetryAfterS: int(24*time.Hour/time.Second) - int(time.Since(time.Unix(last, 0)).Seconds())})
 		return
 	}
 	if f.st.IPs[ipKey]+claims > limit {
+		f.st.Refused++
+		f.saveLocked()
 		f.mu.Unlock()
 		refused(trial, acct, "this address has used its "+itoa(limit)+" claims for today")
 		if trial {
@@ -223,6 +252,11 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		answer(503, faucetReply{Error: "faucet unavailable (" + msg + "): the registration amount of " + amount + " XNO must be sent to the wallet by hand"})
 		return
 	}
+	f.mu.Lock()
+	f.st.Paid++
+	f.st.LastPaid = time.Now().Unix()
+	f.saveLocked()
+	f.mu.Unlock()
 	log.Printf("faucet: %s XNO → %s (%s)", token.FormatXNO(pay), short(acct), h[:8])
 	answer(200, faucetReply{OK: true, Hash: h, Amount: token.FormatXNO(pay)})
 }

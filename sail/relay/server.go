@@ -1049,7 +1049,7 @@ func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
 		cc = append(cc, k)
 	}
 	sort.Strings(cc)
-	json.NewEncoder(w).Encode(map[string]any{
+	out := map[string]any{
 		"registered":       len(all),
 		"alive":            alive,
 		"exits":            exits,
@@ -1060,7 +1060,18 @@ func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
 		"uptimeSeconds":    int(time.Since(s.Metrics.Started).Seconds()),
 		"reportedBy":       s.Key.Address,
 		"aliveWindowHours": 3,
-	})
+	}
+	// Only a relay that runs a faucet reports on one. Everyone else omits
+	// these, and the page adds up whatever it is given.
+	if s.Faucet != nil {
+		paid, refusedCount, lastPaid := s.Faucet.Counters()
+		out["faucetPaidToday"] = paid
+		out["faucetRefusedToday"] = refusedCount
+		if lastPaid > 0 {
+			out["faucetLastPaid"] = time.Unix(lastPaid, 0).UTC().Format(time.RFC3339)
+		}
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 // buffered reports how many bytes a connection has already read into its

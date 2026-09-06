@@ -159,3 +159,39 @@ func TestForwardedAddressIsOnlyBelievedWithTheSecret(t *testing.T) {
 		t.Fatalf("the proven forwarded address was ignored: %s", got)
 	}
 }
+
+// The counters are what an operator reads instead of the log. A faucet
+// nobody asked and a faucet turning everyone away look identical from the
+// outside, so both numbers are kept, and both reset with the day.
+func TestFaucetCountersReportGrantsAndRefusals(t *testing.T) {
+	f := testFaucet(t)
+	f.load()
+	today := time.Now().UTC().Format("2006-01-02")
+	f.st.Day = today
+	f.st.IPs["trial|10.0.0.11"] = f.TrialPerIP // allowance already spent
+
+	if paid, refusedCount, _ := f.Counters(); paid != 0 || refusedCount != 0 {
+		t.Fatalf("a fresh faucet should report nothing: %d paid, %d refused", paid, refusedCount)
+	}
+	for i := 0; i < 3; i++ {
+		if code, _ := claim(t, f, "10.0.0.11", someAccount(t), true); code != 429 {
+			t.Fatalf("claim %d should have been refused, got HTTP %d", i, code)
+		}
+	}
+	paid, refusedCount, lastPaid := f.Counters()
+	if paid != 0 || refusedCount != 3 {
+		t.Fatalf("want 0 paid and 3 refused, got %d and %d", paid, refusedCount)
+	}
+	if lastPaid != 0 {
+		t.Errorf("nothing was paid, so there should be no last-paid time")
+	}
+
+	// Yesterday's numbers must not linger into a day that has not started.
+	f.mu.Lock()
+	f.st.Day = "2000-01-01"
+	f.st.Paid, f.st.Refused = 9, 9
+	f.mu.Unlock()
+	if paid, refusedCount, _ := f.Counters(); paid != 0 || refusedCount != 0 {
+		t.Fatalf("yesterday's counts leaked into today: %d paid, %d refused", paid, refusedCount)
+	}
+}

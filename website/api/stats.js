@@ -99,9 +99,10 @@ function ask(base) {
 // has seen, and the fullest picture is the most useful one; traffic counters
 // are per-relay, so those add up.
 function merge(answers, asked) {
+  const out = {};
   const best = answers.reduce((a, b) => (b.alive > a.alive ? b : a));
   const countries = [...new Set(answers.flatMap((a) => a.countries || []))].sort();
-  return {
+  Object.assign(out, {
     ok: true,
     registered: best.registered,
     alive: best.alive,
@@ -112,7 +113,19 @@ function merge(answers, asked) {
     circuits: answers.reduce((n, a) => n + (a.circuits || 0), 0),
     asked,
     answered: answers.length,
-  };
+  });
+  // Only relays running a faucet report on one, so these are absent from
+  // most answers and are left out entirely when nobody reported them —
+  // showing "0 free trials" because we happened not to ask the right relay
+  // would be worse than showing nothing.
+  const withFaucet = answers.filter((a) => typeof a.faucetPaidToday === "number");
+  if (withFaucet.length > 0) {
+    out.faucetPaidToday = withFaucet.reduce((n, a) => n + a.faucetPaidToday, 0);
+    out.faucetRefusedToday = withFaucet.reduce((n, a) => n + (a.faucetRefusedToday || 0), 0);
+    const last = withFaucet.map((a) => a.faucetLastPaid).filter(Boolean).sort();
+    if (last.length > 0) out.faucetLastPaid = last[last.length - 1];
+  }
+  return out;
 }
 
 export default async function handler(req, res) {
