@@ -85,6 +85,20 @@ func (f *Faucet) saveLocked() {
 	os.WriteFile(f.File, data, 0o600)
 }
 
+// refused records a claim that was turned away. Somebody who opens an app
+// and is told to fund a wallet by hand is the most expensive kind of user to
+// lose, and until this existed a refusal left no trace anywhere: the wallet
+// never opens on the ledger, so there was no way to tell "nobody asked" from
+// "everybody asked and was turned away". The address is never logged — a
+// relay does not keep a record of who talks to it.
+func refused(trial bool, acct, why string) {
+	kind := "faucet"
+	if trial {
+		kind = "trial"
+	}
+	log.Printf("%s: refused %s: %s", kind, short(acct), why)
+}
+
 func (f *Faucet) clientIP(r *http.Request) string {
 	if f.Secret != "" && r.Header.Get("X-Faucet-Secret") == f.Secret {
 		if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
@@ -135,21 +149,11 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := f.clientIP(r)
-	day := time.Now().UTC().Format("2006-01-02")
-	f.mu.Lock()
-	if f.st.Day != day {
-		f.st.Day, f.st.IPs = day, map[string]int{}
-	}
-	if f.st.IPs[ip] >= f.PerIP {
-		f.mu.Unlock()
-		answer(429, faucetReply{Error: "this network address has used its " + itoa(f.PerIP) + " faucet claims for today; send the registration amount yourself or try tomorrow", RetryAfterS: secondsToMidnight()})
-		return
-	}
-	if last := f.st.Accounts[acct]; time.Since(time.Unix(last, 0)) < 24*time.Hour {
-		f.mu.Unlock()
-		answer(429, faucetReply{Error: "this wallet already received the registration amount today", RetryAfterS: int(24*time.Hour/time.Second) - int(time.Since(time.Unix(last, 0)).Seconds())})
-		return
-	}
+	// Which faucet is being asked decides everything below: the two keep
+	// separate wallets, separate per-IP counters and separate limits. They
+	// used to share the registration counter for the first check, so an
+	// address that had asked for enough node registrations was refused a
+	// free trial as well — two unrelated things throttling each other.
 	trial := req.Kind == "trial" && f.TrialKey != nil && f.TrialAmount != nil
 	pay := new(big.Int).Set(f.Amount)
 	claims, limit, key, ipKey := 1, f.PerIP, f.Key, ip
@@ -161,8 +165,21 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		claims = 4
 		pay.Mul(pay, big.NewInt(4))
 	}
+
+	day := time.Now().UTC().Format("2006-01-02")
+	f.mu.Lock()
+	if f.st.Day != day {
+		f.st.Day, f.st.IPs = day, map[string]int{}
+	}
+	if last := f.st.Accounts[acct]; time.Since(time.Unix(last, 0)) < 24*time.Hour {
+		f.mu.Unlock()
+		refused(trial, acct, "this wallet already claimed within the last day")
+		answer(429, faucetReply{Error: "this wallet already received the registration amount today", RetryAfterS: int(24*time.Hour/time.Second) - int(time.Since(time.Unix(last, 0)).Seconds())})
+		return
+	}
 	if f.st.IPs[ipKey]+claims > limit {
 		f.mu.Unlock()
+		refused(trial, acct, "this address has used its "+itoa(limit)+" claims for today")
 		if trial {
 			answer(429, faucetReply{Amount: token.FormatXNO(pay), Error: "this network address has had its " + itoa(limit) + " free trials; fund the wallet to keep going"})
 			return
@@ -175,6 +192,18 @@ func (f *Faucet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.saveLocked()
 	f.mu.Unlock()
 
+	if f.Nano == nil || key == nil {
+		// Misconfigured rather than out of money. Say so plainly instead of
+		// dying inside the handler: an app is waiting on this answer.
+		f.mu.Lock()
+		f.st.IPs[ipKey] -= claims
+		delete(f.st.Accounts, acct)
+		f.saveLocked()
+		f.mu.Unlock()
+		log.Printf("faucet: asked for a grant it is not configured to pay")
+		answer(503, faucetReply{Amount: token.FormatXNO(pay), Error: "this faucet is not configured; the amount must be sent to the wallet by hand"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	a := &nano.Account{Key: key, Client: f.Nano, State: state}
