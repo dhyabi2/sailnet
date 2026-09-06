@@ -10,9 +10,9 @@
 // on a marketing page — the network does not depend on them — so this
 // endpoint should never be the reason the page looks broken:
 //
-//   - answers are cached in the instance and in /tmp, and served from the
-//     CDN with stale-while-revalidate, which is the layer that survives a
-//     cold start or a redeploy;
+//   - answers are cached in the instance, in /tmp, and at Vercel's edge with
+//     stale-while-revalidate, which is the layer that survives a cold start
+//     or a redeploy;
 //   - when no relay answers, the last good figures are returned with
 //     stale:true and the time they were taken, instead of an error;
 //   - only when nothing has ever been cached does it admit it has nothing.
@@ -117,9 +117,15 @@ function merge(answers, asked) {
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  // The CDN keeps the last good body for a day and refreshes it behind the
-  // reader's back, so a cold start or an unreachable relay is invisible here.
-  res.setHeader("Cache-Control", "public, max-age=15, s-maxage=60, stale-while-revalidate=86400");
+  // Two separate caches, told apart deliberately. The browser holds a copy
+  // for a few seconds so a reload is instant; Vercel's edge holds one for a
+  // minute and will keep serving it for a day while it refreshes behind the
+  // reader's back, which is the layer that survives a cold start, a redeploy
+  // or a relay going quiet. The edge only honours its own header — a plain
+  // s-maxage is dropped — so it gets one of its own.
+  res.setHeader("Cache-Control", "public, max-age=15");
+  res.setHeader("Vercel-CDN-Cache-Control", "max-age=60, stale-while-revalidate=86400");
+  res.setHeader("CDN-Cache-Control", "max-age=60, stale-while-revalidate=86400");
   if (req.method === "OPTIONS") return res.status(204).end();
 
   const cached = loadCache();
