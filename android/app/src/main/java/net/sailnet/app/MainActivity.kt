@@ -61,7 +61,16 @@ class MainActivity : AppCompatActivity() {
             val b = it as Button
             b.isEnabled = false; b.text = "Checking…"
             Thread {
-                val bal = try { Mobile.refresh() } catch (_: Exception) { "" }
+                // Connected, the running client re-reads its own balance.
+                // Disconnected there is no client, and Refresh used to do
+                // nothing at all — so ask the ledger directly instead, which
+                // is the same check the app makes when it opens.
+                var bal = try { Mobile.refresh() } catch (_: Exception) { "" }
+                if (bal.isEmpty()) {
+                    bal = try {
+                        JSONObject(Mobile.funds(filesDir.absolutePath)).optString("balance")
+                    } catch (_: Exception) { "" }
+                }
                 ui.post {
                     b.isEnabled = true; b.text = "Refresh"
                     Toast.makeText(this, if (bal.isNotEmpty()) "Balance: $bal XNO" else "Could not reach the ledger yet", Toast.LENGTH_SHORT).show()

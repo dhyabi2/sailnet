@@ -35,10 +35,21 @@ class SailVpnService : VpnService(), Protector {
             .setBlocking(false)
         val pfd = builder.establish() ?: run { stopSelf(); return START_NOT_STICKY }
         tun = pfd
+        // Give the Go side a descriptor of its own.
+        //
+        // It wraps whatever number it is handed and closes it when the
+        // tunnel stops; this service closes its own ParcelFileDescriptor at
+        // the same moment. Handing over pfd.fd meant both were closing the
+        // one descriptor, and Android kills a process that does that —
+        // "fdsan: double-close of file descriptor" — so every Disconnect
+        // aborted the app instead of stopping it. Two descriptors onto the
+        // same tunnel, one owner each, and the kernel releases it when the
+        // second one goes.
+        val goFd = pfd.dup().detachFd()
         val options = Prefs.optionsJson(this)
         Thread {
             try {
-                Mobile.start(filesDir.absolutePath, options, pfd.fd.toLong(), MTU.toLong(), this)
+                Mobile.start(filesDir.absolutePath, options, goFd.toLong(), MTU.toLong(), this)
                 running = true
                 starting = false
                 SailTileService.refresh(this)
@@ -50,6 +61,7 @@ class SailVpnService : VpnService(), Protector {
                 lastError = e.message ?: "start failed"
                 starting = false
                 updateNotification("Sailnet could not connect: $lastError")
+                try { ParcelFileDescriptor.adoptFd(goFd).close() } catch (_: Exception) {}
                 stopTunnel()
                 stopSelf()
             }
