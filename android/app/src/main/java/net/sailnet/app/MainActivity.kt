@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity() {
                         JSONObject(Mobile.funds(filesDir.absolutePath)).optString("balance")
                     } catch (_: Exception) { "" }
                 }
+                if (bal.isNotEmpty()) lastBalance = bal
                 ui.post {
                     b.isEnabled = true; b.text = "Refresh"
                     Toast.makeText(this, if (bal.isNotEmpty()) "Balance: $bal XNO" else "Could not reach the ledger yet", Toast.LENGTH_SHORT).show()
@@ -138,11 +139,13 @@ class MainActivity : AppCompatActivity() {
                     else -> "Tap Connect to route this device through Sailnet."
                 }
                 path.text = p.ifEmpty { "—" }
-                balance.text = if (bal.isEmpty()) "Balance unknown until first connection" else "$bal XNO"
+                if (bal.isNotEmpty()) lastBalance = bal
+                val shown = if (bal.isNotEmpty()) bal else lastBalance
+                balance.text = if (shown.isEmpty()) "Balance unknown until first connection" else "$shown XNO"
                 val up = s.optLong("bytesUp"); val down = s.optLong("bytesDown")
                 traffic.text = "↑ ${human(up)}   ↓ ${human(down)}   ${s.optInt("relays")} relays"
-                val low = bal.isNotEmpty() && (bal.toDoubleOrNull() ?: 0.0) < 0.0005
-                fundCard.visibility = if (bal.isEmpty() || low) View.VISIBLE else View.GONE
+                val low = shown.isNotEmpty() && (shown.toDoubleOrNull() ?: 0.0) < 0.0005
+                fundCard.visibility = if (shown.isEmpty() || low) View.VISIBLE else View.GONE
                 toggle.text = when {
                     running -> "Disconnect"
                     starting -> "Cancel"
@@ -181,6 +184,7 @@ class MainActivity : AppCompatActivity() {
             ui.post {
                 checkingFunds = false
                 funded = !f.optBoolean("needsFunds", true)
+                f.optString("balance").let { if (it.isNotEmpty()) lastBalance = it }
                 fundNote = f.optString("faucet")
                 toggle.isEnabled = funded || SailVpnService.running || SailVpnService.starting
                 if (funded) {
@@ -221,6 +225,12 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Later", null)
             .show()
     }
+
+    // The last balance we managed to read, from the running client or from
+    // the ledger. The status poll has nothing to report while disconnected,
+    // and blanking a balance we already know to "unknown" makes a funded
+    // wallet look empty every time the tunnel goes down.
+    private var lastBalance = ""
 
     private var checkingFunds = false
     private var funded = false
