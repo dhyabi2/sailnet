@@ -104,7 +104,7 @@ func runRelay(args []string) {
 	trialPerIP := fs.Int("trial-per-ip", 3, "trial grants per public IP")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
-	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
+	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address, checked every 15 minutes, keeping only --payout-keep on the node")
 	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: eight pools' worth at your own price, so the float follows the price instead of being re-tuned by hand)")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
@@ -156,7 +156,14 @@ func runRelay(args []string) {
 		}
 	}
 
-	key := client.LoadKey()
+	// A relay makes its own wallet when it has none, exactly as the client,
+	// the desktop app and the Docker entrypoint already did. It used to be
+	// the one entry point that refused: a first-time operator followed the
+	// quickstart, got a crash-looping service and an error naming a command
+	// they had no binary for, while the README promised this happened by
+	// itself. EnsureWallet never overwrites and adopts an existing wallet
+	// before minting a seed, so nothing that already earns can be replaced.
+	key := client.EnsureWallet()
 	nc := client.NewNano()
 	nano.AllowCPUWork = false // a relay never burns its core on proof-of-work; sends retry when the work service is back
 	if *regDir == "" {
@@ -608,7 +615,7 @@ func runEarn(args []string) {
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
-	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
+	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address, checked every 15 minutes, keeping only --payout-keep on the node")
 	payoutKeep := fs.String("payout-keep", "0.02", "XNO kept on the node as operating float for pools, the harbour and the levy")
 	fs.Parse(args)
 	if *rpcURL != "" || *rpcKey != "" {
@@ -623,7 +630,14 @@ func runEarn(args []string) {
 		fmt.Println("created wallet", client.WalletPath(), addr)
 		fmt.Println("back it up now:  sailnode wallet export")
 	}
-	key := client.LoadKey()
+	// A relay makes its own wallet when it has none, exactly as the client,
+	// the desktop app and the Docker entrypoint already did. It used to be
+	// the one entry point that refused: a first-time operator followed the
+	// quickstart, got a crash-looping service and an error naming a command
+	// they had no binary for, while the README promised this happened by
+	// itself. EnsureWallet never overwrites and adopts an existing wallet
+	// before minting a seed, so nothing that already earns can be replaced.
+	key := client.EnsureWallet()
 	nc := client.NewNano()
 	client.RequireLocalNode(nc, *allowPublicRPC) // live prerequisite: your own Nano node
 	fmt.Println("relay wallet:", key.Address)

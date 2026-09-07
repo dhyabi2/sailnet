@@ -32,8 +32,8 @@ Registry as `ghcr.io/dhyabi2/sailnet`.
 > to freeze.
 >
 > With `--payout` set, everything above a small operating float is swept out
-> every hour to a wallet you already control, so the server never holds more
-> than an hour of earnings and can be thrown away at any moment.
+> every 15 minutes to a wallet you already control, so the server never holds
+> more than a few minutes of earnings and can be thrown away at any moment.
 >
 > Use any Nano address you own — Natrium, Nault, an exchange deposit address.
 > It costs nothing to set and cannot be set too early.
@@ -76,6 +76,7 @@ cat > /etc/systemd/system/sailnode.service <<'EOF'
 Description=Sailnet relay
 After=network-online.target
 [Service]
+Environment=SAIL_HOME=/var/lib/sailnode
 ExecStart=/usr/local/bin/sailnode relay --register --payout nano_your_wallet_address_here
 Restart=always
 RestartSec=5
@@ -88,16 +89,23 @@ EOF
 systemctl enable --now sailnode
 ```
 
-The node creates its own wallet in `SAIL_HOME` (`/data` in Docker,
-`~/.sail` otherwise) on first start. An empty wallet asks the Sailnet faucet
-for the registration amount by itself, so nothing has to be sent by hand; if
-the faucet is unavailable the log names the amount (0.0005 XNO) and the
-address. Prepayments to the relays it forwards to come out of its own
+`SAIL_HOME` is where the node keeps its wallet and its state. Set it in the
+unit as above: systemd starts services with no `HOME`, and a node that has to
+guess picks a directory you would not think to look in. Docker sets it to
+`/data` already.
+
+The node creates its own wallet there on first start, and reuses that one for
+ever after — reinstalling, upgrading or restarting never mints a second seed
+over the top of an existing one. **Back it up** (`sailnode wallet export`):
+those earnings have no other copy, which is the whole point of `--payout`
+above. An empty wallet asks the Sailnet faucet for the registration amount by
+itself, so nothing has to be sent by hand; if the faucet is unavailable the
+log names the amount (0.0005 XNO) and the address. Prepayments to the relays it forwards to come out of its own
 earnings. `sailnode relay -h` lists every flag; the useful ones:
 
 | flag | what it does |
 |---|---|
-| `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, every hour. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
+| `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, checked every 15 minutes. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: eight pools' worth at your own price, so it follows the price instead of needing to be re-tuned |
@@ -328,7 +336,8 @@ and the send's block hash is the circuit tag. In stealth mode the client never
 contacts a Nano node; it signs the block offline from a cached chain state and
 hands it to the entry, which publishes and verifies it. Relays prepay the next
 hop from pooled sends and meter every cell against quota, so nobody extends
-credit and there is nothing to ban. Earnings are swept hourly to `--payout`.
+credit and there is nothing to ban. Earnings are swept to `--payout` every 15
+minutes.
 
 Every prepaid amount is a quantity of *service*, never a fixed number of XNO:
 an anchor buys about 10 MiB at the entry's published price, a pool buys

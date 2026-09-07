@@ -40,8 +40,25 @@ func dataDir() string {
 	if d := os.Getenv("SAIL_HOME"); d != "" {
 		return d
 	}
-	h, _ := os.UserHomeDir()
-	return filepath.Join(h, ".sail")
+	// Under systemd there is no HOME unless the unit sets one, and
+	// UserHomeDir then returns "" with an error. Discarding it built the
+	// relative path ".sail/wallet.json", resolved against the unit's working
+	// directory — so a relay wrote its wallet somewhere nobody would look
+	// for it, or failed to find the one it made last time. A data directory
+	// is always absolute; when there is no home to put it under, say where
+	// it went rather than guessing quietly.
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return filepath.Join(h, ".sail")
+	}
+	// If a node really has been running on the old relative path, its wallet
+	// is there and it keeps it: correcting a default must never move money
+	// out from under a node that never upgraded (COMPATIBILITY.md rule 5).
+	if _, err := os.Stat(filepath.Join(".sail", "wallet.json")); err == nil {
+		return ".sail"
+	}
+	const fallback = "/var/lib/sailnode"
+	log.Printf("no HOME in this environment: using %s (set SAIL_HOME to choose)", fallback)
+	return fallback
 }
 
 func loadKey() *nano.Key {
@@ -55,7 +72,11 @@ func loadKey() *nano.Key {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		log.Fatalf("no wallet at %s (run: sail wallet new)", p)
+		// Name something the reader can actually run. `sail wallet new`
+		// lives in the sail binary, which the quickstart does not install,
+		// and `sailnode wallet` has no `new` — so the old hint was a dead
+		// end twice over for the person most likely to see it.
+		log.Fatalf("no wallet at %s: create one with `sailnode wallet import $(openssl rand -hex 32)`, restore yours with `sailnode wallet import <seed>`, or point SAIL_HOME/SAIL_WALLET at the wallet you meant", p)
 	}
 	if err := json.Unmarshal(data, &wf); err != nil {
 		log.Fatal(err)
