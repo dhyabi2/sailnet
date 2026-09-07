@@ -36,6 +36,12 @@ jobs:
           suffix="${GOOS}-${GOARCH}"; [ -n "$GOARM" ] && suffix="${suffix}v${GOARM}"
           mkdir -p ../out
           go build -trimpath -ldflags="-s -w" -o "../out/sailnode-${suffix}${ext}" ./cmd/sailnode
+          # sail is the operator's wallet CLI (sail wallet show, sail send).
+          # The header has promised it since this workflow was written, and
+          # deploy scripts fetch it, but only sailnode was ever built: the
+          # download 404'd on every deploy and nodes quietly kept whatever
+          # older sail they already had.
+          go build -trimpath -ldflags="-s -w" -o "../out/sail-${suffix}${ext}" ./cmd/sail
       - uses: actions/upload-artifact@v4
         with:
           name: node-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}

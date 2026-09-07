@@ -1035,16 +1035,19 @@ func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
 	}
 	all := s.Registry.All()
 	countries := map[string]int{}
-	var rates []int
+	var rates, liveRates []int
 	alive, exits := 0, 0
 	for _, rel := range all {
 		if rel.Unlisted {
 			continue // bridges are not published, by design
 		}
+		live := time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour
 		if rel.MinRate > 0 {
 			rates = append(rates, int(rel.MinRate))
+			if live {
+				liveRates = append(liveRates, int(rel.MinRate))
+			}
 		}
-		live := time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour
 		if live {
 			alive++
 			if rel.Country != "" {
@@ -1055,10 +1058,24 @@ func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	sort.Ints(rates)
+	// The published price is the median of relays that are actually there.
+	// Registrations are permanent and cost one raw, so the ledger keeps every
+	// record a relay ever made: counting all of them let a pile of retired,
+	// long-cheaper registrations outvote the live network, and the figure on
+	// the website then reported a price nobody charges. Clients have always
+	// medianed over live relays for path selection (see the price cap in
+	// client.choosePath); this makes the public number agree with them.
+	//
+	// Below a circuit's worth of live relays there is no market to report, so
+	// it falls back to every record rather than quoting one or two nodes.
+	priced := liveRates
+	if len(priced) < 4 { // hops + 1, the same threshold path selection uses
+		priced = rates
+	}
+	sort.Ints(priced)
 	median := 0
-	if len(rates) > 0 {
-		median = rates[len(rates)/2]
+	if len(priced) > 0 {
+		median = priced[len(priced)/2]
 	}
 	cc := make([]string, 0, len(countries))
 	for k := range countries {
