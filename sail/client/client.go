@@ -388,7 +388,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			m.entry = e
 		}
 	}
-	if m.entry != nil && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.opts.anchor)))) {
+	if m.entry != nil && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
 		path = append(path, m.reg.Get(m.entry.Account))
 	} else {
 		// entry must be directly reachable; a bridge (unlisted, unblockable by
@@ -396,7 +396,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		// we can pay it (a new entry means a new anchor)
 		var e *relay.RelayInfo
 		bias = near
-		if m.censored || m.canAfford(m.opts.anchor) || (m.entry != nil && m.entry.Unlisted) {
+		if m.censored || m.canAfford(m.anchorNeed()) || (m.entry != nil && m.entry.Unlisted) {
 			e = pick(func(r *relay.RelayInfo) bool { return r.Unlisted })
 		}
 		if e == nil && m.censored {
@@ -404,7 +404,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			// visible to a censor who reads the ledger, but a dead network
 			// protects nobody: the client says so and connects anyway. The
 			// network therefore outlives its bridge operators.
-			if m.canAfford(m.opts.anchor) {
+			if m.canAfford(m.anchorNeed()) {
 				log.Printf("no bridge is reachable: using a listed relay as entry (visible on the ledger; add a bridge line when you have one)")
 			}
 		}
@@ -491,6 +491,42 @@ type errors string
 
 func (e errors) Error() string { return string(e) }
 
+// anchorFor is the anchor to pay this relay: enough for AnchorBytes at the
+// price it publishes, never below the --anchor floor. Sizing the payment
+// from the payee's own price is what keeps a circuit usable whatever the
+// price is, instead of buying a hundredth of a page from a relay that
+// charges a hundred times what the flag was chosen for.
+func (m *manager) anchorFor(r *relay.RelayInfo) *big.Int {
+	if r == nil || r.MinRate == 0 {
+		return m.opts.anchor
+	}
+	amount := relay.RawFor(AnchorBytes, token.RateToRaw(r.MinRate))
+	if amount.Cmp(m.opts.anchor) < 0 {
+		return m.opts.anchor
+	}
+	return amount
+}
+
+// anchorNeed is what the wallet must hold to open a circuit at all: an
+// anchor at the cheapest relay we could actually use, since that is the one
+// a client with little money will be routed to.
+func (m *manager) anchorNeed() *big.Int {
+	need := m.opts.anchor
+	if m.reg == nil { // a status poll may arrive before the relay list does
+		return need
+	}
+	first := true
+	for _, r := range m.reg.All() {
+		if r.MinRate == 0 || r.Unlisted {
+			continue
+		}
+		if a := m.anchorFor(r); first || a.Cmp(need) < 0 {
+			need, first = a, false
+		}
+	}
+	return need
+}
+
 // anchorTo prepays the entry relay with a plain XNO send; the block hash is
 // the circuit tag, and the signed block is handed to the relay so it can
 // publish and verify it without the client touching any RPC.
@@ -511,12 +547,13 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if !m.canAfford(m.opts.anchor) {
+	anchor := m.anchorFor(entry)
+	if !m.canAfford(anchor) {
 		m.pocket() // a faucet or a friend may just have paid us
 	}
-	if !m.canAfford(m.opts.anchor) {
+	if !m.canAfford(anchor) {
 		m.setStage("Waiting for XNO")
-		return errors("wallet has no XNO yet: send it a little (0.0005 XNO buys about 25 MB), it connects by itself when the funds arrive")
+		return errors("wallet has no XNO yet: send it a little (" + token.FormatXNO(anchor) + " XNO buys about " + strconv.Itoa(AnchorBytes>>20) + " MB at this relay's price), it connects by itself when the funds arrive")
 	}
 	m.setStage("Paying the entry relay")
 	if m.anchors == nil {
@@ -541,7 +578,7 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	} else if err != nil {
 		log.Printf("pocket: %v", err)
 	}
-	h, blk, err := acct.SendBlock(ctx, entry.Account, m.opts.anchor)
+	h, blk, err := acct.SendBlock(ctx, entry.Account, anchor)
 	var pe *nano.PublishError
 	m.anchorOffline = false
 	if err != nil && stdErrors.As(err, &pe) && blk != nil {
@@ -557,7 +594,7 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	m.entry, m.paidTo = entry, entry.Account
 	m.anchors[entry.Account] = append(m.anchors[entry.Account], time.Now()) // only payments that happened count toward the cap
 	m.saveAnchor()
-	log.Printf("paid %s XNO → %s (tag %s)", token.FormatXNO(m.opts.anchor), entry.Account, h[:8])
+	log.Printf("paid %s XNO → %s (tag %s)", token.FormatXNO(anchor), entry.Account, h[:8])
 	m.setStage("Paid the entry relay; waiting for the ledger")
 	return nil
 }
@@ -776,7 +813,7 @@ func (m *manager) keepalive(c *relay.Circuit) {
 		q, err := c.QueryQuota(8 * time.Second)
 		m.topMu.Unlock()
 		if err == nil {
-			need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4
+			need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(c.Path[0].MinRate)) / 4
 			if q < need {
 				m.quotaLow(c, q)
 			}
@@ -797,7 +834,7 @@ func (m *manager) quotaLow(c *relay.Circuit, q int64) {
 		return
 	}
 	rate := c.BytesMoved() / int64(math.Max(time.Since(c.Built).Seconds(), 1))
-	if need := relay.BytesFor(m.opts.anchor, token.RateToRaw(c.Path[0].MinRate)) / 4; q >= need && q >= 8<<20 && q >= rate*30 {
+	if need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(c.Path[0].MinRate)) / 4; q >= need && q >= 8<<20 && q >= rate*30 {
 		return // plenty left: a stray notice
 	}
 	if rem, err := m.topUp(c); err == nil {
@@ -834,12 +871,13 @@ func (m *manager) topUp(c *relay.Circuit) (int64, error) {
 	}
 	used := c.BytesMoved()
 	want := int64(float64(used) / elapsed * 300) // five minutes of runway at the recent rate
-	if limit := 10 * relay.BytesFor(m.opts.anchor, rateRaw); want > limit {
+	floor := m.anchorFor(entry)
+	if limit := 10 * relay.BytesFor(floor, rateRaw); want > limit {
 		want = limit // never more than ten anchors in one go
 	}
 	amount := new(big.Int).Mul(big.NewInt((want+(1<<20)-1)/(1<<20)), rateRaw)
-	if amount.Cmp(m.opts.anchor) < 0 {
-		amount.Set(m.opts.anchor)
+	if amount.Cmp(floor) < 0 {
+		amount.Set(floor)
 	}
 	_, bal, _, _, ok := chainState(m.key).Get()
 	if !ok || bal.Sign() <= 0 {
@@ -849,8 +887,8 @@ func (m *manager) topUp(c *relay.Circuit) (int64, error) {
 	if amount.Cmp(half) > 0 {
 		amount.Set(half)
 	}
-	if amount.Cmp(m.opts.anchor) < 0 && bal.Cmp(m.opts.anchor) >= 0 {
-		amount.Set(m.opts.anchor)
+	if amount.Cmp(floor) < 0 && bal.Cmp(floor) >= 0 {
+		amount.Set(floor)
 	}
 	if amount.Sign() <= 0 || bal.Cmp(amount) < 0 {
 		return 0, errors("wallet has no XNO for a top-up")
@@ -881,7 +919,7 @@ func runClient(args []string) {
 	hops := fs.Int("hops", 3, "circuit length")
 	exitCC := fs.String("exit-cc", "", "preferred exit country (optional)")
 	excludeCC := fs.String("exclude-cc", "", "exit countries never to use, comma-separated (e.g. US,GB)")
-	anchor := fs.String("anchor", "0.0005", "XNO per prepaid anchor")
+	anchor := fs.String("anchor", "0.0005", "least XNO per prepaid anchor; what is actually paid buys 10 MiB at the entry relay's own published price, so it follows the market rather than this number")
 	rate := fs.String("rate", "0", "max XNO per MiB you accept on any hop (0 = three times the median published price)")
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag (fragment-B hash of a SAIL transfer to the entry) instead of paying")
@@ -1263,7 +1301,7 @@ func (m *manager) serveSocks(conn net.Conn) {
 func runFetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	hops := fs.Int("hops", 3, "circuit length")
-	anchor := fs.String("anchor", "0.0005", "XNO per prepaid anchor")
+	anchor := fs.String("anchor", "0.0005", "least XNO per prepaid anchor; what is actually paid buys 10 MiB at the entry relay's own published price, so it follows the market rather than this number")
 	rate := fs.String("rate", "0", "max XNO per MiB on any hop (0 = three times the median published price)")
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag instead of paying")
@@ -1360,7 +1398,7 @@ func (m *manager) NeedsFunds() bool {
 	if m.opts.freeTag != "" {
 		return false
 	}
-	return !m.canAfford(m.opts.anchor)
+	return !m.canAfford(m.anchorNeed())
 }
 
 func (m *manager) canAfford(amount *big.Int) bool {
@@ -1701,7 +1739,7 @@ func RunUDPTest(args []string) {
 	fs := flag.NewFlagSet("udptest", flag.ExitOnError)
 	target := fs.String("to", "1.1.1.1:53", "UDP host:port at the exit side")
 	fs.Parse(args)
-	m := newManager(3, "", "0.0005", "0.00005", "", "")
+	m := newManager(3, "", "0.0005", "0", "", "") // "0": follow the median, as every other entry point does
 	c, err := m.circuit()
 	if err != nil {
 		log.Fatal(err)

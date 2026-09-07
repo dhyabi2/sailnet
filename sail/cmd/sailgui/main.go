@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/dhyabi2/sail/client"
+	"github.com/dhyabi2/sail/token"
 )
 
 //go:embed Icon.png
@@ -289,7 +291,7 @@ func main() {
 	}
 	fundAsked := false
 	askFunds := func() {
-		msg := widget.NewLabel("This wallet has no XNO yet. Send it a little Nano: 0.0005 XNO buys about 25 MB.\nIt connects by itself the moment the funds confirm.")
+		msg := widget.NewLabel("This wallet has no XNO yet. Send it a little Nano: " + fundingLine() + ".\nIt connects by itself the moment the funds confirm.")
 		msg.Wrapping = fyne.TextWrapWord
 		ad := widget.NewEntry()
 		ad.SetText(key.Address)
@@ -489,7 +491,7 @@ func main() {
 				}
 				if nf, _ := st["needsFunds"].(bool); nf {
 					state.SetText("WAITING FOR XNO")
-					path.SetText("Send a little XNO to the wallet below: 0.0005 XNO buys about 25 MB. It connects by itself when the funds confirm.")
+					path.SetText("Send a little XNO to the wallet below: " + fundingLine() + ". It connects by itself when the funds confirm.")
 					if !fundAsked {
 						fundAsked = true
 						askFunds()
@@ -500,4 +502,12 @@ func main() {
 	}()
 	w.SetCloseIntercept(func() { stop(); client.RestoreSystemProxy(); a.Quit() })
 	w.ShowAndRun()
+}
+
+// fundingLine says what to send and what it buys, at the price relays are
+// actually publishing. Both numbers used to be written into the sentence,
+// which made the screen wrong the moment the network repriced.
+func fundingLine() string {
+	need := client.RequiredXNO()
+	return token.FormatXNO(need) + " XNO buys about " + strconv.Itoa(client.AnchorBytes>>20) + " MB"
 }

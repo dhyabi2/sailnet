@@ -185,3 +185,21 @@ func BytesFor(raw *big.Int, ratePerMiB *big.Int) int64 {
 	}
 	return b.Int64()
 }
+
+// RawFor is the inverse of BytesFor: the XNO (raw) that buys bytes at a rate
+// (raw per MiB), rounded up to a whole MiB so a payment never lands a byte
+// short of what it was sized for.
+//
+// Every amount this network prepays — a client's anchor, a relay's pool to
+// the next hop, the operating float a node keeps back — is a quantity of
+// service, not a quantity of money. Sizing them here, from the price the
+// payee actually publishes, is what lets the price move without any of them
+// having to be re-tuned by hand: a hundredfold price rise buys the same
+// megabytes for a hundred times the XNO, and nothing downstream notices.
+func RawFor(bytes int64, ratePerMiB *big.Int) *big.Int {
+	if bytes <= 0 || ratePerMiB == nil || ratePerMiB.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+	mib := (bytes + (1 << 20) - 1) >> 20
+	return new(big.Int).Mul(big.NewInt(mib), ratePerMiB)
+}

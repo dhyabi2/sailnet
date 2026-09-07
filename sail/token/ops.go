@@ -42,7 +42,7 @@ func RateToRaw(rate uint32) *big.Int {
 	return new(big.Int).Mul(big.NewInt(int64(rate)), RateUnitRaw)
 }
 
-// RateFromXNO converts "0.00002" XNO per MiB to a uint32 rate.
+// RateFromXNO converts "0.0005" XNO per MiB to a uint32 rate.
 func RateFromXNO(s string) (uint32, error) {
 	raw, err := ParseXNO(s)
 	if err != nil {

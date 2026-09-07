@@ -89,8 +89,9 @@ func runRelay(args []string) {
 	host := fs.String("host", "", "TLS name the relay presents (a real domain pointing here is best; default: a plausible generated name)")
 	cc := fs.String("cc", "XX", "country code")
 	asn := fs.Uint("asn", 0, "autonomous system number")
-	rate := fs.String("rate", "0.00005", "starting price, XNO per MiB (about $0.02 per GB: above a cheap VPS's own bandwidth cost, and still far under what a commercial VPN charges a light user)")
-	reprice := fs.Bool("reprice", true, "adjust the price to demand every --reprice-days: down 10% when usage falls, up 3% when it grows, never above four times the starting price")
+	rate := fs.String("rate", "0.0005", "starting price, XNO per MiB (about $0.20 per GB: a relay on a cheap VPS covers its rent from roughly 150 GB a month, while a light user still pays cents and a heavy one pays about what a commercial VPN costs)")
+	minRate := fs.String("min-rate", "", "price floor, XNO per MiB: the demand adjustment below may never take the price under this (default: a quarter of --rate). Set it to what serving a MiB actually costs you and the price looks after itself from then on")
+	reprice := fs.Bool("reprice", true, "adjust the price to demand every --reprice-days: down 10% when usage falls, up 3% when it grows, never above four times the starting price nor below --min-rate")
 	repriceDays := fs.Int("reprice-days", 10, "length of a repricing window in days")
 	exit := fs.Bool("exit", true, "offer exit service")
 	register := fs.Bool("register", false, "publish REGISTER + DESCRIPTOR on the ledger")
@@ -99,18 +100,20 @@ func runRelay(args []string) {
 	faucetAmount := fs.String("faucet-amount", "0.0005", "XNO per faucet claim (the registration amount: one anchor)")
 	faucetPerIP := fs.Int("faucet-per-ip", 10, "faucet claims per public IP per day")
 	trialWallet := fs.String("trial-wallet", "", "wallet file for the first-run trial grant, paid to a client opening an app for the first time (empty = no trial grant)")
-	trialAmount := fs.String("trial-amount", "0.1", "XNO per first-run trial grant")
+	trialAmount := fs.String("trial-amount", "0.01", "XNO per first-run trial grant (about 20 MiB at the default price: enough to open the app, watch the tunnel work and decide, without the faucet's wallet funding one person's month)")
 	trialPerIP := fs.Int("trial-per-ip", 3, "trial grants per public IP")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address every hour, keeping only --payout-keep on the node")
-	payoutKeep := fs.String("payout-keep", "0.002", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout")
+	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: eight pools' worth at your own price, so the float follows the price instead of being re-tuned by hand)")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
 	certFile := fs.String("cert", "", "PEM certificate chain to present (e.g. Let's Encrypt for --host); default: a generated self-signed cert")
 	acme := fs.Bool("acme", false, "obtain and renew a real certificate for --host from Let's Encrypt automatically (the domain must point at this host; port 443 required)")
 	keyFile := fs.String("key", "", "PEM private key for --cert")
-	pool := fs.String("pool", "0.005", "XNO per downstream pool top-up, refilled at a quarter left (0 = static pool tags, test mode)")
+	pool := fs.String("pool", "0.005", "smallest XNO per downstream pool top-up, refilled at a quarter left (0 = static pool tags, test mode). The top-up actually sent is whatever buys --pool-mib at that peer's price, so a peer that charges more is still prepaid rather than quietly dropped")
+	poolMiB := fs.Int64("pool-mib", 32, "MiB of service each downstream pool top-up buys, at the peer's own published price (0 = the flat --pool amount, as older builds did)")
+	minCredit := fs.Int64("min-credit-mib", 10, "smallest quota one payment may open, MiB, granted once per paying wallet per day. It keeps an app built against an older, cheaper price usable here instead of leaving it to re-anchor in a loop (0 = off)")
 	regDir := fs.String("registry-dir", "", "test mode: read/write relay descriptors as JSON in this directory instead of the ledger")
 	name := fs.String("name", "", "test mode: descriptor file name (default: account)")
 	freeTag := fs.String("free-tag", "", "test mode: preauthorized 64-hex payment tag")
@@ -164,6 +167,25 @@ func runRelay(args []string) {
 		log.Fatalf("bad --rate %q (min 0.0000000001 XNO/MiB)", *rate)
 	}
 	rateRaw := token.RateToRaw(rateU)
+	// The price floor. An operator who names one is saying "below this I am
+	// paying to carry your traffic", and the demand adjustment respects it
+	// from then on without them having to watch the price at all. A quarter
+	// of the starting price by default, mirroring the four-times ceiling, so
+	// the adjustment has the same room in both directions.
+	minRateU := rateU / 4
+	if strings.TrimSpace(*minRate) != "" {
+		v, err := token.RateFromXNO(*minRate)
+		if err != nil {
+			log.Fatalf("bad --min-rate %q (min 0.0000000001 XNO/MiB)", *minRate)
+		}
+		minRateU = v
+	}
+	if minRateU == 0 {
+		minRateU = 1
+	}
+	if minRateU > rateU {
+		log.Fatalf("--min-rate %s is above --rate %s: the floor would raise your price the moment you start", token.FormatXNO(token.RateToRaw(minRateU)), token.FormatXNO(rateRaw))
+	}
 	poolRaw, _ := token.ParseXNO(*pool)
 	if poolRaw == nil || poolRaw.Sign() == 0 {
 		poolRaw = nil // static pool tags (no on-chain top-ups)
@@ -311,7 +333,7 @@ func runRelay(args []string) {
 		}
 	}()
 
-	s := &relay.Server{Key: key, Nano: nc, Quota: q, TLS: cert, Registry: reg, Exit: *exit, PoolRaw: poolRaw, Decoy: decoyHTML, PoolsFile: filepath.Join(client.DataDir(), "pools.json"), AllowPrivate: *regDir != "", BridgeSecret: bridgeSecret, GetCertificate: getCert, Host: *host}
+	s := &relay.Server{Key: key, Nano: nc, Quota: q, TLS: cert, Registry: reg, Exit: *exit, PoolRaw: poolRaw, PoolBytes: *poolMiB << 20, MinCredit: *minCredit << 20, Decoy: decoyHTML, PoolsFile: filepath.Join(client.DataDir(), "pools.json"), AllowPrivate: *regDir != "", BridgeSecret: bridgeSecret, GetCertificate: getCert, Host: *host}
 	if *unlisted {
 		s.BootstrapBytes = 2 << 20 // a first-run client in a censored network gets 2 MiB to reach the ledger through us
 	}
@@ -332,14 +354,25 @@ func runRelay(args []string) {
 			}
 		}()
 		if *payout != "" {
-			keep, err := token.ParseXNO(*payoutKeep)
-			if err != nil {
-				log.Fatal("--payout-keep: ", err)
+			// The float exists to prepay the next hop, so it is sized in
+			// service, not in money: eight pools' worth at our own price.
+			// Left as a fixed number of XNO it silently became too small the
+			// moment the price moved, and a node with nothing to prepay with
+			// cannot extend a circuit however much it has earned.
+			keep := relay.RawFor(8*(*poolMiB)<<20, rateRaw)
+			if strings.TrimSpace(*payoutKeep) != "" {
+				k, err := token.ParseXNO(*payoutKeep)
+				if err != nil {
+					log.Fatal("--payout-keep: ", err)
+				}
+				keep = k
+			} else if *poolMiB <= 0 && poolRaw != nil {
+				keep = new(big.Int).Mul(poolRaw, big.NewInt(8))
 			}
 			if _, err := nano.AddressToPubkey(*payout); err != nil || *payout == key.Address {
 				log.Fatal("--payout: not a valid address, or this node's own wallet")
 			}
-			log.Printf("payout: earnings above %s XNO go to %s, checked every 15 minutes", *payoutKeep, client.Short(*payout))
+			log.Printf("payout: earnings above %s XNO go to %s, checked every 15 minutes", token.FormatXNO(keep), client.Short(*payout))
 			// Two minutes after start, then every fifteen: a node that is
 			// restarted often (an upgrade, a reboot) must not keep losing the
 			// hour it had already waited, and an operator should not have to
@@ -421,7 +454,7 @@ func runRelay(args []string) {
 					log.Printf("repricing stopped after an internal error: %v", r)
 				}
 			}()
-			pr := &relay.Pricing{File: filepath.Join(client.DataDir(), "pricing.json"), Days: *repriceDays, Min: 1, Max: rateU * 4}
+			pr := &relay.Pricing{File: filepath.Join(client.DataDir(), "pricing.json"), Days: *repriceDays, Min: minRateU, Max: rateU * 4}
 			cur := pr.Load(rateU, s.Metrics.BytesRelayed.Load())
 			apply := func(r uint32) {
 				q.SetMinRate(token.RateToRaw(r))
@@ -565,13 +598,13 @@ func runEarn(args []string) {
 	port := fs.Uint("port", 8443, "TCP port to expose (443 needs admin on most systems)")
 	cc := fs.String("cc", "", "country code (auto from the exit-probe if empty)")
 	asn := fs.Uint("asn", 0, "ASN (0 = unknown)")
-	rate := fs.String("rate", "0.00002", "price, XNO per MiB")
+	rate := fs.String("rate", "0.0005", "price, XNO per MiB")
 	exit := fs.Bool("exit", false, "also serve as exit (your IP is what websites see)")
 	home := fs.Bool("home", false, "skip port mapping: attach to a public relay (harbour) through an outbound tunnel")
 	harbourFlag := fs.String("harbour", "", "harbour relay account (default: best public relay on the ledger)")
-	pool := fs.String("pool", "0.001", "XNO prepaid to the harbour for relaying your traffic")
+	pool := fs.String("pool", "0.001", "least XNO prepaid to the harbour for relaying your traffic")
 	ingress := fs.Int("ingress", 2, "home mode: reach the harbour through a circuit of this many relays so it never sees your address (0 = connect directly)")
-	anchor := fs.String("anchor", "0.0005", "home mode: XNO prepaid to the entry of the ingress circuit")
+	anchor := fs.String("anchor", "0.0005", "home mode: least XNO prepaid to the entry of the ingress circuit (the anchor paid buys 10 MiB at that relay's price)")
 	allowPublicRPC := fs.Bool("allow-public-rpc", false, "TESTS ONLY: run without a local Nano node")
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")

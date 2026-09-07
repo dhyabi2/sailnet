@@ -58,3 +58,37 @@ If the answer is no, the change does not ship, whatever it improves.
   the registry and stopped earning. The registry keeps every record again;
   liveness is decided by probes and gossip freshness, which old nodes produce
   too. `OpAlive` stays as an extra, optional signal.
+
+- **2026-09-07, the price rose tenfold and every prepaid amount stopped being
+  a constant.** The default relay price went from 0.00005 to 0.0005 XNO/MiB
+  so that a relay covers a cheap VPS from about 150 GB a month instead of
+  1,500. On its own that would have broken three things, all for the same
+  reason: the amounts the network prepays were written in XNO, and a price
+  they were not chosen for makes them buy the wrong amount of service.
+
+  - A relay refused to prepay a peer whose price made its pool buy under
+    8 MiB (`ensurePool`), so a dearer relay was silently never paid and
+    never used — a price rise partitioned the network. Pools are now sized
+    in bytes at the peer's own price (`--pool-mib`, default 32), with
+    `--pool` as the floor, so an existing `--pool 0.001` command line keeps
+    its meaning and starts working at any price.
+  - A client's anchor bought a tenth of what it used to, so a circuit ran
+    out almost at once and the app spent its session re-anchoring. Anchors
+    are now sized the same way (`AnchorBytes`, 10 MiB at the entry's price),
+    with `--anchor` as the floor.
+  - `--payout-keep` left a float too small to prepay anything. Empty now
+    means eight pools' worth at the node's own price.
+
+  What this could not fix is an app already installed: its anchor is a fixed
+  XNO amount compiled into a build we cannot reach. Relays therefore grant
+  `--min-credit-mib` (10 MiB) to any payment that buys less, once per paying
+  wallet per day — being more generous to old clients, which this document
+  allows, rather than leaving them to fail. An old relay that never upgrades
+  still earns, is still listed, is still chosen and is still paid at its own
+  price; what it loses is the ability to route *through* a relay dearer than
+  its own pool was sized for, and clients route around that by design.
+
+  `--min-rate` (default: a quarter of `--rate`) now floors the demand
+  adjustment, which could previously walk the price down 10 % a window with
+  nothing under it. An operator names their cost once instead of watching
+  the price.

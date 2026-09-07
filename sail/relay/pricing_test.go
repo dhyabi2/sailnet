@@ -100,3 +100,37 @@ func TestConfiguredPriceChangeWins(t *testing.T) {
 		t.Fatalf("operator raised the price to 500000, got %d", changed)
 	}
 }
+
+// The price floor is what makes the demand adjustment safe to leave alone.
+// Without one it walked down 10% a window for as long as usage kept falling,
+// which is a relay agreeing to serve for nothing rather than one deciding
+// its price. An operator names the floor once, and never touches the price
+// again.
+func TestPricingNeverGoesUnderTheFloor(t *testing.T) {
+	now := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	p := &Pricing{File: filepath.Join(t.TempDir(), "pricing.json"), Days: 10,
+		Min: 12500000, Max: 200000000, Now: func() time.Time { return now }}
+	const start = 50000000 // 0.005 XNO/MiB
+	rate := p.Load(start, 0)
+	if rate != start {
+		t.Fatalf("initial rate %d", rate)
+	}
+	// Twenty windows of collapsing demand: 0.9^20 is under a tenth, so
+	// without a floor the price would be far below it.
+	bytes := int64(1 << 30)
+	for i := 0; i < 20; i++ {
+		now = now.Add(10 * 24 * time.Hour)
+		bytes += bytes / 4
+		rate, _ = p.Tick(bytes)
+		bytes += bytes / 8
+		now = now.Add(10 * 24 * time.Hour)
+		bytes += 1 << 20 // barely any traffic: usage collapsed
+		rate, _ = p.Tick(bytes)
+		if rate < 12500000 {
+			t.Fatalf("window %d: price %d fell under the floor", i, rate)
+		}
+	}
+	if rate != 12500000 {
+		t.Fatalf("after sustained collapse the price should rest on the floor, got %d", rate)
+	}
+}

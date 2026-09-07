@@ -70,8 +70,10 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout nano_…` | forward earnings to this wallet every hour |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
-| `--payout-keep 0.002` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded (default 0.002) |
-| `--rate 0.00005` | starting price in XNO per MiB (about $0.02 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
+| `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: eight pools' worth at your own price, so it follows the price instead of needing to be re-tuned |
+| `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
+| `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
+| `--pool-mib 32` | MiB of service each prepayment to the next hop buys, at that relay's own published price. Sized in service rather than in XNO, so a relay that charges more is still prepaid rather than quietly skipped |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
 | `--unlisted` | run as a bridge: never on the ledger, handed out by invite |

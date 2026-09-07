@@ -144,7 +144,7 @@ class MainActivity : AppCompatActivity() {
                 balance.text = if (shown.isEmpty()) "Balance unknown until first connection" else "$shown XNO"
                 val up = s.optLong("bytesUp"); val down = s.optLong("bytesDown")
                 traffic.text = "↑ ${human(up)}   ↓ ${human(down)}   ${s.optInt("relays")} relays"
-                val low = shown.isNotEmpty() && (shown.toDoubleOrNull() ?: 0.0) < 0.0005
+                val low = shown.isNotEmpty() && (shown.toDoubleOrNull() ?: 0.0) < (requiredXno.toDoubleOrNull() ?: 0.0005)
                 fundCard.visibility = if (shown.isEmpty() || low) View.VISIBLE else View.GONE
                 toggle.text = when {
                     running -> "Disconnect"
@@ -179,11 +179,12 @@ class MainActivity : AppCompatActivity() {
             val f = try {
                 JSONObject(Mobile.funds(filesDir.absolutePath))
             } catch (e: Exception) {
-                JSONObject().put("needsFunds", true).put("required", "0.0005")
+                JSONObject().put("needsFunds", true).put("required", requiredXno)
             }
             ui.post {
                 checkingFunds = false
                 funded = !f.optBoolean("needsFunds", true)
+                f.optString("required").let { if (it.isNotEmpty()) requiredXno = it }
                 f.optString("balance").let { if (it.isNotEmpty()) lastBalance = it }
                 fundNote = f.optString("faucet")
                 toggle.isEnabled = funded || SailVpnService.running || SailVpnService.starting
@@ -236,6 +237,12 @@ class MainActivity : AppCompatActivity() {
     private var funded = false
     private var fundNote = ""
 
+    // What a wallet must hold to connect, as the Go client works it out from
+    // the prices relays are publishing. It is not a constant: an anchor buys
+    // service, so the XNO it takes moves with the price. The literal here is
+    // only the value shown before the first answer arrives.
+    private var requiredXno = "0.0005"
+
     private var askedFunds = false
 
     /** The wallet is empty: say so, and offer the faucet and the address. */
@@ -243,7 +250,7 @@ class MainActivity : AppCompatActivity() {
         val addr = Mobile.address(filesDir.absolutePath)
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Fund your wallet")
-            .setMessage("Sailnet pays relays in XNO and your wallet is empty. Get free XNO from a faucet (or an exchange) and send it to your address:\n\n$addr\n\n0.0005 XNO is enough to start. Sailnet connects by itself when the funds arrive.")
+            .setMessage("Sailnet pays relays in XNO and your wallet is empty. Get free XNO from a faucet (or an exchange) and send it to your address:\n\n$addr\n\n$requiredXno XNO is enough to start. Sailnet connects by itself when the funds arrive.")
             .setPositiveButton("Get free XNO") { _, _ -> openLink("https://hub.nano.org/faucets") }
             .setNeutralButton("Copy address") { _, _ ->
                 getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("nano address", addr))

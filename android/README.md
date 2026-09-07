@@ -3,7 +3,7 @@
 A VPN app that routes the whole device through the Sailnet circuit: the Go client runs inside the app (gomobile), a userspace network stack (tun2socks core) reads the TUN interface, every TCP flow is opened through a 3-hop circuit, and DNS queries are answered through the circuit at the exit. No SOCKS setup, no root.
 
 ## What the app does
-1. Creates a wallet in the app's private storage on first launch and shows its address. Send a little XNO to it (0.01 XNO is weeks of use at 0.00002 XNO/MiB).
+1. Creates a wallet in the app's private storage on first launch and shows its address. Send a little XNO to it (0.01 XNO is about 20 MiB at the default 0.0005 XNO/MiB, and the app claims that much as a free trial on first run anyway).
 2. On Connect, asks Android for VPN permission, opens a TUN interface (10.8.0.2/32, all routes, DNS 10.8.0.1), and starts the client with the three VPS relays as bridges (`res/raw/bridges.txt`).
 3. Pays the entry relay 0.0005 XNO per anchor, builds the circuit, and shows the path, wallet balance and a log.
 4. The app's own sockets are protected (VpnService.protect) so they leave outside the tunnel; everything else goes through it.

@@ -69,7 +69,23 @@ type Server struct {
 	Exit         bool
 	AllowPrivate bool     // test mode only: let the exit reach loopback/LAN targets
 	PoolRaw      *big.Int // downstream pool top-up size (raw XNO); nil = static pool tags (test mode)
-	Decoy        string   // HTML served to everyone else
+	// PoolBytes, when set, sizes every downstream pool in service rather than
+	// in money: the top-up to a peer is whatever buys this many bytes at that
+	// peer's published price. PoolRaw then acts as the floor. A fixed XNO pool
+	// is what tied the network to one price level: a peer that charged more
+	// than the pool was sized for was simply never prepaid, and so never used.
+	PoolBytes int64
+	// MinCredit is the smallest quota a payment may open, in bytes. A payment
+	// that buys less is credited this much anyway, once per paying wallet per
+	// day. It costs the relay a few megabytes and it is what lets an app built
+	// against an older, cheaper price still work here: its anchor is a fixed
+	// XNO amount it cannot be told to change, and without a floor a price rise
+	// would leave it paying for kilobytes and re-anchoring in a loop.
+	MinCredit int64
+	Decoy     string // HTML served to everyone else
+
+	welMu   sync.Mutex
+	welcome map[string]int64 // paying wallet → unix day of its last floored credit
 
 	mu        sync.Mutex
 	pools     map[string]*pool // downstream relay account → pool
@@ -1594,9 +1610,47 @@ func (s *Server) creditFromLedgerImpl(tag string) (string, error) {
 		return "", errors.New("payment block has no account")
 	}
 	owner := hex.EncodeToString(ownerPub[:])
+	if floored := s.floorCredit(owner, n); floored > n {
+		log.Printf("payment of %s XNO buys %d KiB at our price; granting the %d MiB minimum instead", formatXNO(amt), n>>10, floored>>20)
+		n = floored
+	}
 	s.Quota.Credit(tag, n, owner)
 	log.Printf("payment accepted: %s XNO → %d bytes", formatXNO(amt), n)
 	return owner, nil
+}
+
+// floorCredit raises a payment that buys less than MinCredit up to it, once
+// per paying wallet per day, and returns the bytes to credit.
+//
+// The point is an app that cannot be upgraded from here. Its anchor is a
+// fixed XNO amount compiled into a build someone already installed, so when
+// the price rises that anchor buys a fraction of what it used to and the app
+// spends its whole session re-anchoring. Granting it a usable first circuit
+// costs us MinCredit a day per wallet — the same order as the trial the
+// faucet already gives away — and it is bounded: the second payment of the
+// day is credited at the real price, so nobody relays a career on the floor.
+func (s *Server) floorCredit(owner string, n int64) int64 {
+	if s.MinCredit <= 0 || n >= s.MinCredit || owner == "" {
+		return n
+	}
+	day := time.Now().Unix() / 86400
+	s.welMu.Lock()
+	defer s.welMu.Unlock()
+	if s.welcome == nil {
+		s.welcome = map[string]int64{}
+	}
+	if s.welcome[owner] == day {
+		return n
+	}
+	if len(s.welcome) > 10000 { // a day's turnover at most; never an unbounded map
+		for k, d := range s.welcome {
+			if d != day {
+				delete(s.welcome, k)
+			}
+		}
+	}
+	s.welcome[owner] = day
+	return s.MinCredit
 }
 
 func formatXNO(raw *big.Int) string {
@@ -1702,7 +1756,7 @@ func (s *Server) meterPool(acct string, n int64) {
 		// rate ahead (and never later than a quarter of the pool).
 		if s.PoolRaw != nil && !p.topping && s.Registry != nil {
 			if rel := s.Registry.Get(acct); rel != nil {
-				size := BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate))
+				size := s.poolSize(rel)
 				if size >= 8<<20 && (p.credited-p.used < size/4 || p.credited-p.used < p.rate*60) {
 					p.topping = true
 					refill = rel
@@ -1722,6 +1776,12 @@ func (s *Server) meterPool(acct string, n int64) {
 
 // topUpPool sends one PoolRaw to the peer and credits the pool.
 func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
+	if s.Nano == nil || rel == nil || s.PoolRaw == nil {
+		// Paying a pool needs a ledger and a pool size. Without either there
+		// is nothing to do but say so: this runs in its own goroutine, and a
+		// panic here would take the whole relay down, not one peer's pool.
+		return "", errors.New("no ledger or no pool size: pools cannot be prepaid")
+	}
 	s.mu.Lock()
 	p := s.pools[rel.Account]
 	s.mu.Unlock()
@@ -1740,13 +1800,14 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 	rate := p.rate
 	s.mu.Unlock()
 	rateRaw := token.RateToRaw(rel.MinRate)
-	amount := new(big.Int).Set(s.PoolRaw)
+	base := s.poolRaw(rel)
+	amount := new(big.Int).Set(base)
 	if rate > 0 && rateRaw.Sign() > 0 {
 		want := new(big.Int).Mul(big.NewInt((rate*300+(1<<20)-1)/(1<<20)), rateRaw)
 		if want.Cmp(amount) > 0 {
 			amount = want
 		}
-		if max := new(big.Int).Mul(s.PoolRaw, big.NewInt(20)); amount.Cmp(max) > 0 {
+		if max := new(big.Int).Mul(base, big.NewInt(20)); amount.Cmp(max) > 0 {
 			amount = max
 		}
 	}
@@ -1844,6 +1905,28 @@ func reachable(rel *RelayInfo, timeout time.Duration) bool {
 	return true
 }
 
+// poolRaw is what one pool top-up to rel costs: enough for PoolBytes at that
+// peer's published price, never less than the operator's PoolRaw floor. With
+// PoolBytes unset it is the flat PoolRaw, which is what older builds did.
+func (s *Server) poolRaw(rel *RelayInfo) *big.Int {
+	if s.PoolRaw == nil {
+		return nil // static pool tags (test mode)
+	}
+	if s.PoolBytes <= 0 || rel == nil || rel.MinRate == 0 {
+		return s.PoolRaw
+	}
+	amount := RawFor(s.PoolBytes, token.RateToRaw(rel.MinRate))
+	if amount.Cmp(s.PoolRaw) < 0 {
+		return s.PoolRaw
+	}
+	return amount
+}
+
+// poolSize is how many bytes one top-up to rel buys.
+func (s *Server) poolSize(rel *RelayInfo) int64 {
+	return BytesFor(s.poolRaw(rel), token.RateToRaw(rel.MinRate))
+}
+
 // ensurePool makes sure we have prepaid quota at the downstream relay by
 // transferring SAIL to it in bulk; the transfer hash is the pool tag.
 func (s *Server) ensurePool(rel *RelayInfo) (string, error) {
@@ -1857,7 +1940,7 @@ func (s *Server) ensurePool(rel *RelayInfo) (string, error) {
 		s.pools[rel.Account] = p
 	}
 	need := s.PoolRaw != nil && p.credited-p.used < 4<<20 && !p.topping && time.Since(p.lastTop) > 5*time.Minute
-	if need && BytesFor(s.PoolRaw, token.RateToRaw(rel.MinRate)) < 8<<20 {
+	if need && s.poolSize(rel) < 8<<20 {
 		need = false // this peer's price makes our pool size pointless: do not top up 288 times a day
 	}
 	if need {

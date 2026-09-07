@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/dhyabi2/sail/token"
 )
 
 // Traffic counters for the status surfaces (app screen, browser extension).
@@ -51,6 +53,8 @@ func (m *manager) StatusJSON() map[string]any {
 		"exitCC":     m.opts.exitCC,
 		"nick":       Nick(),
 		"needsFunds": m.NeedsFunds(),
+		"required":   token.FormatXNO(m.anchorNeed()), // what to send: an anchor at the cheapest relay we could use
+		"buysMiB":    AnchorBytes >> 20,
 	}
 	return out
 }

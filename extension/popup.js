@@ -45,6 +45,12 @@ async function render() {
     if (status.nick) document.querySelector("h1").textContent = "Sailnet · " + status.nick;
     $("fund").hidden = !status.needsFunds;
     $("fundAddr").textContent = status.address || "";
+    // What to send is not a constant: an anchor buys a fixed amount of
+    // service, so the XNO it costs follows the price relays publish. The
+    // client works it out and reports it; the popup only reads it.
+    $("fundHint").textContent = status.required
+      ? "Send it a little Nano: " + status.required + " XNO buys about " + (status.buysMiB || 10) + " MB. It connects by itself the moment the funds confirm."
+      : "Send it a little Nano. It connects by itself the moment the funds confirm.";
   } else {
     $("fund").hidden = true;
   }

@@ -21,6 +21,7 @@ import (
 	"github.com/dhyabi2/sail/client"
 	"github.com/dhyabi2/sail/nano"
 	"github.com/dhyabi2/sail/relay"
+	"github.com/dhyabi2/sail/token"
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
@@ -40,7 +41,7 @@ type Options struct {
 	Hops        int    `json:"hops"`        // 2..4, default 3
 	ExitCC      string `json:"exitCC"`      // preferred exit country, "" = any (optional)
 	ExcludeCC   string `json:"excludeCC"`   // exit countries never to use, comma-separated
-	Anchor      string `json:"anchor"`      // XNO per prepaid anchor, default 0.0005
+	Anchor      string `json:"anchor"`      // least XNO per prepaid anchor, default 0.0005; the anchor actually paid buys a fixed amount of service at the entry relay's published price
 	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
 	Stealth     bool   `json:"stealth"`     // ignored: always on
 	Bridges     string `json:"bridges"`     // bridge lines, newline separated
@@ -573,7 +574,7 @@ func errJSON(err error) string {
 func Funds(home string) (out string) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = `{"needsFunds":true,"required":"` + client.AnchorXNO + `","error":"could not check the wallet"}`
+			out = `{"needsFunds":true,"required":"` + token.FormatXNO(client.RequiredXNO()) + `","error":"could not check the wallet"}`
 		}
 	}()
 	os.Setenv("SAIL_HOME", home)
