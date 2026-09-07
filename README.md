@@ -74,6 +74,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
 | `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
 | `--pool-mib 32` | MiB of service each prepayment to the next hop buys, at that relay's own published price. Sized in service rather than in XNO, so a relay that charges more is still prepaid rather than quietly skipped |
+| `--min-credit-mib 10` | the smallest quota one payment may open, granted once per paying wallet per day. It keeps an app built against an older, cheaper price usable on your relay instead of leaving it to re-anchor in a loop; `0` turns it off |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
 | `--unlisted` | run as a bridge: never on the ledger, handed out by invite |
@@ -176,12 +177,16 @@ sailnode client --socks 127.0.0.1:1080 --hops 3
 curl --socks5-hostname 127.0.0.1:1080 https://api.ipify.org
 ```
 
-The client makes a wallet on first run; fund it with a few thousandths of an
-XNO. On a censored network use `--censored` and a bridge line
-from someone who runs a bridge. `sailnode client -h` lists whole-device
+The client makes a wallet on first run and claims a free trial grant for it,
+so the first circuit costs nothing and there is no step where you have to buy
+XNO before seeing whether the thing works. After that it pays its own way: it
+prepays each entry relay for about 10 MiB at that relay's published price, and
+tops up from the circuit's measured rate. The bridge and censorship defences
+are always on and have no switch; a bridge line from someone who runs a bridge
+is the only thing worth adding by hand. `sailnode client -h` lists whole-device
 capture, DNS through the circuit and the status endpoint for the browser
-extension. Android: install the APK from Releases; the app funds
-itself the same way and shows where to get XNO.
+extension. Android: install the APK from Releases; the app funds itself the
+same way and shows where to get XNO.
 
 ## Built to be hard to censor
 
@@ -235,9 +240,11 @@ Every one of these is in the code today, not a plan.
   itself. In stealth mode the client never contacts a Nano node at all: it
   signs its payment offline from a cached chain state and the entry relay
   publishes it, and every later ledger call goes through the circuit's exit.
-- **Censored-network profile.** `--censored` (the app's switch): bridges are
-  the only entries, listed relays are never probed from the real address,
-  gossip is fetched only from bridges, and there is never a direct ledger call.
+- **Censored-network profile, always on.** There is no switch and no flag to
+  forget: bridges are preferred as entries, listed relays are never probed
+  from the real address, gossip is fetched only from bridges, and there is
+  never a direct ledger call. A defence you can turn off is one that is off
+  for the people who needed it most.
 - **No single list to block.** Relays register on the Nano ledger itself,
   which cannot be taken down, and also gossip signed records to each other, so
   a client with one working bridge learns the whole network without the
@@ -245,8 +252,12 @@ Every one of these is in the code today, not a plan.
 - **DNS never leaves the device.** The client answers DNS locally and
   forwards each query through the circuit to a resolver at the exit; the
   Android app and whole-device capture sinkhole every name.
-- **Kill switch.** On Android the tunnel stays up as a black hole if the
-  client fails to start; nothing falls back to the open network.
+- **No blocking, deliberately.** There is no kill switch and no black hole.
+  If the Android client fails to start, the tunnel is torn down and the
+  notification says why, so the phone keeps its ordinary connection and the
+  user can tap Connect again. A privacy tool that silently takes the network
+  away is a tool people uninstall, and while traffic is flowing it goes
+  through the circuit or not at all.
 - **Home relays.** A PC behind NAT registers with its harbour's country and no
   ASN, and reaches the harbour through an ingress circuit, so the ledger never
   says where the operator is and there is a supply of residential entries.
@@ -288,6 +299,15 @@ contacts a Nano node; it signs the block offline from a cached chain state and
 hands it to the entry, which publishes and verifies it. Relays prepay the next
 hop from pooled sends and meter every cell against quota, so nobody extends
 credit and there is nothing to ban. Earnings are swept hourly to `--payout`.
+
+Every prepaid amount is a quantity of *service*, never a fixed number of XNO:
+an anchor buys about 10 MiB at the entry's published price, a pool buys
+`--pool-mib` at the next hop's, and the operating float is eight pools' worth
+at your own. Prices differ between relays and move over time, so an amount
+written in XNO buys the wrong thing the moment either happens — a relay
+charging more than a fixed pool was sized for used to be skipped silently
+rather than paid, which is a partitioned network and no error message
+anywhere.
 
 **Registry.** Relays register on the Nano ledger itself: REGISTER and
 DESCRIPTOR operations encoded in the representative field of state blocks
@@ -337,8 +357,9 @@ through the circuit, optional whole-device capture (DNS sinkhole plus Host/SNI
 listeners), a status endpoint that only browser extensions may read, and a
 nickname that replaces the wallet address and device addresses in every log.
 Android: a VpnService with a userspace network stack routes all TCP and UDP
-through the circuit, and a kill switch keeps the tunnel as a black hole if the
-client fails to start. Chrome: a proxy toggle with a WebRTC guard.
+through the circuit, and a failed start tears the tunnel down with the reason
+rather than black-holing the phone's network. Chrome: a proxy toggle with a
+WebRTC guard.
 
 **Privacy limits, stated plainly.** Sailnet cannot hide the device's MAC
 address or hostname on the local network, or the funding graph of a wallet on
@@ -369,9 +390,8 @@ with connect, wallet (address, balance, where to get XNO), status and
 settings (exit exclusion, bridges). It runs the same client as
 `sailnode client` and serves a SOCKS5 proxy on 127.0.0.1:1080 and DNS on
 127.0.0.1:5300 for browsers and the extension. Releases carry
-`Sailnet-macOS-AppleSilicon.dmg`, `Sailnet-macOS-Intel.dmg`,
-a release has a `.sha256` next to it; the node binaries also share one
-`.sha256 files`.
+`Sailnet-macOS-AppleSilicon.dmg`, `Sailnet-macOS-Intel.dmg` and
+`Sailnet-Windows.exe`. Every file in a release has a `.sha256` beside it.
 
 The `Desktop apps` workflow signs and notarizes when the certificates are in
 the repository secrets (Developer ID certificate and notarytool credentials
