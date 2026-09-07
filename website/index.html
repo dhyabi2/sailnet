@@ -201,6 +201,7 @@
   <p>Any VPS or home PC. Earnings are swept every hour to a wallet you control.</p>
 <pre>docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/data \
   ghcr.io/dhyabi2/sailnet relay --register --payout nano_your_wallet_address</pre>
+  <p style="margin-top:16px"><strong>Replace <code>nano_your_wallet_address</code> with an address you own before you start it.</strong> Without <code>--payout</code> the relay still earns, but into a wallet that exists only on that server — and its seed is the only copy anywhere. Rebuild the box without exporting it and the money is gone for good. With it set, the server never holds more than an hour of earnings.</p>
   <p style="margin-top:16px">Behind NAT, no port forwarding: <code>sailnode earn --home --payout nano_…</code></p>
 </div></section>
 

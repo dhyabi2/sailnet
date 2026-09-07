@@ -18,9 +18,39 @@ Registry as `ghcr.io/dhyabi2/sailnet`.
 
 ## Run a relay in one command
 
-Earnings are swept every hour to the wallet you name in `--payout`; the node
-keeps only a small operating float. Use any Nano wallet address you own
-(Natrium, Nault, an exchange deposit address).
+> ### Set `--payout` first, before anything else
+>
+> `--payout nano_…` is the address your earnings are sent to, and it is the
+> one decision you should make before you start the relay rather than after.
+>
+> **Without it the relay still earns — into a wallet that exists only on that
+> server.** Nothing is lost while the machine lives, but the seed is in
+> `SAIL_HOME/wallet.json` and nowhere else: no copy, no account, no support
+> address. Destroy the VPS, lose the disk, or rebuild the box without
+> exporting that seed, and the money is gone, permanently, and nobody can
+> give it back. That is the same property that makes the network impossible
+> to freeze.
+>
+> With `--payout` set, everything above a small operating float is swept out
+> every hour to a wallet you already control, so the server never holds more
+> than an hour of earnings and can be thrown away at any moment.
+>
+> Use any Nano address you own — Natrium, Nault, an exchange deposit address.
+> It costs nothing to set and cannot be set too early.
+>
+> **Already running without it?** Nothing is lost yet. Back the wallet up, or
+> move the earnings out and add the flag. Note the `SAIL_WALLET=` prefix: run
+> on a relay, `sailnode wallet` finds the wallet the *installed service* uses,
+> while plain `sail` would reach for `~/.sail` and send from the wrong (likely
+> empty) wallet.
+>
+> ```
+> sailnode wallet export                     # the seed and address holding your earnings — write it down
+> W=$(sailnode wallet where 2>/dev/null)     # the path the service really uses
+> SAIL_WALLET=$W sail wallet show            # what has accumulated
+> SAIL_WALLET=$W sail send nano_your_wallet 0.5
+> # then add --payout nano_your_wallet to the unit and: systemctl restart sailnode
+> ```
 
 Docker:
 
@@ -67,7 +97,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 
 | flag | what it does |
 |---|---|
-| `--payout nano_…` | forward earnings to this wallet every hour |
+| `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, every hour. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: eight pools' worth at your own price, so it follows the price instead of needing to be re-tuned |
