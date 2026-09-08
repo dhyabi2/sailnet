@@ -108,7 +108,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, checked every 15 minutes. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
-| `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: eight pools' worth at your own price, so it follows the price instead of needing to be re-tuned |
+| `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: what eight pool top-ups cost at the peers' published prices. It follows what prepaying actually costs, and raising your own `--rate` does not move it — what you charge should not decide when you get paid |
 | `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
 | `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
 | `--pool-mib 32` | MiB of service each prepayment to the next hop buys, at that relay's own published price. Sized in service rather than in XNO, so a relay that charges more is still prepaid rather than quietly skipped |
@@ -124,7 +124,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 
 ```
 sailnode upgrade            # fetch the newest published build, verify it, install it, restart
-sailnode upgrade -check     # say what is installed and what is published, change nothing
+sailnode upgrade -check     # say whether you are up to date, change nothing
 sailnode upgrade -restart=false   # install now, restart when you choose
 ```
 
@@ -133,6 +133,19 @@ replaced until it matches, so a failed or tampered download leaves the running
 node untouched. The previous binary is kept next to the new one as
 `sailnode.previous`. Your wallet, your quota log and everything else in
 `SAIL_HOME` are never read or written by an upgrade.
+
+The new build is then run once, before the service is restarted. A binary that
+cannot execute — the wrong architecture, a download truncated along with its
+checksum file, a missing library — would otherwise be found only by a service
+that restarts forever, which is the one failure an operator does not watch
+happen. If it does not run, the previous build goes back and nothing is
+restarted. `sail`, the wallet CLI, is upgraded at the same time when it is
+already installed beside `sailnode`; an upgrade never adds a command you did
+not choose to have.
+
+Set `SAIL_RELEASE_API` to upgrade from somewhere else — a fork, a mirror, an
+air-gapped copy. The download is still verified against the `.sha256` published
+beside it, so pointing this elsewhere buys a different source, not a weaker one.
 
 Upgrading is optional. A relay that never upgrades keeps working, keeps being
 chosen for circuits, and keeps earning: the network is built so that no

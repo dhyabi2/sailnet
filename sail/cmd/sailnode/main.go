@@ -105,7 +105,7 @@ func runRelay(args []string) {
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address, checked every 15 minutes, keeping only --payout-keep on the node")
-	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: eight pools' worth at your own price, so the float follows the price instead of being re-tuned by hand)")
+	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: what eight pool top-ups cost at the peers' published prices, so the float follows what prepaying actually costs rather than being re-tuned by hand — and changing your own --rate does not move it)")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
 	certFile := fs.String("cert", "", "PEM certificate chain to present (e.g. Let's Encrypt for --host); default: a generated self-signed cert")
@@ -362,29 +362,34 @@ func runRelay(args []string) {
 		}()
 		if *payout != "" {
 			// The float exists to prepay the next hop, so it is sized in
-			// service, not in money: eight pools' worth at our own price.
-			// Left as a fixed number of XNO it silently became too small the
-			// moment the price moved, and a node with nothing to prepay with
-			// cannot extend a circuit however much it has earned.
-			keep := relay.RawFor(8*(*poolMiB)<<20, rateRaw)
+			// service, not in money: eight pools' worth. Left as a fixed
+			// number of XNO it silently became too small the moment the price
+			// moved, and a node with nothing to prepay with cannot extend a
+			// circuit however much it has earned.
+			//
+			// It is priced at the peers' rates, not at ours. Charging eight
+			// pools at our own price made repricing decide when the operator
+			// got paid: raising the price ten times raised this bar ten times
+			// with it, and payouts that had been arriving all day stopped —
+			// while the float still could not buy a single pool, because what
+			// a pool costs is set by the peer, not by us.
+			keepFn := func() *big.Int { return s.Float(8) }
 			if strings.TrimSpace(*payoutKeep) != "" {
 				k, err := token.ParseXNO(*payoutKeep)
 				if err != nil {
 					log.Fatal("--payout-keep: ", err)
 				}
-				keep = k
-			} else if *poolMiB <= 0 && poolRaw != nil {
-				keep = new(big.Int).Mul(poolRaw, big.NewInt(8))
+				keepFn = func() *big.Int { return k } // an operator who names a figure keeps it
 			}
 			if _, err := nano.AddressToPubkey(*payout); err != nil || *payout == key.Address {
 				log.Fatal("--payout: not a valid address, or this node's own wallet")
 			}
-			log.Printf("payout: earnings above %s XNO go to %s, checked every 15 minutes", token.FormatXNO(keep), client.Short(*payout))
+			log.Printf("payout: earnings above %s XNO go to %s, checked every 15 minutes", token.FormatXNO(keepFn()), client.Short(*payout))
 			// Two minutes after start, then every fifteen: a node that is
 			// restarted often (an upgrade, a reboot) must not keep losing the
 			// hour it had already waited, and an operator should not have to
 			// wait an hour to see that payouts work at all.
-			go func() { time.Sleep(2 * time.Minute); s.RunPayout(*payout, keep, 15*time.Minute) }()
+			go func() { time.Sleep(2 * time.Minute); s.RunPayoutFunc(*payout, keepFn, 15*time.Minute) }()
 		}
 	}
 	go func() { // gossip: learn peers from peers, so the network knows itself without the ledger

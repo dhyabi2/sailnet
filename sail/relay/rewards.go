@@ -512,10 +512,54 @@ func SweepTo(ctx context.Context, nc *nano.Client, key *nano.Key, to string, kee
 	return amt, nil
 }
 
+// Float is the operating float a relay keeps back before forwarding earnings:
+// what `pools` pool top-ups would actually cost it.
+//
+// A top-up is priced at the *peer's* rate — poolRaw(rel) charges what that
+// peer asks — so the float has to be priced there too. Sizing it at our own
+// selling price instead tied the two together, and raising our price raised
+// the bar our own earnings had to clear before an operator saw any of them.
+// Repricing is for what we charge; it should not decide when we get paid.
+//
+// The registry is the only place the peers' prices live, so an empty one
+// (a cold start, a node that has not replayed the ledger yet) falls back to
+// the --pool floor, which is what a top-up costs when no price is known.
+func (s *Server) Float(pools int64) *big.Int {
+	if s.PoolRaw == nil || pools <= 0 {
+		return big.NewInt(0)
+	}
+	var costs []*big.Int
+	if s.Registry != nil {
+		for _, rel := range s.Registry.All() {
+			if s.Key != nil && rel.Account == s.Key.Address {
+				continue // we never prepay ourselves
+			}
+			if c := s.poolRaw(rel); c != nil {
+				costs = append(costs, c)
+			}
+		}
+	}
+	if len(costs) == 0 {
+		return new(big.Int).Mul(s.PoolRaw, big.NewInt(pools))
+	}
+	// The median, not the mean: one relay asking a thousand times the going
+	// rate should not decide how much every other operator holds back.
+	sort.Slice(costs, func(i, j int) bool { return costs[i].Cmp(costs[j]) < 0 })
+	return new(big.Int).Mul(costs[len(costs)/2], big.NewInt(pools))
+}
+
 // RunPayout sweeps every interval; safe to run alongside pools and the levy
 // because the float is never touched.
 func (s *Server) RunPayout(to string, keep *big.Int, every time.Duration) {
+	s.RunPayoutFunc(to, func() *big.Int { return keep }, every)
+}
+
+// RunPayoutFunc is RunPayout with a float that is read again on every sweep,
+// so a float that follows the peers' prices tracks them while the node runs
+// instead of being fixed at whatever the registry held at startup.
+func (s *Server) RunPayoutFunc(to string, keepFn func() *big.Int, every time.Duration) {
 	for {
+		keep := keepFn()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		amt, err := SweepTo(ctx, s.Nano, s.Key, to, keep)
 		switch {
