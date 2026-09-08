@@ -59,11 +59,12 @@ docker run -d --name sailnet --restart unless-stopped -p 443:443 -v sailnet:/dat
   ghcr.io/dhyabi2/sailnet relay --register --payout nano_your_wallet_address_here
 ```
 
-Binary (Linux x86-64, as root, port 443; the checksum is verified):
+Binary (Linux, x86-64 or arm64, as root, port 443; the checksum is verified):
 
 ```
-curl -fsSL -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64 \
-  && curl -fsSL https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-amd64.sha256 | sed 's#  .*#  /usr/local/bin/sailnode#' | sha256sum -c \
+arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSL -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-$arch \
+  && curl -fsSL https://github.com/dhyabi2/sailnet/releases/latest/download/sailnode-linux-$arch.sha256 | sed 's#  .*#  /usr/local/bin/sailnode#' | sha256sum -c \
   && chmod +x /usr/local/bin/sailnode
 sailnode relay --register --payout nano_your_wallet_address_here
 ```

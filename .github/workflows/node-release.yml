@@ -18,6 +18,7 @@ jobs:
       matrix:
         include:
           - { goos: linux,   goarch: amd64 }   # the relay binary the install command downloads; apps come from the other workflows
+          - { goos: linux,   goarch: arm64 }   # the cheapest relay boxes there are (Oracle free tier, Hetzner Ampere, a Pi); without this `sailnode upgrade` refuses them
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
