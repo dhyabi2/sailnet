@@ -457,6 +457,19 @@ func (c *Circuit) tryResume() bool {
 	return false
 }
 
+// Pair sends a pairing code to the entry relay and waits for its answer. A
+// relay from before pairing says nothing, which comes back as a timeout.
+func (c *Circuit) Pair(code string, timeout time.Duration) error {
+	if err := c.send(wire.CmdPair, 0, []byte(code)); err != nil {
+		return err
+	}
+	_, err := c.waitCtl(wire.CmdPaired, timeout)
+	if err != nil && strings.Contains(err.Error(), "timeout") {
+		return errors.New("no answer: this relay runs a build from before pairing; run `sailnode upgrade` on it")
+	}
+	return err
+}
+
 func (c *Circuit) waitCtl(cmd byte, timeout time.Duration) (ctlMsg, error) {
 	t := time.NewTimer(timeout)
 	defer t.Stop()

@@ -162,3 +162,22 @@ If the answer is no, the change does not ship, whatever it improves.
     relay carries a byte for less than it asked. *Privacy:* the ledger learns
     nothing new; the offer reveals that a relay is idle, which any client could
     measure; the cost ledger never leaves the device.
+
+- **2026-09-09, pairing and the Network switch (v0.3.25).** `sailnode pair`
+  prints a six-digit code (five minutes, one use, three tries). The app sends
+  it inside an ordinary paid circuit as a new cell, `CmdPair` (30); the relay
+  already knows which wallet paid that circuit and, on a match, records it in
+  `owners.json` and answers `CmdPaired` (31). Modes: *open* (ours never
+  special), *mine* (ours as exit/middle, free there; entry paid), *direct* (one
+  hop through ours, nothing paid).
+  - *Old relay:* does not know `CmdPair` and says nothing; the client times out
+    and says "upgrade this relay to pair it". No other behaviour changes. A
+    relay of ours that refuses the owner tag in Direct is rested an hour, as
+    for later hops.
+  - *Old client / old app:* never sends `CmdPair`, has no switch, behaves as
+    v0.3.21 (ours as exit, never entry).
+  - *Money:* pairing costs the anchor the app would pay that relay anyway,
+    and it stays usable there. Direct pays nobody; nobody else carries a byte.
+  - *Privacy:* the code proves shell access to the relay, the circuit proves
+    the key; nothing on the ledger. Direct is one hop: the relay (and its
+    host) sees the user's address — stated on the switch.

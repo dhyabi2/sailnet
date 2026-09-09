@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -76,8 +76,12 @@ func main() {
 		client.RunCosts(os.Args[2:]) // what this wallet paid and got, from the device's own ledger
 	case "stats":
 		runStats(os.Args[2:]) // this relay's own /stats, from loopback: no ledger, no RPC
+	case "pair":
+		runPair() // print a one-time code that lets the app make this wallet an owner
+	case "pair-relay":
+		client.RunPairRelay(os.Args[2:]) // the other side: pair this wallet with a relay, by its code
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|upgrade ...")
 		os.Exit(2)
 	}
 }
@@ -355,6 +359,11 @@ func runRelay(args []string) {
 	}()
 
 	s := &relay.Server{Key: key, Nano: nc, Quota: q, TLS: cert, Registry: reg, Exit: *exit, PoolRaw: poolRaw, PoolBytes: *poolMiB << 20, MinCredit: *minCredit << 20, Decoy: decoyHTML, PoolsFile: filepath.Join(client.DataDir(), "pools.json"), AllowPrivate: *regDir != "", BridgeSecret: bridgeSecret, GetCertificate: getCert, Host: *host}
+	s.OwnersFile = filepath.Join(client.DataDir(), "owners.json")
+	s.PairingFile = filepath.Join(client.DataDir(), "pairing.json")
+	if n := s.LoadOwners(); n > 0 {
+		log.Printf("owners: %d paired wallet(s) ride this relay free", n)
+	}
 	if acct := *owner; acct != "" || *payout != "" {
 		if acct == "" {
 			acct = *payout
@@ -382,6 +391,14 @@ func runRelay(args []string) {
 		s.SpotDiscount, s.SpotBelow, s.Capacity = *spotDiscount, *spotBelow, int64(*capacityMbps)*125000
 		go s.RunSpot(time.Minute)
 		log.Printf("spot price: %d%% off while load is under %d%% of %d Mbps, in signed 30-minute windows", *spotDiscount, *spotBelow, *capacityMbps)
+	}
+	if s.Owner == ([32]byte{}) && len(s.Owners) == 0 {
+		// Nobody can ride this relay free yet: print a pairing code, as
+		// `sailnode pair` would, so a first-time operator sees it in the log
+		// or in `docker logs` without knowing the command exists.
+		if code, exp, err := relay.NewPairingCode(s.PairingFile); err == nil {
+			log.Printf("pairing code %s %s — enter it in the Sailnet app (Settings → My relays → Add) before %s to ride this relay free; `sailnode pair` mints a new one", code[:3], code[3:], exp.Format("15:04"))
+		}
 	}
 	if *unlisted {
 		s.BootstrapBytes = 2 << 20 // a first-run client in a censored network gets 2 MiB to reach the ledger through us
@@ -966,4 +983,17 @@ func runHome(key *nano.Key, nc *nano.Client, rate string, exit bool, harbourAcct
 		log.Println("harbour tunnel closed; reconnecting")
 		time.Sleep(5 * time.Second)
 	}
+}
+
+// runPair mints a pairing code for the relay whose data directory this is
+// (SAIL_HOME, or the installed service's). The running relay reads the file
+// when the code arrives, so nothing is restarted.
+func runPair() {
+	code, exp, err := relay.NewPairingCode(filepath.Join(client.DataDir(), "pairing.json"))
+	if err != nil {
+		log.Fatalf("pair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
+	}
+	fmt.Printf("Pairing code:  %s %s\n", code[:3], code[3:])
+	fmt.Printf("Valid until %s, one use. In the Sailnet app: Settings → My relays → Add relay, pick this relay, enter the code.\n", exp.Format("15:04"))
+	fmt.Println("Once paired, that phone rides this relay free (Direct: 1 hop, nothing paid).")
 }

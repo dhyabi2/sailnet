@@ -46,16 +46,14 @@ func OwnerTag(relayPub, ownerPub [32]byte) [32]byte {
 // Anything else — no owner, another tag, a bad signature — is false, and
 // the CREATE takes the ordinary paid path, which will refuse it.
 func (s *Server) ownerCreate(tag string, tagB, clientPub [32]byte, sig []byte) bool {
-	if s.Owner == ([32]byte{}) || s.Key == nil || s.Quota == nil {
+	if s.Quota == nil {
 		return false
 	}
-	if tagB != OwnerTag(s.Key.Public, s.Owner) {
+	owner, ok := s.ownerFor(tagB) // --owner/--payout, or anyone paired since (pairing.go)
+	if !ok || !VerifyCreate(owner, clientPub, tagB, sig) {
 		return false
 	}
-	if !VerifyCreate(s.Owner, clientPub, tagB, sig) {
-		return false
-	}
-	if !s.Quota.Credit(tag, OwnerBytes, hex.EncodeToString(s.Owner[:])) && s.Quota.Remaining(tag) < OwnerBytes/2 {
+	if !s.Quota.Credit(tag, OwnerBytes, hex.EncodeToString(owner[:])) && s.Quota.Remaining(tag) < OwnerBytes/2 {
 		s.Quota.Add(tag, OwnerBytes)
 	}
 	return true

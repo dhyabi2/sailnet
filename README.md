@@ -113,7 +113,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, checked every 15 minutes. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
-| `--owner nano_…` | the wallet that rides this relay free — yours, in the app. Default: `--payout`. See *Run a relay, ride it free* |
+| `--owner nano_…` | a wallet that rides this relay free, set by hand. Default: `--payout`. Pairing from the app (`sailnode pair`) adds more. See *Run a relay, ride it free* |
 | `--spot-discount 50` | sell idle capacity cheaper: percent off, signed into gossip in 30-minute windows while load is under `--spot-below` (default 20% of `--capacity-mbps`). Off by default. See *Cheaper when it is quiet* |
 | `--rep-friends nano_…,nano_…` `--rep-bonus 20` | more bytes per XNO for payers whose account votes for a representative you respect. Your opinion, as a price. Off by default |
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: what eight pool top-ups cost at the peers' published prices. It follows what prepaying actually costs, and raising your own `--rate` does not move it — what you charge should not decide when you get paid |
@@ -139,23 +139,35 @@ paid for out of what your relay earned, which was your money already. Nobody
 else's relay carries anything unpaid; every other operator earns exactly what
 they would have.
 
-Set it up once:
+**Pair it — six digits, nothing else to copy.** On the relay:
 
-1. On the relay, make `--owner` (or `--payout`) the wallet address shown in
-   your app. Every relay you run can name the same wallet.
-2. In the app, Settings → *Run a relay, ride it free* → *My relays*: paste the
-   relay's account, one per row. On the command line: `sailnode client --mine
-   nano_…,nano_…`.
+```
+sailnode pair
+Pairing code:  483 920      (valid five minutes, one use)
+```
 
-From then on a relay of yours is your exit (or a middle hop) whenever one
-answers — never your entry. You still enter through someone else's relay and
-pay it for its work like any client, so an observer of a relay you run never
-finds your address in its inbound; the owner tag travels inside the circuit
-to your relay, which asks you for nothing. A relay that does not name your
-wallet refuses the tag and the app says so, then pays it like any hop for an
-hour. The tag is bound to the relay it is for and signed with your key, so it
-means nothing anywhere else, and to everyone but your relay the circuit looks
-like any other.
+In the app: Settings → *Run a relay, ride it free* → **Add my relay** → pick
+the relay, enter the code. The app pays that relay an ordinary anchor, opens
+a circuit to it and sends the code inside; the relay records the wallet that
+paid as an owner. A relay that has no owner yet prints a code by itself when
+it starts (`docker logs sailnet` shows it). On the command line the same is
+`sailnode pair-relay nano_<relay> 483920`, then `--mine nano_<relay>`.
+
+Then choose how your relays are used — Settings → **Network**:
+
+| mode | path | you pay | who sees your address |
+|---|---|---|---|
+| **Direct** | your relay only, 1 hop | nothing | your relay (and its host); websites see the relay. A VPN through a box you own |
+| **My relays** | stranger → stranger → your relay | one entry anchor | the entry only; nobody watching your relay sees you arrive |
+| **Open network** | three strangers | full price | the entry only; your relays are not used |
+
+Direct is for the owner of one relay who does not want to pay two strangers;
+My relays is for when you would rather not be seen arriving at your own. If
+your relay is down in Direct, the app says so and offers the other two rather
+than silently paying. `--owner nano_…` (default `--payout`) still works as
+before for a wallet you set on the relay yourself. The owner tag is bound to
+the relay it is for and signed with your key, so it means nothing anywhere
+else, and to everyone but your relay the circuit looks like any other.
 
 Nano fans have run representatives for years for nothing. This is the same
 arrangement with something in it for you: the network you help carry is the

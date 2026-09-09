@@ -1,0 +1,69 @@
+package client
+
+import (
+	"testing"
+
+	"github.com/dhyabi2/sail/token"
+)
+
+// The Network switch: Direct is one free hop through a relay of ours; Open
+// never treats ours as special; My relays is the exit-or-middle behaviour.
+
+func TestDirectIsOneHopThroughOurRelayAndNothingElse(t *testing.T) {
+	m := mineManager(t, nil)
+	m.SetMine("nano_real0")
+	m.SetMode(ModeDirect)
+	if m.opts.hops != 1 {
+		t.Fatalf("Direct is one hop, got %d", m.opts.hops)
+	}
+	path, err := m.choosePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) != 1 || path[0].Account != "nano_real0" {
+		t.Fatalf("Direct must be exactly our relay, got %v", path)
+	}
+	if tags := m.hopTags(path); len(tags) != 0 {
+		t.Fatal("no later hops, so no hop tags; the owner tag goes on the CREATE itself")
+	}
+	// Leaving Direct restores the configured hops.
+	m.SetMode(ModeMine)
+	if m.opts.hops != 3 {
+		t.Fatalf("hops should be back to 3, got %d", m.opts.hops)
+	}
+}
+
+func TestDirectRefusesRatherThanPayingStrangers(t *testing.T) {
+	m := mineManager(t, map[string]uint16{"nano_real0": uint16(token.FlagPublic)}) // ours cannot exit
+	m.SetMine("nano_real0")
+	m.SetMode(ModeDirect)
+	if _, err := m.choosePath(); err == nil {
+		t.Fatal("with no usable relay of ours, Direct must say so, not silently pay a stranger")
+	}
+}
+
+func TestOpenNetworkNeverUsesOurRelays(t *testing.T) {
+	m := mineManager(t, nil)
+	m.SetMine("nano_real0")
+	m.SetMode(ModeOpen)
+	for i := 0; i < 6; i++ {
+		path, err := m.choosePath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path[len(path)-1].Account == "nano_real0" && len(m.hopTags(path)) != 0 {
+			t.Fatal("in Open network our relay may be chosen like any other, but never with an owner tag")
+		}
+		if len(m.hopTags(path)) != 0 {
+			t.Fatal("Open network sends no owner tags")
+		}
+	}
+}
+
+func TestUnknownModeIsMine(t *testing.T) {
+	m := mineManager(t, nil)
+	m.SetMode("whatever")
+	if m.Mode() != ModeMine {
+		t.Fatalf("mode = %s", m.Mode())
+	}
+}

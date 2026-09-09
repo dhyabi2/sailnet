@@ -113,17 +113,19 @@ func newNano() *nano.Client {
 }
 
 type clientOpts struct {
-	hops    int
-	exitCC  string
-	exclude map[string]bool // exit countries the user refuses
-	anchor  *big.Int        // raw XNO per prepaid anchor
-	rate    uint32          // max price accepted on any hop (RateUnitRaw per MiB); 0 = 3x the median
-	timeout time.Duration
-	regDir  string
-	freeTag string
-	entry   string
-	mine    map[string]bool // relays this wallet owns: used as entry and ridden free (the relay names us as --owner)
-	avoid   map[string]bool // relays never used in a path (the home node itself, its harbour)
+	hops       int
+	exitCC     string
+	exclude    map[string]bool // exit countries the user refuses
+	anchor     *big.Int        // raw XNO per prepaid anchor
+	rate       uint32          // max price accepted on any hop (RateUnitRaw per MiB); 0 = 3x the median
+	timeout    time.Duration
+	regDir     string
+	freeTag    string
+	entry      string
+	mine       map[string]bool // relays this wallet owns (pair.go): ridden free as exit/middle, or as the one hop in Direct mode
+	mode       string          // open | mine | direct (pair.go)
+	hopsWanted int             // the configured hops, restored when leaving Direct mode
+	avoid      map[string]bool // relays never used in a path (the home node itself, its harbour)
 }
 
 // manager builds circuits, pays anchors, tracks local relay scores.
@@ -429,7 +431,16 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	// an observer of a relay we run must not find us in its inbound. Ours go
 	// at the exit or in the middle (below), where the owner tag rides inside
 	// the EXTEND and no one but that relay learns whose circuit it is.
-	if m.entry != nil && !m.skip[m.entry.Account] && !m.opts.mine[m.entry.Account] && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
+	if m.opts.mode == ModeDirect {
+		// Direct: one hop, ours, free. A VPN through a box we own — the relay
+		// sees our address, which is fine because it is ours.
+		e, err := m.directEntry(pick)
+		if err != nil {
+			return nil, err
+		}
+		path = append(path, e)
+		m.entry = e
+	} else if m.entry != nil && !m.skip[m.entry.Account] && !m.opts.mine[m.entry.Account] && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
 		path = append(path, m.reg.Get(m.entry.Account))
 	} else {
 		// entry must be directly reachable; a bridge (unlisted, unblockable by
@@ -763,7 +774,16 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 				return nil, err
 			}
 		}
-		if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
+		if m.opts.mode == ModeDirect && m.opts.mine[path[0].Account] {
+			// Our own relay as the only hop: present the owner tag, signed
+			// like every CREATE, and buy nothing. Any anchor we hold stays
+			// valid at the relay it was paid to.
+			pub := path[0].Pub
+			if pub == ([32]byte{}) {
+				pub, _ = nano.AddressToPubkey(path[0].Account)
+			}
+			m.tag, m.payment, m.paidTo = relay.OwnerTag(pub, m.key.Public), nil, path[0].Account
+		} else if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
 			m.tag = [32]byte{} // the anchor belongs to another entry
 		}
 		if m.tag == ([32]byte{}) {
@@ -844,6 +864,15 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 						m.mineRefused = map[string]time.Time{}
 					}
 					m.mineRefused[path[c.Failed].Account] = time.Now()
+				} else if c.Failed == 0 && m.opts.mode == ModeDirect && m.opts.mine[path[0].Account] {
+					// Ours, but it refused the owner tag: not paired with this
+					// wallet, or a build from before owner circuits. Rest it an hour.
+					log.Printf("relay %s is listed as yours but did not accept the owner tag: pair it again (sailnode pair on the relay), or upgrade it", short(path[0].Account))
+					if m.mineRefused == nil {
+						m.mineRefused = map[string]time.Time{}
+					}
+					m.mineRefused[path[0].Account] = time.Now()
+					m.tag = [32]byte{}
 				} else if c.Failed == 0 && (strings.Contains(err.Error(), "quota") || strings.Contains(err.Error(), "payment")) {
 					m.tag = [32]byte{} // pay again next time
 					os.Remove(m.anchorPath())
@@ -1023,7 +1052,8 @@ func runClient(args []string) {
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag (fragment-B hash of a SAIL transfer to the entry) instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
-	mine := fs.String("mine", "", "relay accounts you run, comma-separated: used as entry and ridden free (each relay's --owner or --payout must be this wallet)")
+	mine := fs.String("mine", "", "relay accounts you run, comma-separated: paired with this wallet (sailnode pair) or naming it as --owner/--payout")
+	mode := fs.String("mode", "mine", "how your own relays are used: open (never), mine (free exit, paid entry), direct (one hop through yours, nothing paid)")
 	stealth := new(bool)
 	*stealth = true // always: no direct Nano RPC except the first-run bootstrap through Sailnet's endpoint
 	dns := fs.String("dns", "127.0.0.1:5300", "answer DNS here by resolving through the circuit at the exit (empty = off)")
@@ -1073,6 +1103,7 @@ func runClient(args []string) {
 	}
 	m.opts.entry = *entry
 	m.SetMine(*mine)
+	m.SetMode(*mode)
 	SetNick(*nickFlag, m.key.Address)
 	m.SetExcludeExit(*excludeCC)
 	log.SetOutput(RedactingWriter{W: os.Stderr})
@@ -1407,7 +1438,8 @@ func runFetch(args []string) {
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
-	mine := fs.String("mine", "", "relay accounts you run, comma-separated: used as entry and ridden free (each relay's --owner or --payout must be this wallet)")
+	mine := fs.String("mine", "", "relay accounts you run, comma-separated: paired with this wallet (sailnode pair) or naming it as --owner/--payout")
+	mode := fs.String("mode", "mine", "how your own relays are used: open (never), mine (free exit, paid entry), direct (one hop through yours, nothing paid)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		log.Fatal("usage: sailnode fetch <url>")
@@ -1415,6 +1447,7 @@ func runFetch(args []string) {
 	m := newManager(*hops, "", *anchor, *rate, *regDir, *freeTag)
 	m.opts.entry = *entry
 	m.SetMine(*mine)
+	m.SetMode(*mode)
 	c, err := m.circuit()
 	if err != nil {
 		log.Fatal(err)
@@ -2131,6 +2164,9 @@ func (m *manager) SetMine(list string) {
 // mineUsable is a relay this wallet runs that may take the owner tag now:
 // not skipped this build, not refusing it lately.
 func (m *manager) mineUsable(r *relay.RelayInfo) bool {
+	if m.opts.mode == ModeOpen {
+		return false // Open network: a relay of ours is just a relay
+	}
 	return m.opts.mine[r.Account] && !m.skip[r.Account] && time.Since(m.mineRefused[r.Account]) > time.Hour
 }
 
@@ -2160,3 +2196,21 @@ func (m *manager) hopTags(path []*relay.RelayInfo) map[int][32]byte {
 // cap stay on published prices, so an offer can lower what we pay but never
 // move what "the market asks".
 func priceOf(r *relay.RelayInfo) uint32 { return r.PriceNow(time.Now()) }
+
+// RunPairRelay: `sailnode pair-relay <relay account> <code>` — pair this
+// wallet with a relay using the code `sailnode pair` printed on it.
+func RunPairRelay(args []string) {
+	if len(args) < 2 {
+		fmt.Println("usage: sailnode pair-relay <relay nano_ account> <six-digit code>")
+		os.Exit(2)
+	}
+	m := newManager(1, "", "0.0005", "0", "", "")
+	deadline := time.Now().Add(90 * time.Second)
+	for m.reg.Get(args[0]) == nil && time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second) // the relay list is still arriving
+	}
+	if err := m.PairRelay(args[0], args[1]); err != nil {
+		log.Fatalf("pair-relay: %v", err)
+	}
+	fmt.Printf("paired with %s: pass --mine %s (and --mode direct for one free hop) from now on\n", short(args[0]), args[0])
+}

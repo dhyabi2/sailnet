@@ -450,6 +450,12 @@ const (
 	// the same StreamID, ended by an empty payload; the entry then handles it
 	// exactly like CmdRPC.
 	CmdRPCMulti byte = 29
+	// CmdPair: client → its entry relay, inside the tunnel: "here is the pairing
+	// code printed on your terminal" (payload = the code). The relay answers
+	// CmdPaired, or CmdError with why. A relay from before pairing does not know
+	// the command and says nothing; the client reads the silence as "upgrade it".
+	CmdPair   byte = 30
+	CmdPaired byte = 31
 	// QuotaLowStream is the stream id of an unsolicited CmdQuota from the
 	// entry: the quota is under a quarter, top up now.
 	QuotaLowStream uint16 = 2

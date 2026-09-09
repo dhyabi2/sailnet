@@ -29,6 +29,17 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Run a relay, ride it free">
+        <ListPreference
+            android:key="mode"
+            android:title="Network"
+            android:summary="%s"
+            android:entries="@array/mode_names"
+            android:entryValues="@array/mode_values"
+            android:defaultValue="mine" />
+        <Preference
+            android:key="add_relay"
+            android:title="Add my relay"
+            android:summary="On the relay run: sailnode pair — it prints a six-digit code. Pick the relay here and enter the code. Nothing else to copy." />
         <EditTextPreference
             android:key="mine"
             android:title="My relays"

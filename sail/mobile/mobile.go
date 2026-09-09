@@ -45,7 +45,8 @@ type Options struct {
 	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
 	Stealth     bool   `json:"stealth"`     // ignored: always on
 	Bridges     string `json:"bridges"`     // bridge lines, newline separated
-	Mine        string `json:"mine"`        // relay accounts this wallet runs, one per line: entry, ridden free
+	Mine        string `json:"mine"`        // relay accounts this wallet runs, one per line (paired, or naming this wallet as --owner)
+	Mode        string `json:"mode"`        // open | mine | direct — how those relays are used (client/pair.go)
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
 	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
 	Censored    bool   `json:"censored"`    // ignored: always on
@@ -113,7 +114,10 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 			return fmt.Errorf("options: %w", err)
 		}
 	}
-	o.Hops = 3 // the protocol's choice, not a setting
+	o.Hops = 3 // the protocol's choice, not a setting — except Direct: one hop through a relay of ours
+	if o.Mode == client.ModeDirect {
+		o.Hops = 1
+	}
 	if o.Anchor == "" {
 		o.Anchor = "0.0005"
 	}
@@ -159,6 +163,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	m.SetCensored(true)
 	m.SetExcludeExit(o.ExcludeCC)
 	m.SetMine(o.Mine)
+	m.SetMode(o.Mode)
 	mgr = m
 	started = time.Now()
 	go func() { // keep trying while the tunnel is up: funds arriving become a circuit without a tap
@@ -584,4 +589,21 @@ func Funds(home string) (out string) {
 	defer cancel()
 	b, _ := json.Marshal(client.EnsureFunded(ctx))
 	return string(b)
+}
+
+// PairRelay pairs this wallet with a relay using the code printed by
+// `sailnode pair` on it. Returns {"ok":true} or {"ok":false,"error":...}.
+// On success the app appends the account to its own "mine" setting.
+func PairRelay(account, code string) string {
+	mu.Lock()
+	m := mgr
+	mu.Unlock()
+	if m == nil {
+		return `{"ok":false,"error":"connect first, then pair"}`
+	}
+	if err := m.PairRelay(account, code); err != nil {
+		b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+		return string(b)
+	}
+	return `{"ok":true}`
 }

@@ -56,6 +56,12 @@ type Server struct {
 	// paying: the operator's own, in their app (--owner, default --payout).
 	// Zero means nobody. See owner.go.
 	Owner [32]byte
+	// Owners are wallets paired later (pairing.go); OwnersFile persists them,
+	// PairingFile holds the salted hash of the code `sailnode pair` printed.
+	Owners      map[[32]byte]bool
+	OwnersFile  string
+	PairingFile string
+	ownersMu    sync.Mutex
 	// RepFriends and RepBonus: more bytes per XNO for payers whose account
 	// votes for one of these Nano representatives (repbonus.go). Off when
 	// either is empty.
@@ -783,6 +789,8 @@ func (s *Server) handleRelay(c *circuit, cell *wire.Cell) {
 
 func (s *Server) handleTerminal(c *circuit, cmd byte, sid uint16, data []byte) {
 	switch cmd {
+	case wire.CmdPair:
+		s.handlePair(c, sid, data)
 	case wire.CmdPing:
 		s.reply(c, wire.CmdPong, sid, data)
 	case wire.CmdQuota:

@@ -26,6 +26,7 @@ class SettingsActivity : AppCompatActivity() {
             // client knows, so the user picks from real options, never types.
             findPreference<androidx.preference.Preference>("wallet_backup")?.setOnPreferenceClickListener { showBackup(); true }
             findPreference<androidx.preference.Preference>("wallet_restore")?.setOnPreferenceClickListener { showRestore(); true }
+            findPreference<androidx.preference.Preference>("add_relay")?.setOnPreferenceClickListener { showAddRelay(); true }
             findPreference<androidx.preference.MultiSelectListPreference>("exclude_cc")?.let { pref ->
                 val codes = try { org.json.JSONArray(net.sailnet.mobile.Mobile.countries()) } catch (_: Exception) { org.json.JSONArray() }
                 val values = ArrayList<String>(); val labels = ArrayList<String>()
@@ -46,6 +47,55 @@ class SettingsActivity : AppCompatActivity() {
         // Android deletes an app's files when it is uninstalled, so without
         // these two screens a reinstall would silently cost somebody their
         // balance with no way to get it back.
+        // Pair with a relay: pick it from the relays this app can see, type the
+        // six digits `sailnode pair` printed on it. The app pays that relay an
+        // ordinary anchor, opens a one-hop circuit, and sends the code inside;
+        // the relay records this wallet as an owner. Nothing else is copied.
+        private fun showAddRelay() {
+            val ctx = requireContext()
+            val relays = try { org.json.JSONArray(Mobile.relays()) } catch (_: Exception) { org.json.JSONArray() }
+            if (relays.length() == 0) {
+                android.widget.Toast.makeText(ctx, "Connect first: the relay list arrives over the circuit", android.widget.Toast.LENGTH_LONG).show()
+                return
+            }
+            val labels = ArrayList<String>(); val accounts = ArrayList<String>()
+            for (i in 0 until relays.length()) {
+                val r = relays.getJSONObject(i)
+                if (!r.optBoolean("exit")) continue // Direct needs an exit; a relay that cannot exit is not worth pairing
+                labels.add("${r.optString("cc")}  ${r.optString("account").take(16)}…  ${if (r.optBoolean("bridge")) "bridge" else "relay"}")
+                accounts.add(r.optString("account"))
+            }
+            val layout = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
+            val spinner = android.widget.Spinner(ctx).apply { adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, labels) }
+            val code = EditText(ctx).apply { hint = "six-digit code from: sailnode pair"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+            layout.addView(spinner); layout.addView(code)
+            AlertDialog.Builder(ctx)
+                .setTitle("Add my relay")
+                .setView(layout)
+                .setPositiveButton("Pair") { _, _ ->
+                    val account = accounts[spinner.selectedItemPosition]
+                    val typed = code.text.toString().trim()
+                    android.widget.Toast.makeText(ctx, "Pairing…", android.widget.Toast.LENGTH_SHORT).show()
+                    Thread {
+                        val res = try { org.json.JSONObject(Mobile.pairRelay(account, typed)) } catch (e: Exception) { org.json.JSONObject().put("ok", false).put("error", e.message ?: "failed") }
+                        activity?.runOnUiThread {
+                            if (res.optBoolean("ok")) {
+                                val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+                                val have = (p.getString("mine", "") ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+                                if (!have.contains(account)) have.add(account)
+                                p.edit().putString("mine", have.joinToString("\n")).apply()
+                                findPreference<androidx.preference.EditTextPreference>("mine")?.text = have.joinToString("\n")
+                                android.widget.Toast.makeText(ctx, "Paired. This relay is yours now — choose Network: Direct to ride it free.", android.widget.Toast.LENGTH_LONG).show()
+                            } else {
+                                android.widget.Toast.makeText(ctx, res.optString("error"), android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.start()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
         private fun showBackup() {
             val ctx = requireContext()
             val res = try {
