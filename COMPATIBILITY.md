@@ -138,3 +138,27 @@ If the answer is no, the change does not ship, whatever it improves.
     spends nothing on ours; ours asks nothing. No operator earns less.
   - *Privacy:* the entry sees an ordinary paying client; an observer of a relay
     we run does not find our address in its inbound; the ledger sees nothing.
+
+- **2026-09-09, three price mechanisms, all per relay, all optional (v0.3.22).**
+  - *Cost ledger (client only).* `costs.json` on the device records each anchor
+    and its use; `sailnode costs` and the app show it. Nothing on the wire.
+  - *Representative-aligned price* (`--rep-friends`, `--rep-bonus`). A relay may
+    credit more bytes per XNO when the payer's payment block votes for a listed
+    representative. Read from the block the relay already fetches: no extra
+    ledger call. Off by default. Changes bytes per XNO only, never routing.
+    Old clients get the bonus without knowing; old relays never give one.
+  - *Spot price* (`--spot-discount`, `--spot-below`, `--capacity-mbps`). An idle
+    relay signs a lower price for a 30-minute window into its own gossip record
+    as an optional `spot` field with its **own** signature, outside the record's
+    main signature. An old relay verifies the record exactly as before, does not
+    know the field, drops it when forwarding, and never refuses the record for
+    carrying it. An old client never sees an offer and pays the published price.
+    A new client pays the spot price only while the window stands (with two
+    minutes of clock slack) and the relay credits payments at the spot price for
+    the whole signed window, load or no load. The market median and the price
+    cap stay on published prices, so an offer can lower what a client pays but
+    never move what "the market asks".
+  - *Money:* every mechanism lowers a price only where the relay chose to; no
+    relay carries a byte for less than it asked. *Privacy:* the ledger learns
+    nothing new; the offer reveals that a relay is idle, which any client could
+    measure; the cost ledger never leaves the device.

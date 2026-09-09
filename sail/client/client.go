@@ -156,8 +156,9 @@ type manager struct {
 	// could not carry the owner tag: the next attempt takes the very same
 	// path, tag dropped, so the anchor already paid to the entry is used and
 	// no innocent hop is routed around. Consumed by the next attempt.
-	retryPath []*relay.RelayInfo
-	stealth   bool // every Nano RPC call goes through the circuit; none before one exists
+	retryPath  []*relay.RelayInfo
+	costLedger *costLedger // what this wallet paid and got (costs.go); lazily loaded
+	stealth    bool        // every Nano RPC call goes through the circuit; none before one exists
 	// censored: bridges are the only entries, nothing is probed or fetched
 	// from listed relays before a circuit exists, and the ledger is never
 	// contacted directly, not even on first run (the bridge grant covers it).
@@ -348,7 +349,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		w := m.scoreOf(r.Account) * m.reg.RewardTerm(r.Account, mode)
 		w /= math.Sqrt(math.Sqrt(float64(cc[r.Country]) * float64(asn[r.ASN]))) // rarity, dampened
 		if median > 0 {                                                         // cheaper relays get more of the demand
-			price := float64(r.MinRate)
+			price := float64(priceOf(r)) // a standing spot offer weighs like the lower price it is
 			if price < float64(median)/4 {
 				price = float64(median) / 4 // a free or near-free relay is not handed everything
 			}
@@ -555,7 +556,7 @@ func (m *manager) anchorFor(r *relay.RelayInfo) *big.Int {
 	if r == nil || r.MinRate == 0 {
 		return m.opts.anchor
 	}
-	amount := relay.RawFor(AnchorBytes, token.RateToRaw(r.MinRate))
+	amount := relay.RawFor(AnchorBytes, token.RateToRaw(priceOf(r)))
 	if amount.Cmp(m.opts.anchor) < 0 {
 		return m.opts.anchor
 	}
@@ -597,8 +598,8 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	if cap == 0 {
 		_, cap = m.priceCap(m.reg.All())
 	}
-	if !entry.Unlisted && entry.MinRate > cap {
-		return fmt.Errorf("entry %s wants %s XNO/MiB, above your cap", entry.Account, token.FormatXNO(token.RateToRaw(entry.MinRate)))
+	if !entry.Unlisted && priceOf(entry) > cap {
+		return fmt.Errorf("entry %s wants %s XNO/MiB, above your cap", entry.Account, token.FormatXNO(token.RateToRaw(priceOf(entry))))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -650,6 +651,8 @@ func (m *manager) anchorTo(entry *relay.RelayInfo) error {
 	m.anchors[entry.Account] = append(m.anchors[entry.Account], time.Now()) // only payments that happened count toward the cap
 	m.saveAnchor()
 	log.Printf("paid %s XNO → %s (tag %s)", token.FormatXNO(anchor), entry.Account, h[:8])
+	rateRaw := token.RateToRaw(priceOf(entry))
+	m.costs().paid(entry.Account, strings.ToUpper(h), anchor, rateRaw, relay.BytesFor(anchor, rateRaw))
 	m.setStage("Paid the entry relay; waiting for the ledger")
 	return nil
 }
@@ -736,6 +739,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		}
 		// Rotate without cutting anyone off: the old circuit keeps serving
 		// the streams it has and closes once they are gone.
+		m.sampleUsage(m.cur, m.cur.Tag)
 		go drainCircuit(m.cur)
 		m.cur = nil
 		m.drain = false
@@ -878,8 +882,11 @@ func drainCircuit(c *relay.Circuit) {
 }
 
 func (m *manager) keepalive(c *relay.Circuit) {
-	for !c.Closed() {
+	for n := 0; !c.Closed(); n++ {
 		time.Sleep(15*time.Second + time.Duration(mathrand.Intn(12000))*time.Millisecond) // jittered: no fixed rhythm on the wire
+		if n%10 == 9 {
+			m.sampleUsage(c, c.Tag) // a few minutes apart: the cost ledger follows the meter
+		}
 		if bad := c.Ping(8 * time.Second); bad >= 0 {
 			if time.Since(c.LastRecv()) < 10*time.Second {
 				// The pong is queued behind a busy download; the circuit is
@@ -899,7 +906,7 @@ func (m *manager) keepalive(c *relay.Circuit) {
 		q, err := c.QueryQuota(8 * time.Second)
 		m.topMu.Unlock()
 		if err == nil {
-			need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(c.Path[0].MinRate)) / 4
+			need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(priceOf(c.Path[0]))) / 4
 			if q < need {
 				m.quotaLow(c, q)
 			}
@@ -920,7 +927,7 @@ func (m *manager) quotaLow(c *relay.Circuit, q int64) {
 		return
 	}
 	rate := c.BytesMoved() / int64(math.Max(time.Since(c.Built).Seconds(), 1))
-	if need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(c.Path[0].MinRate)) / 4; q >= need && q >= 8<<20 && q >= rate*30 {
+	if need := relay.BytesFor(m.anchorFor(c.Path[0]), token.RateToRaw(priceOf(c.Path[0]))) / 4; q >= need && q >= 8<<20 && q >= rate*30 {
 		return // plenty left: a stray notice
 	}
 	if rem, err := m.topUp(c); err == nil {
@@ -947,7 +954,7 @@ func (m *manager) topUp(c *relay.Circuit) (int64, error) {
 		return 0, errors("free tag: nothing to top up")
 	}
 	entry := c.Path[0]
-	rateRaw := token.RateToRaw(entry.MinRate)
+	rateRaw := token.RateToRaw(priceOf(entry))
 	if rateRaw.Sign() <= 0 {
 		return 0, errors("entry is free: nothing to top up")
 	}
@@ -2141,3 +2148,9 @@ func (m *manager) hopTags(path []*relay.RelayInfo) map[int][32]byte {
 	}
 	return tags
 }
+
+// priceOf is what a relay charges right now: its signed spot price while
+// the offer stands, else its published price. The market median and the
+// cap stay on published prices, so an offer can lower what we pay but never
+// move what "the market asks".
+func priceOf(r *relay.RelayInfo) uint32 { return r.PriceNow(time.Now()) }

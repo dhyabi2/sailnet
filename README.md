@@ -110,6 +110,8 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
 | `--owner nano_…` | the wallet that rides this relay free — yours, in the app. Default: `--payout`. See *Run a relay, ride it free* |
+| `--spot-discount 50` | sell idle capacity cheaper: percent off, signed into gossip in 30-minute windows while load is under `--spot-below` (default 20% of `--capacity-mbps`). Off by default. See *Cheaper when it is quiet* |
+| `--rep-friends nano_…,nano_…` `--rep-bonus 20` | more bytes per XNO for payers whose account votes for a representative you respect. Your opinion, as a price. Off by default |
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: what eight pool top-ups cost at the peers' published prices. It follows what prepaying actually costs, and raising your own `--rate` does not move it — what you charge should not decide when you get paid |
 | `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
 | `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
@@ -154,6 +156,28 @@ like any other.
 Nano fans have run representatives for years for nothing. This is the same
 arrangement with something in it for you: the network you help carry is the
 one you browse through.
+
+## Cheaper when it is quiet, and for good Nano citizens
+
+Two things a relay can switch on alone. Neither needs anyone else to agree,
+and neither makes any relay carry a byte for less than it asked.
+
+**Spot price.** `--spot-discount 50` makes an idle relay sign a lower price
+into its own gossip record for the next thirty minutes; clients that see the
+offer pay that price and the relay credits at it for the whole window, busy
+or not. It is the fast version of the repricing relays already do every ten
+days, and it is the relay's own signature over its own price, so a client can
+hold it to it. `sailnode relays` shows standing offers.
+
+**Representative-aligned price.** `--rep-friends nano_…,nano_… --rep-bonus 20`
+credits a fifth more bytes per XNO to a payer whose account votes for one of
+the representatives you list. The vote is in the payment block the relay
+already reads, so it costs nothing to check and reveals nothing the payment
+did not. It changes bytes per XNO only — never who gets chosen.
+
+**The meter.** `sailnode costs` (and the app's main screen) shows what this
+wallet paid, to which relay, at what price, and how much of it was used — from
+a ledger that lives on the device and nowhere else.
 
 ## Upgrading
 

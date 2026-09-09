@@ -56,6 +56,7 @@ func (m *manager) StatusJSON() map[string]any {
 		"required":   token.FormatXNO(m.anchorNeed()), // what to send: an anchor at the cheapest relay we could use
 		"buysMiB":    AnchorBytes >> 20,
 	}
+	out["costs"] = m.costs().summary(7 * 24 * time.Hour) // the meter, on the device only (costs.go)
 	return out
 }
 

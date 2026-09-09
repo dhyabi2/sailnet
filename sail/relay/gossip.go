@@ -34,6 +34,50 @@ type SignedRecord struct {
 	Host    string `json:"host,omitempty"`
 	Time    int64  `json:"t"`   // unix seconds; records older than RecordTTL are dropped
 	Sig     string `json:"sig"` // ed25519 over the fields, hex
+	// Spot is an optional, separately signed offer of a lower price for a
+	// short window (spot.go). It is not part of Sig, so a relay from before
+	// spot offers verifies the record exactly as it always did, and simply
+	// does not know the field — it drops it when forwarding, and never
+	// refuses the record for carrying it.
+	Spot *SpotOffer `json:"spot,omitempty"`
+}
+
+// SpotOffer: "until this time I charge this much", signed by the relay.
+type SpotOffer struct {
+	Rate  uint32 `json:"rate"`  // XNO per MiB, rate units, below the published price
+	Until int64  `json:"until"` // unix seconds
+	Sig   string `json:"sig"`   // ed25519 over "sailnet-spot" ‖ account ‖ rate ‖ until, hex
+}
+
+func spotDigest(account string, rate uint32, until int64) []byte {
+	h, _ := blake2b.New256(nil)
+	h.Write([]byte("sailnet-spot"))
+	h.Write([]byte(account))
+	var b [12]byte
+	binary.BigEndian.PutUint32(b[:4], rate)
+	binary.BigEndian.PutUint64(b[4:], uint64(until))
+	h.Write(b[:])
+	return h.Sum(nil)
+}
+
+// SignSpot makes the offer a relay attaches to its own record.
+func SignSpot(key *nano.Key, rate uint32, until int64) *SpotOffer {
+	return &SpotOffer{Rate: rate, Until: until, Sig: hex.EncodeToString(key.Sign(spotDigest(key.Address, rate, until)))}
+}
+
+// spotFor returns the offer's price and expiry when it is the relay's own
+// signature, still in the future, and lower than the published price;
+// otherwise nothing, and the record stands without it.
+func (r *SignedRecord) spotFor(pub [32]byte, now time.Time) (uint32, int64) {
+	o := r.Spot
+	if o == nil || o.Rate == 0 || o.Rate >= r.MinRate || o.Until <= now.Unix() || o.Until > now.Unix()+3*3600 {
+		return 0, 0
+	}
+	sig, err := hex.DecodeString(o.Sig)
+	if err != nil || !nano.Verify(pub, spotDigest(r.Account, o.Rate, o.Until), sig) {
+		return 0, 0
+	}
+	return o.Rate, o.Until
 }
 
 // RecordTTL is how long a gossiped record stays usable without renewal.
@@ -61,6 +105,9 @@ func (r *SignedRecord) digest() []byte {
 func NewSignedRecord(key *nano.Key, ri *RelayInfo) *SignedRecord {
 	d := ri.Desc.Encode()
 	r := &SignedRecord{Account: ri.Account, Country: ri.Country, ASN: ri.ASN, MinRate: ri.MinRate, Flags: ri.Flags, Desc: hex.EncodeToString(d[:]), Host: ri.Host, Time: time.Now().Unix()}
+	if ri.SpotRate > 0 && ri.SpotRate < ri.MinRate && ri.SpotUntil > time.Now().Unix() {
+		r.Spot = SignSpot(key, ri.SpotRate, ri.SpotUntil)
+	}
 	r.Sig = hex.EncodeToString(key.Sign(r.digest()))
 	return r
 }
@@ -89,7 +136,9 @@ func (r *SignedRecord) Verify(now time.Time) (*RelayInfo, error) {
 	if !ok {
 		return nil, errors.New("empty descriptor")
 	}
-	return &RelayInfo{Account: r.Account, Pub: pub, Country: r.Country, ASN: r.ASN, MinRate: r.MinRate, Flags: r.Flags, Desc: d, Host: r.Host}, nil
+	ri := &RelayInfo{Account: r.Account, Pub: pub, Country: r.Country, ASN: r.ASN, MinRate: r.MinRate, Flags: r.Flags, Desc: d, Host: r.Host}
+	ri.SpotRate, ri.SpotUntil = r.spotFor(pub, now)
+	return ri, nil
 }
 
 // AddGossip verifies and stores a record. Ledger and bridge entries for the
@@ -203,7 +252,7 @@ func FetchRelaysOver(conn net.Conn, timeout time.Duration) ([]*SignedRecord, err
 func (s *Server) sendRelays(in *connWriter) {
 	var self *SignedRecord
 	if s.Self != nil {
-		self = NewSignedRecord(s.Key, s.Self)
+		self = NewSignedRecord(s.Key, s.selfWithSpot())
 	}
 	body, _ := json.Marshal(s.Registry.Records(self))
 	seq := uint16(0)

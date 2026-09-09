@@ -161,6 +161,10 @@ class MainActivity : AppCompatActivity() {
                 balance.text = if (shown.isEmpty()) "Balance unknown until first connection" else "$shown XNO"
                 val up = s.optLong("bytesUp"); val down = s.optLong("bytesDown")
                 traffic.text = "↑ ${human(up)}   ↓ ${human(down)}   ${s.optInt("relays")} relays"
+                s.optJSONObject("costs")?.let { c ->
+                    // The meter, from the device's own ledger: what this week cost and what it bought.
+                    if (c.optInt("anchors") > 0) traffic.append("\nthis week: ${"%.0f".format(c.optDouble("usedMiB"))} MiB used of ${"%.0f".format(c.optDouble("boughtMiB"))} bought · ${c.optString("xno")} XNO · avg ${c.optString("avgXnoPerMiB")}/MiB")
+                }
                 val low = shown.isNotEmpty() && (shown.toDoubleOrNull() ?: 0.0) < (requiredXno.toDoubleOrNull() ?: 0.0005)
                 fundCard.visibility = if (shown.isEmpty() || low) View.VISIBLE else View.GONE
                 toggle.text = when {

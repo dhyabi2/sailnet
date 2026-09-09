@@ -34,6 +34,19 @@ type RelayInfo struct {
 	// find its address to block it.
 	Unlisted bool
 	Secret   [16]byte // bridge secret (from the bridge line); zero for listed relays
+	// A spot offer, when the relay signed one: a lower price until SpotUntil
+	// (unix seconds), learned from gossip (spot.go). Zero = none.
+	SpotRate  uint32
+	SpotUntil int64
+}
+
+// PriceNow is the price to pay this relay at now: its spot price while the
+// offer stands and is really lower, otherwise its published price.
+func (ri *RelayInfo) PriceNow(now time.Time) uint32 {
+	if ri.SpotRate > 0 && ri.SpotRate < ri.MinRate && now.Unix() < ri.SpotUntil-120 { // two minutes of clock slack
+		return ri.SpotRate
+	}
+	return ri.MinRate
 }
 
 // BridgeLine formats an unlisted relay for out-of-band sharing:

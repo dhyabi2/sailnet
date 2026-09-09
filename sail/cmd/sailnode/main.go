@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -56,7 +56,11 @@ func main() {
 			log.Fatal(err)
 		}
 		for _, r := range reg.All() {
-			fmt.Printf("%s  %s  cc=%s asn=%d rate=%s XNO/MiB flags=%d\n", r.Account, r.Desc.Addr(), r.Country, r.ASN, token.FormatXNO(token.RateToRaw(r.MinRate)), r.Flags)
+			spot := ""
+			if p := r.PriceNow(time.Now()); p != r.MinRate {
+				spot = fmt.Sprintf(" spot=%s until %s", token.FormatXNO(token.RateToRaw(p)), time.Unix(r.SpotUntil, 0).Format("15:04"))
+			}
+			fmt.Printf("%s  %s  cc=%s asn=%d rate=%s XNO/MiB flags=%d%s\n", r.Account, r.Desc.Addr(), r.Country, r.ASN, token.FormatXNO(token.RateToRaw(r.MinRate)), r.Flags, spot)
 		}
 	case "fetch":
 		client.RunFetch(os.Args[2:])
@@ -68,8 +72,10 @@ func main() {
 		runUpgrade(os.Args[2:])
 	case "earn":
 		runEarn(os.Args[2:])
+	case "costs":
+		client.RunCosts(os.Args[2:]) // what this wallet paid and got, from the device's own ledger
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|upgrade ...")
 		os.Exit(2)
 	}
 }
@@ -106,6 +112,11 @@ func runRelay(args []string) {
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address, checked every 15 minutes, keeping only --payout-keep on the node")
 	owner := fs.String("owner", "", "nano_ address whose wallet uses this relay without paying — yours, in the app. Run a relay, ride it free (default: --payout)")
+	repFriends := fs.String("rep-friends", "", "Nano representatives you respect, comma-separated: a payer whose account votes for one gets --rep-bonus more bytes per XNO here (your opinion, expressed as a price)")
+	repBonus := fs.Int("rep-bonus", 0, "extra bytes, in percent, for payers voting for a --rep-friends representative (0 = off)")
+	spotDiscount := fs.Int("spot-discount", 0, "sell idle capacity cheaper: percent off the published price, signed into gossip for 30-minute windows while load is under --spot-below (0 = off)")
+	spotBelow := fs.Int("spot-below", 20, "load, in percent of --capacity-mbps, under which a spot offer is made")
+	capacityMbps := fs.Int("capacity-mbps", 100, "what this relay can carry, megabits per second; only load measurement uses it")
 	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: what eight pool top-ups cost at the peers' published prices, so the float follows what prepaying actually costs rather than being re-tuned by hand — and changing your own --rate does not move it)")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
@@ -352,6 +363,23 @@ func runRelay(args []string) {
 		}
 		s.Owner = pub
 		log.Printf("owner: circuits signed by %s ride this relay free (run a relay, ride it free)", client.Short(acct))
+	}
+	if *repBonus > 0 && strings.TrimSpace(*repFriends) != "" {
+		s.RepFriends = map[string]bool{}
+		for _, a := range strings.Split(*repFriends, ",") {
+			a = strings.TrimSpace(a)
+			if _, err := nano.AddressToPubkey(a); err != nil {
+				log.Fatalf("--rep-friends: %q is not a nano_ address", a)
+			}
+			s.RepFriends[a] = true
+		}
+		s.RepBonus = *repBonus
+		log.Printf("rep-aligned price: +%d%% bytes for payers voting for %d representative(s)", s.RepBonus, len(s.RepFriends))
+	}
+	if *spotDiscount > 0 {
+		s.SpotDiscount, s.SpotBelow, s.Capacity = *spotDiscount, *spotBelow, int64(*capacityMbps)*125000
+		go s.RunSpot(time.Minute)
+		log.Printf("spot price: %d%% off while load is under %d%% of %d Mbps, in signed 30-minute windows", *spotDiscount, *spotBelow, *capacityMbps)
 	}
 	if *unlisted {
 		s.BootstrapBytes = 2 << 20 // a first-run client in a censored network gets 2 MiB to reach the ledger through us

@@ -56,6 +56,16 @@ type Server struct {
 	// paying: the operator's own, in their app (--owner, default --payout).
 	// Zero means nobody. See owner.go.
 	Owner [32]byte
+	// RepFriends and RepBonus: more bytes per XNO for payers whose account
+	// votes for one of these Nano representatives (repbonus.go). Off when
+	// either is empty.
+	RepFriends map[string]bool
+	RepBonus   int
+	// Spot price (spot.go): sell idle capacity cheaper for a signed window.
+	SpotDiscount int   // percent off the published price; 0 = off
+	SpotBelow    int   // offer when load is below this percent of Capacity
+	Capacity     int64 // bytes per second this relay can carry
+	spot         spotState
 	// GetCertificate, when set (ACME), supplies the live certificate instead of
 	// TLS; the ack then binds whatever leaf is being served right now.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
@@ -1672,9 +1682,13 @@ func (s *Server) creditFromLedgerImpl(tag string) (string, error) {
 	if !ok || amt.Sign() <= 0 {
 		return "", errors.New("bad amount")
 	}
-	n := BytesFor(amt, s.Quota.MinRate)
+	n := BytesFor(amt, s.rateNow()) // the spot price while a signed window stands, else the published one
 	if n <= 0 {
 		return "", errors.New("amount below the minimum")
+	}
+	if b, ok := s.repBonus(n, bi.Contents.Representative); ok {
+		s.logRepBonus(n, b, bi.Contents.Representative)
+		n = b
 	}
 	ownerPub, err := nano.AddressToPubkey(bi.BlockAccount)
 	if err != nil {
