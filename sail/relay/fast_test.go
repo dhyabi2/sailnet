@@ -15,11 +15,14 @@ import (
 	"github.com/dhyabi2/sail/wire"
 )
 
-func TestFastParamsTakeOutTheWaitsAndThePadding(t *testing.T) {
+func TestFastParamsTakeOutThePaddingAndKeepTheBatching(t *testing.T) {
 	p := &shape.Params{Coalesce: 30 * time.Millisecond, MaxDelay: 200 * time.Millisecond, PadAfterIdle: 0.5, PadTail: 0.2, MinRecord: 100, MaxRecord: 1400}
 	q := fastParams(p)
-	if q.Coalesce != 0 || q.PadAfterIdle != 0 || q.PadTail != 0 || q.MaxDelay > 5*time.Millisecond {
-		t.Fatalf("fast params = %+v", q)
+	if q.PadAfterIdle != 0 || q.PadTail != 0 {
+		t.Fatalf("fast params must drop the padding: %+v", q)
+	}
+	if q.Coalesce != p.Coalesce || q.MaxDelay != p.MaxDelay {
+		t.Fatal("fast params must keep the batching: without it Direct measured under 1 MB/s against ~8 with it")
 	}
 	if q.MinRecord != p.MinRecord || q.MaxRecord != p.MaxRecord {
 		t.Fatal("record cutting must be kept: the link still looks like HTTPS")

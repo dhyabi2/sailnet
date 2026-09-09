@@ -989,6 +989,8 @@ func runHome(key *nano.Key, nc *nano.Client, rate string, exit bool, harbourAcct
 // (SAIL_HOME, or the installed service's). The running relay reads the file
 // when the code arrives, so nothing is restarted.
 func runPair() {
+	useServiceHome() // the installed service's data directory, not the shell user's
+	os.MkdirAll(client.DataDir(), 0o700)
 	code, exp, err := relay.NewPairingCode(filepath.Join(client.DataDir(), "pairing.json"))
 	if err != nil {
 		log.Fatalf("pair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
