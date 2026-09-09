@@ -6,7 +6,7 @@
         <EditTextPreference
             android:key="nick"
             android:title="Nickname"
-            android:summary="Shown instead of your wallet address and device addresses in every log, trace and screen. Stored only on this phone."
+            android:summary="Replaces your address in logs."
             android:defaultValue="" />
     </PreferenceCategory>
 
@@ -14,49 +14,31 @@
         <MultiSelectListPreference
             android:key="exclude_cc"
             android:title="Never exit through"
-            android:summary="Countries whose relays must not be your exit. Tap to choose from the relays currently known."
+            android:summary="Countries never used as exit."
             android:entries="@array/empty"
             android:entryValues="@array/empty" />
+        <Preference
+            android:key="relay"
+            android:title="My relay"
+            android:summary="Open network" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Censored networks">
-
         <EditTextPreference
             android:key="bridges"
             android:title="Bridge lines"
-            android:summary="Only if the built-in entries are blocked where you are: paste bridge lines handed to you privately, one per row."
+            android:summary="Only if the built-in entries are blocked."
             android:defaultValue="" />
-    </PreferenceCategory>
-
-    <PreferenceCategory android:title="Run a relay, ride it free">
-        <ListPreference
-            android:key="mode"
-            android:title="Network"
-            android:summary="%s"
-            android:entries="@array/mode_names"
-            android:entryValues="@array/mode_values"
-            android:defaultValue="mine" />
-        <Preference
-            android:key="add_relay"
-            android:title="Add my relay"
-            android:summary="On the relay run: sailnode pair — it prints a six-digit code. Pick the relay here and enter the code. Nothing else to copy." />
-        <Preference
-            android:key="paired"
-            android:title="Paired relays"
-            android:summary="None yet. Add my relay pairs one with a code." />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Wallet">
         <Preference
             android:key="wallet_backup"
             android:title="Back up wallet"
-            android:summary="Show the seed that holds your balance. Write it down: uninstalling this app deletes it, and no server keeps a copy." />
+            android:summary="Show the seed." />
         <Preference
             android:key="wallet_restore"
             android:title="Restore wallet"
-            android:summary="Put back a wallet from a seed you saved. The wallet on this phone is kept, not deleted." />
-    </PreferenceCategory>
-
-    <PreferenceCategory android:title="Payments">
+            android:summary="From a seed you saved." />
     </PreferenceCategory>
 </PreferenceScreen>

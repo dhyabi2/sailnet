@@ -26,12 +26,8 @@ class SettingsActivity : AppCompatActivity() {
             // client knows, so the user picks from real options, never types.
             findPreference<androidx.preference.Preference>("wallet_backup")?.setOnPreferenceClickListener { showBackup(); true }
             findPreference<androidx.preference.Preference>("wallet_restore")?.setOnPreferenceClickListener { showRestore(); true }
-            findPreference<androidx.preference.Preference>("add_relay")?.setOnPreferenceClickListener { showAddRelay(); true }
-            refreshPaired()
-            findPreference<androidx.preference.Preference>("paired")?.setOnPreferenceClickListener { showForgetPaired(); true }
-            // Network and the paired list are read when the tunnel starts. Changing
-            // them while connected used to change nothing until the next connect —
-            // the app looked like it ignored the setting. Now it reconnects itself.
+            findPreference<androidx.preference.Preference>("relay")?.setOnPreferenceClickListener { showRelayWindow(); true }
+            refreshRelaySummary()
             androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext()).registerOnSharedPreferenceChangeListener(prefWatcher)
             findPreference<androidx.preference.MultiSelectListPreference>("exclude_cc")?.let { pref ->
                 val codes = try { org.json.JSONArray(net.sailnet.mobile.Mobile.countries()) } catch (_: Exception) { org.json.JSONArray() }
@@ -53,71 +49,69 @@ class SettingsActivity : AppCompatActivity() {
         // Android deletes an app's files when it is uninstalled, so without
         // these two screens a reinstall would silently cost somebody their
         // balance with no way to get it back.
-        // Pair with a relay: pick it from the relays this app can see, type the
-        // six digits `sailnode pair` printed on it. The app pays that relay an
-        // ordinary anchor, opens a one-hop circuit, and sends the code inside;
-        // the relay records this wallet as an owner. Nothing else is copied.
-        private fun showAddRelay() {
+        // One window for the whole feature: which network, what is paired, add one.
+        private fun showRelayWindow() {
             val ctx = requireContext()
-            val relays = try { org.json.JSONArray(Mobile.relays()) } catch (_: Exception) { org.json.JSONArray() }
-            if (relays.length() == 0) {
-                android.widget.Toast.makeText(ctx, "Connect first: the relay list arrives over the circuit", android.widget.Toast.LENGTH_LONG).show()
-                return
+            val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+            val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
+            val root = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+
+            // Network
+            val modes = listOf("direct" to "Direct — my relay, 1 hop, free", "mine" to "My relays — free exit, paid entry", "open" to "Open network — 3 strangers")
+            val group = android.widget.RadioGroup(ctx)
+            val current = p.getString("mode", "mine") ?: "mine"
+            modes.forEachIndexed { i, (v, label) ->
+                group.addView(android.widget.RadioButton(ctx).apply { id = 100 + i; text = label; isChecked = v == current })
             }
+            group.setOnCheckedChangeListener { _, id -> p.edit().putString("mode", modes[id - 100].first).apply(); refreshRelaySummary() }
+            root.addView(group)
+
+            // Paired
+            val pairedView = android.widget.TextView(ctx).apply { setPadding(0, dp(12), 0, dp(4)) }
+            val forget = android.widget.Button(ctx, null, android.R.attr.borderlessButtonStyle).apply { text = "Forget" }
+            fun showPaired() {
+                val list = pairedAccounts()
+                pairedView.text = if (list.isEmpty()) "Paired: none" else "Paired: " + list.joinToString(", ") { it.take(14) + "…" }
+                forget.visibility = if (list.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+            }
+            forget.setOnClickListener { p.edit().putString("mine", "").apply(); showPaired(); refreshRelaySummary() }
+            showPaired()
+            root.addView(android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.HORIZONTAL; addView(pairedView, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)); addView(forget) })
+
+            // Add: pick a relay, type the code from `sailnode pair`
+            val relays = try { org.json.JSONArray(Mobile.relays()) } catch (_: Exception) { org.json.JSONArray() }
             val labels = ArrayList<String>(); val accounts = ArrayList<String>()
             for (i in 0 until relays.length()) {
                 val r = relays.getJSONObject(i)
-                if (!r.optBoolean("exit")) continue // Direct needs an exit; a relay that cannot exit is not worth pairing
-                labels.add("${r.optString("cc")}  ${r.optString("account").take(16)}…  ${if (r.optBoolean("bridge")) "bridge" else "relay"}")
-                accounts.add(r.optString("account"))
+                if (!r.optBoolean("exit")) continue
+                labels.add("${r.optString("cc")}  ${r.optString("account").take(14)}…"); accounts.add(r.optString("account"))
             }
-            val layout = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
-            val spinner = android.widget.Spinner(ctx).apply { adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, labels) }
-            val code = EditText(ctx).apply { hint = "six-digit code from: sailnode pair"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
-            layout.addView(spinner); layout.addView(code)
-            AlertDialog.Builder(ctx)
-                .setTitle("Add my relay")
-                .setView(layout)
-                .setPositiveButton("Pair") { _, _ ->
-                    val account = accounts[spinner.selectedItemPosition]
-                    val typed = code.text.toString().trim()
-                    android.widget.Toast.makeText(ctx, "Pairing…", android.widget.Toast.LENGTH_SHORT).show()
-                    Thread {
-                        val res = try { org.json.JSONObject(Mobile.pairRelay(account, typed)) } catch (e: Exception) { org.json.JSONObject().put("ok", false).put("error", e.message ?: "failed") }
-                        activity?.runOnUiThread {
-                            if (res.optBoolean("ok")) {
-                                val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
-                                val have = (p.getString("mine", "") ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
-                                if (!have.contains(account)) have.add(account)
-                                p.edit().putString("mine", have.joinToString("\n")).apply()
-                                refreshPaired()
-                                android.widget.Toast.makeText(ctx, "Paired. Network: Direct rides it free — reconnecting.", android.widget.Toast.LENGTH_LONG).show()
-                            } else {
-                                android.widget.Toast.makeText(ctx, res.optString("error"), android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }.start()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        private val prefWatcher = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == "mode" || key == "mine") {
-                findPreference<androidx.preference.ListPreference>("mode")?.let { it.summary = it.entry }
-                refreshPaired()
-                if (SailVpnService.running) reconnectToApply()
+            val spinner = android.widget.Spinner(ctx).apply { adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, if (labels.isEmpty()) listOf("connect first") else labels) }
+            val code = EditText(ctx).apply { hint = "code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(android.text.InputFilter.LengthFilter(6)) }
+            val pair = android.widget.Button(ctx, null, android.R.attr.borderlessButtonStyle).apply { text = "Pair" }
+            pair.setOnClickListener {
+                if (accounts.isEmpty()) return@setOnClickListener
+                val account = accounts[spinner.selectedItemPosition]; val typed = code.text.toString().trim()
+                pair.isEnabled = false; pair.text = "…"
+                Thread {
+                    val res = try { org.json.JSONObject(Mobile.pairRelay(account, typed)) } catch (e: Exception) { org.json.JSONObject().put("ok", false).put("error", e.message ?: "failed") }
+                    activity?.runOnUiThread {
+                        pair.isEnabled = true; pair.text = "Pair"
+                        if (res.optBoolean("ok")) {
+                            val have = pairedAccounts().toMutableList(); if (!have.contains(account)) have.add(account)
+                            p.edit().putString("mine", have.joinToString("\n")).apply(); code.setText(""); showPaired(); refreshRelaySummary()
+                        } else android.widget.Toast.makeText(ctx, res.optString("error"), android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }.start()
             }
-        }
+            root.addView(android.widget.LinearLayout(ctx).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                addView(spinner, android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(code, android.widget.LinearLayout.LayoutParams(dp(80), android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(pair)
+            })
 
-        private fun reconnectToApply() {
-            val ctx = requireContext().applicationContext
-            android.widget.Toast.makeText(ctx, "Reconnecting to apply…", android.widget.Toast.LENGTH_SHORT).show()
-            ctx.startService(android.content.Intent(ctx, SailVpnService::class.java).setAction(SailVpnService.ACTION_STOP))
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                val i = android.content.Intent(ctx, SailVpnService::class.java)
-                if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
-            }, 1500)
+            AlertDialog.Builder(ctx).setTitle("My relay").setView(root).setPositiveButton("Done", null).show()
         }
 
         private fun pairedAccounts(): List<String> {
@@ -125,24 +119,25 @@ class SettingsActivity : AppCompatActivity() {
             return (p.getString("mine", "") ?: "").lines().map { it.trim() }.filter { it.startsWith("nano_") }
         }
 
-        private fun refreshPaired() {
-            val list = pairedAccounts()
-            findPreference<androidx.preference.Preference>("paired")?.summary =
-                if (list.isEmpty()) "None yet. Add my relay pairs one with a code."
-                else list.joinToString("\n") { it.take(20) + "…" } + "\nTap to forget them."
+        private fun refreshRelaySummary() {
+            val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+            val mode = when (p.getString("mode", "mine")) { "direct" -> "Direct"; "open" -> "Open network"; else -> "My relays" }
+            val n = pairedAccounts().size
+            findPreference<androidx.preference.Preference>("relay")?.summary = if (n == 0) mode else "$mode · $n paired"
         }
 
-        private fun showForgetPaired() {
-            val ctx = requireContext()
-            if (pairedAccounts().isEmpty()) { showAddRelay(); return }
-            AlertDialog.Builder(ctx)
-                .setTitle("Forget paired relays?")
-                .setMessage("The relays stay paired on their side; this phone just stops using them. Pair again any time with a new code.")
-                .setPositiveButton("Forget") { _, _ ->
-                    androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("mine", "").apply()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+        private val prefWatcher = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "mode" || key == "mine") { refreshRelaySummary(); if (SailVpnService.running) reconnectToApply() }
+        }
+
+        private fun reconnectToApply() {
+            val ctx = requireContext().applicationContext
+            android.widget.Toast.makeText(ctx, "Reconnecting…", android.widget.Toast.LENGTH_SHORT).show()
+            ctx.startService(android.content.Intent(ctx, SailVpnService::class.java).setAction(SailVpnService.ACTION_STOP))
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val i = android.content.Intent(ctx, SailVpnService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+            }, 1500)
         }
 
         private fun showBackup() {

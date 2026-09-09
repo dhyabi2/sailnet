@@ -11,14 +11,5 @@
         <item>4</item>
     </string-array>
     <string-array name="empty" />
-    <string-array name="mode_names">
-        <item>Direct — my relay only, 1 hop, free. A VPN through a box I own: it sees my address, sites see its address.</item>
-        <item>My relays — enter through a stranger (paid), exit through mine (free). Nobody watching my relay sees me arrive.</item>
-        <item>Open network — 3 strangers, full price, my relays not used. Anonymity.</item>
-    </string-array>
-    <string-array name="mode_values">
-        <item>direct</item>
-        <item>mine</item>
-        <item>open</item>
-    </string-array>
+
 </resources>
