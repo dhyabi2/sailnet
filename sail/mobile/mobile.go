@@ -104,7 +104,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	client.SetLastStage("Reading the relay list")
 	defer func() {
 		if err != nil {
-			lastErr = err.Error()
+			lastErr = client.Redact(err.Error()) // what the screen shows: never an address
 		}
 	}()
 	lastErr = ""
@@ -568,7 +568,7 @@ func ImportWallet(home, text string) (out string) {
 }
 
 func errJSON(err error) string {
-	b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+	b, _ := json.Marshal(map[string]any{"ok": false, "error": client.Redact(err.Error())})
 	return string(b)
 }
 
@@ -602,7 +602,7 @@ func PairRelay(account, code string) string {
 		return `{"ok":false,"error":"connect first, then pair"}`
 	}
 	if err := m.PairRelay(account, code); err != nil {
-		b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+		b, _ := json.Marshal(map[string]any{"ok": false, "error": client.Redact(err.Error())})
 		return string(b)
 	}
 	return `{"ok":true}`

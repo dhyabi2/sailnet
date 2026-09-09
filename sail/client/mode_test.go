@@ -1,8 +1,12 @@
 package client
 
 import (
+	"net"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/dhyabi2/sail/relay"
 	"github.com/dhyabi2/sail/token"
 )
 
@@ -65,5 +69,21 @@ func TestUnknownModeIsMine(t *testing.T) {
 	m.SetMode("whatever")
 	if m.Mode() != ModeMine {
 		t.Fatalf("mode = %s", m.Mode())
+	}
+}
+
+// Rule 6: what the pairing path tells the user never names an address. The
+// relay here is a black hole, so the dial fails the way it did on a phone
+// whose relay had port 443 closed — and the message stays a message.
+func TestPairingErrorNamesNoAddress(t *testing.T) {
+	m := &manager{reg: &relay.Registry{}, key: EnsureWallet(), opts: clientOpts{timeout: time.Second}}
+	ri := &relay.RelayInfo{Account: "nano_1blackhole11111111111111111111111111111111111111111111111111", Desc: relay.Descriptor{IP: net.ParseIP("192.0.2.77").To4(), Port: 443}}
+	m.reg.Add(ri)
+	err := m.PairRelay(ri.Account, "123456")
+	if err == nil {
+		t.Fatal("a relay nobody can reach must not pair")
+	}
+	if strings.Contains(err.Error(), "192.0.2.77") || strings.Contains(Redact(err.Error()), "device") {
+		t.Fatalf("the error carries an address: %q", err)
 	}
 }

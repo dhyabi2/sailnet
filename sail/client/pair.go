@@ -1,7 +1,6 @@
 package client
 
 import (
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -76,7 +75,8 @@ func (m *manager) PairRelay(account, code string) error {
 		if strings.Contains(err.Error(), "hop 0 refused") {
 			return errors("the relay did not accept a pairing circuit: run `sailnode pair` on it for a fresh code (and `sailnode upgrade` if it is older than v0.3.30)")
 		}
-		return fmt.Errorf("could not reach the relay: %w", err)
+		// The dial error names the relay's address; nothing shown to the user does.
+		return errors("could not reach the relay: check that it is running and that its port 443 is open (ufw allow 443/tcp)")
 	}
 	defer c.Close()
 	if err := c.Pair(code, 15*time.Second); err != nil {

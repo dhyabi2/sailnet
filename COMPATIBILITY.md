@@ -219,3 +219,9 @@ If the answer is no, the change does not ship, whatever it improves.
   Nothing is paid to pair any more. Failed attempts are logged on the relay
   (`pairing: wrong code (1 of 3 tries)`), and the app shows the outcome in
   the *My relay* window instead of a toast.
+- **2026-09-10, no address leaves the program (v0.3.31, RULES.md rule 6).**
+  A pairing attempt against a relay whose port 443 was closed put the dial
+  error — with the relay's address — on the phone's screen. Every error the
+  mobile boundary returns now passes `client.Redact`, and the pairing error
+  says what to do (`ufw allow 443/tcp`) instead of where it failed. Protocol
+  unchanged.
