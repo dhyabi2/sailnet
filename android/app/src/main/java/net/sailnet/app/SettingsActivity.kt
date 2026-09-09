@@ -27,6 +27,12 @@ class SettingsActivity : AppCompatActivity() {
             findPreference<androidx.preference.Preference>("wallet_backup")?.setOnPreferenceClickListener { showBackup(); true }
             findPreference<androidx.preference.Preference>("wallet_restore")?.setOnPreferenceClickListener { showRestore(); true }
             findPreference<androidx.preference.Preference>("add_relay")?.setOnPreferenceClickListener { showAddRelay(); true }
+            refreshPaired()
+            findPreference<androidx.preference.Preference>("paired")?.setOnPreferenceClickListener { showForgetPaired(); true }
+            // Network and the paired list are read when the tunnel starts. Changing
+            // them while connected used to change nothing until the next connect —
+            // the app looked like it ignored the setting. Now it reconnects itself.
+            androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext()).registerOnSharedPreferenceChangeListener(prefWatcher)
             findPreference<androidx.preference.MultiSelectListPreference>("exclude_cc")?.let { pref ->
                 val codes = try { org.json.JSONArray(net.sailnet.mobile.Mobile.countries()) } catch (_: Exception) { org.json.JSONArray() }
                 val values = ArrayList<String>(); val labels = ArrayList<String>()
@@ -84,13 +90,56 @@ class SettingsActivity : AppCompatActivity() {
                                 val have = (p.getString("mine", "") ?: "").lines().map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
                                 if (!have.contains(account)) have.add(account)
                                 p.edit().putString("mine", have.joinToString("\n")).apply()
-                                findPreference<androidx.preference.EditTextPreference>("mine")?.text = have.joinToString("\n")
-                                android.widget.Toast.makeText(ctx, "Paired. This relay is yours now — choose Network: Direct to ride it free.", android.widget.Toast.LENGTH_LONG).show()
+                                refreshPaired()
+                                android.widget.Toast.makeText(ctx, "Paired. Network: Direct rides it free — reconnecting.", android.widget.Toast.LENGTH_LONG).show()
                             } else {
                                 android.widget.Toast.makeText(ctx, res.optString("error"), android.widget.Toast.LENGTH_LONG).show()
                             }
                         }
                     }.start()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+
+        private val prefWatcher = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "mode" || key == "mine") {
+                findPreference<androidx.preference.ListPreference>("mode")?.let { it.summary = it.entry }
+                refreshPaired()
+                if (SailVpnService.running) reconnectToApply()
+            }
+        }
+
+        private fun reconnectToApply() {
+            val ctx = requireContext().applicationContext
+            android.widget.Toast.makeText(ctx, "Reconnecting to apply…", android.widget.Toast.LENGTH_SHORT).show()
+            ctx.startService(android.content.Intent(ctx, SailVpnService::class.java).setAction(SailVpnService.ACTION_STOP))
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val i = android.content.Intent(ctx, SailVpnService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+            }, 1500)
+        }
+
+        private fun pairedAccounts(): List<String> {
+            val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext())
+            return (p.getString("mine", "") ?: "").lines().map { it.trim() }.filter { it.startsWith("nano_") }
+        }
+
+        private fun refreshPaired() {
+            val list = pairedAccounts()
+            findPreference<androidx.preference.Preference>("paired")?.summary =
+                if (list.isEmpty()) "None yet. Add my relay pairs one with a code."
+                else list.joinToString("\n") { it.take(20) + "…" } + "\nTap to forget them."
+        }
+
+        private fun showForgetPaired() {
+            val ctx = requireContext()
+            if (pairedAccounts().isEmpty()) { showAddRelay(); return }
+            AlertDialog.Builder(ctx)
+                .setTitle("Forget paired relays?")
+                .setMessage("The relays stay paired on their side; this phone just stops using them. Pair again any time with a new code.")
+                .setPositiveButton("Forget") { _, _ ->
+                    androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx).edit().putString("mine", "").apply()
                 }
                 .setNegativeButton("Cancel", null)
                 .show()

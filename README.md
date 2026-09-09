@@ -147,7 +147,8 @@ Pairing code:  483 920      (valid five minutes, one use)
 ```
 
 In the app: Settings → *Run a relay, ride it free* → **Add my relay** → pick
-the relay, enter the code. The app pays that relay an ordinary anchor, opens
+the relay, enter the code. *Paired relays* lists what this phone has paired
+and can forget them; nothing is typed by hand. The app pays that relay an ordinary anchor, opens
 a circuit to it and sends the code inside; the relay records the wallet that
 paid as an owner. A relay that has no owner yet prints a code by itself when
 it starts (`docker logs sailnet` shows it). On the command line the same is
@@ -162,11 +163,12 @@ Then choose how your relays are used — Settings → **Network**:
 | **Open network** | three strangers | full price | the entry only; your relays are not used |
 
 Direct is for the owner of one relay who does not want to pay two strangers;
-My relays is for when you would rather not be seen arriving at your own. Direct
-is also fast: it drops the cover cadence, the coalescing and the padding that
-make a link look like an idle browser, since a VPN to a box you own gains
-nothing from the disguise. On a censored network turn *Keep the disguise in
-Direct* on (`--direct-stealth`); it costs speed and keeps the rhythm. If
+My relays is for when you would rather not be seen arriving at your own. All
+three use the same link shaping: measured on a live relay, the cover cadence
+that hides the link's rhythm is also the faster link (a profile without it
+moved 20 MB at a third of the speed), so there is nothing to switch off.
+Changing *Network* or pairing a relay while connected reconnects the tunnel
+by itself, so the setting takes effect at once. If
 your relay is down in Direct, the app says so and offers the other two rather
 than silently paying. `--owner nano_…` (default `--payout`) still works as
 before for a wallet you set on the relay yourself. The owner tag is bound to

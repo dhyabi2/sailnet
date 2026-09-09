@@ -45,21 +45,6 @@ type coverParams struct {
 	burst int
 }
 
-// SetFast turns the padding off for the rest of this writer's life. The
-// coalescing stays: it is what turns a stream of 1 KB cells into few large
-// records, and measured on a live relay, taking it out cut Direct from
-// ~8 MB/s to under 1 MB/s (every cell became its own TLS record and
-// syscall). Padding and the cover cadence are the disguise; batching is
-// just efficient, so it is kept.
-func (w *connWriter) SetFast() { w.fast.Store(true) }
-
-// fastParams is p with the padding taken out and the batching kept.
-func fastParams(p *shape.Params) *shape.Params {
-	q := *p
-	q.PadAfterIdle, q.PadTail = 0, 0
-	return &q
-}
-
 // SetCover switches this writer to cadence mode for the rest of its life.
 func (w *connWriter) SetCover(tick time.Duration, burst int) {
 	if tick < 5*time.Millisecond {
@@ -260,9 +245,6 @@ func (w *connWriter) flush() {
 			}
 		}
 		p := shape.Get()
-		if w.fast.Load() {
-			p = fastParams(p)
-		}
 		if p.Coalesce > 0 {
 			// Gather while cells keep arriving within the quiet gap of each
 			// other, until the byte target, the delay cap, or silence.

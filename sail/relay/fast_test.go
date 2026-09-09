@@ -11,48 +11,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dhyabi2/sail/shape"
 	"github.com/dhyabi2/sail/wire"
 )
 
-func TestFastParamsTakeOutThePaddingAndKeepTheBatching(t *testing.T) {
-	p := &shape.Params{Coalesce: 30 * time.Millisecond, MaxDelay: 200 * time.Millisecond, PadAfterIdle: 0.5, PadTail: 0.2, MinRecord: 100, MaxRecord: 1400}
-	q := fastParams(p)
-	if q.PadAfterIdle != 0 || q.PadTail != 0 {
-		t.Fatalf("fast params must drop the padding: %+v", q)
-	}
-	if q.Coalesce != p.Coalesce || q.MaxDelay != p.MaxDelay {
-		t.Fatal("fast params must keep the batching: without it Direct measured under 1 MB/s against ~8 with it")
-	}
-	if q.MinRecord != p.MinRecord || q.MaxRecord != p.MaxRecord {
-		t.Fatal("record cutting must be kept: the link still looks like HTTPS")
-	}
-	if p.Coalesce == 0 {
-		t.Fatal("the original must be untouched")
-	}
-}
-
-// A Direct (fast) circuit works end to end, and a link-level command a relay
-// does not know is ignored, not fatal — which is what a relay from before
-// CmdFast does with it.
-func TestDirectFastCircuitAndUnknownLinkCommandsAreHarmless(t *testing.T) {
+// A link-level command a relay does not know is ignored, not fatal: what a
+// relay from before any new command does with it, and what every relay does
+// with CmdFast, which was measured slower and withdrawn.
+func TestUnknownLinkCommandsAreHarmless(t *testing.T) {
 	reg := &Registry{}
 	s, ri, _ := startRelay(t, reg, 7, true)
 	var tag [32]byte
-	copy(tag[:], "direct-fast-anchor-for-the-test!")
+	copy(tag[:], "direct-anchor-for-the-link-test!")
 	s.Quota.Credit(fmt.Sprintf("%x", tag), 50<<20, "")
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(strings.Repeat("x", 300000))) }))
 	defer target.Close()
-
-	c, err := BuildFast([]*RelayInfo{ri}, tag, nil, 10*time.Second, nil, nil, true)
+	c, err := Build([]*RelayInfo{ri}, tag, 10*time.Second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	// Something a relay of any version must shrug off: an unknown command on circuit 0.
 	c.w.write(&wire.Cell{Cmd: 99})
+	c.w.write(&wire.Cell{Cmd: wire.CmdFast})
 	if bad := c.Ping(5 * time.Second); bad != -1 {
-		t.Fatal("the link must survive an unknown command")
+		t.Fatal("the link must survive unknown and withdrawn commands")
 	}
 	tr := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		st, err := c.Open(addr, 5*time.Second)
@@ -67,6 +48,6 @@ func TestDirectFastCircuitAndUnknownLinkCommandsAreHarmless(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if len(body) != 300000 {
-		t.Fatalf("got %d bytes through the fast circuit", len(body))
+		t.Fatalf("got %d bytes", len(body))
 	}
 }

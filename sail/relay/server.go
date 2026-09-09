@@ -468,8 +468,7 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 			s.sendRelays(in)
 			continue
 		}
-		if cell.Cmd == wire.CmdFast && cell.CircID == 0 { // Direct (fast): no coalescing toward this client
-			in.SetFast()
+		if cell.Cmd == wire.CmdFast && cell.CircID == 0 { // v0.3.26 only: measured slower and withdrawn; ignored
 			continue
 		}
 		if cell.Cmd == wire.CmdCover && cell.CircID == 0 && len(cell.Payload) >= 3 { // cadence mode on this link

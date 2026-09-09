@@ -193,3 +193,11 @@ If the answer is no, the change does not ship, whatever it improves.
     sends it a command it cannot know); the client is faster, the relay still
     coalesces. Nothing else changes; My relays and Open network are untouched.
   - *Old client:* never sends it.
+
+- **2026-09-09, the fast profile withdrawn (v0.3.28).** Measured on a live
+  relay with the relay updated too, interleaved: the disguise on moved 20 MB at
+  3.2–4.4 MB/s, "fast" at 1.1–2.2. The cover cadence is a throughput pump, not
+  a cost. No client sends `CmdFast` any more; relays ignore it (the number stays
+  reserved). Direct uses the standard link. The app applies *Network* and the
+  paired list at once by reconnecting itself; before, they were read only at
+  the next connect, which looked like the app ignoring the setting.

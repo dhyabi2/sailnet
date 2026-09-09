@@ -36,20 +36,14 @@
             android:entries="@array/mode_names"
             android:entryValues="@array/mode_values"
             android:defaultValue="mine" />
-        <SwitchPreferenceCompat
-            android:key="direct_stealth"
-            android:title="Keep the disguise in Direct"
-            android:summary="Off: Direct is fast — cells go as they come, no padding. On: the link keeps the idle-browser rhythm (slower); use on a censored network."
-            android:defaultValue="false" />
         <Preference
             android:key="add_relay"
             android:title="Add my relay"
             android:summary="On the relay run: sailnode pair — it prints a six-digit code. Pick the relay here and enter the code. Nothing else to copy." />
-        <EditTextPreference
-            android:key="mine"
-            android:title="My relays"
-            android:summary="Accounts of relays you run, one per row. Each must be started with --owner set to this phone's wallet address (or --payout, if that is the same wallet). One of them becomes your exit and asks you for nothing; you still enter through someone else's relay, so nobody watching your relay sees you arrive."
-            android:defaultValue="" />
+        <Preference
+            android:key="paired"
+            android:title="Paired relays"
+            android:summary="None yet. Add my relay pairs one with a code." />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Wallet">
