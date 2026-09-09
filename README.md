@@ -7,14 +7,15 @@ over ordinary-looking HTTPS and are paid per megabyte, directly, on the Nano
 ledger. No token, no accounts, no company in the middle.
 
 - **Run a relay** on any VPS or home PC and earn XNO to a wallet you control.
-- **Use the network** from the Android app, the desktop client (SOCKS5 proxy
-  and DNS), or the Chrome extension.
+- **Use the network** from the Android app, the desktop apps (SOCKS5 proxy
+  and DNS for any browser), or the Chrome and Firefox extensions.
 - **Censorship resistance**: bridges, WebSocket-shaped tunnels, measured
   traffic shaping.
 
-Downloads: the [Releases](../../releases) page has `sailnode` for Linux,
-macOS and Windows and the Android APK. Docker images are on GitHub Container
-Registry as `ghcr.io/dhyabi2/sailnet`.
+Downloads: the [Releases](../../releases) page has `sailnode` and `sail` for
+Linux (x86-64 and arm64), the desktop apps for macOS and Windows, the Android
+APK and the Chrome and Firefox extensions, each with a `.sha256` beside it.
+Docker images are on GitHub Container Registry as `ghcr.io/dhyabi2/sailnet`.
 
 ## Run a relay in one command
 
@@ -68,6 +69,9 @@ curl -fsSL -o /usr/local/bin/sailnode https://github.com/dhyabi2/sailnet/release
   && chmod +x /usr/local/bin/sailnode
 sailnode relay --register --payout nano_your_wallet_address_here
 ```
+
+The command is `sailnode` — Sailnet is the network's name, not a binary. The
+other command a release ships is `sail`, the wallet CLI.
 
 To keep it running across reboots:
 
@@ -424,8 +428,9 @@ minutes.
 
 Every prepaid amount is a quantity of *service*, never a fixed number of XNO:
 an anchor buys about 10 MiB at the entry's published price, a pool buys
-`--pool-mib` at the next hop's, and the operating float is eight pools' worth
-at your own. Prices differ between relays and move over time, so an amount
+`--pool-mib` at the next hop's, and the operating float is what eight top-ups
+cost at the peers' published prices — never at your own, so repricing your
+relay does not move when you get paid. Prices differ between relays and move over time, so an amount
 written in XNO buys the wrong thing the moment either happens — a relay
 charging more than a fixed pool was sized for used to be skipped silently
 rather than paid, which is a partitioned network and no error message
@@ -526,7 +531,9 @@ Windows, MSYS2/mingw-w64).
 
 ## Website and brand
 
-`website/` is the static site, published by GitHub Pages from `main`.
+`website/` is the static site and its two small API functions (`/api/stats`,
+`/api/faucet`), deployed to [www.sailnet.space](https://www.sailnet.space) on
+Vercel; the faucet forwards to relays named in its environment.
 `brand/` holds the mark and wordmark (SVG) and the app icon, with the rules:
 black and white only, no gradients, no rounded corners.
 
@@ -551,8 +558,8 @@ ls app/build/outputs/apk/debug/        # app-universal-debug.apk and per-ABI APK
 ```
 
 Desktop app: `cd sail && go install fyne.io/tools/cmd/fyne@latest && cd cmd/sailgui && fyne package -os darwin|windows|linux -icon Icon.png`.
-The same steps run in `.github/workflows/android-release.yml` and `desktop.yml`. Every push of a `v*` tag builds the node binaries, the Docker
-image and the APK and attaches them to a release.
+The same steps run in `.github/workflows/android-release.yml` and `desktop.yml`. Every push of a `v*` tag builds the node binaries (Linux x86-64 and arm64), the desktop apps, the browser extensions, the Docker
+image and the APK, and attaches them to a release with a `.sha256` each.
 
 ## Layout
 
