@@ -350,7 +350,8 @@ func runRelay(args []string) {
 	s.LoadPools()
 	if *regDir == "" {
 		go func() { time.Sleep(3 * time.Minute); s.RunLevy(*levy) }()
-		go func() { // earnings arrive as receivable blocks: pocket them whether or not a payout address is set, so the node's wallet shows what it earned
+		go func() { time.Sleep(90 * time.Second); s.RunReachability(10 * time.Minute) }() // so /stats counts relays that answer, not only ones that gossiped to us
+		go func() {                                                                       // earnings arrive as receivable blocks: pocket them whether or not a payout address is set, so the node's wallet shows what it earned
 			for {
 				time.Sleep(20 * time.Minute)
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

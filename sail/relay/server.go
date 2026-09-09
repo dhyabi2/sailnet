@@ -99,6 +99,8 @@ type Server struct {
 	bridges map[*connWriter]map[uint32]bridge
 
 	verMu     sync.Mutex
+	reachMu   sync.Mutex
+	reached   map[string]time.Time // account -> last time a TCP connection to it opened (RunReachability)
 	verBusy   map[string]bool      // tag → verification in flight (retries wait, not spam)
 	verBad    map[string]time.Time // tag → when it failed
 	verPerIP  map[string][]time.Time
@@ -1041,7 +1043,12 @@ func (s *Server) serveStats(w http.ResponseWriter, r *http.Request) {
 		if rel.Unlisted {
 			continue // bridges are not published, by design
 		}
-		live := time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour
+		// A relay is there if it signed a gossip record we received, or if a
+		// TCP connection to it opened — the same two proofs the pool refresh
+		// accepts before paying anyone. Counting gossip alone reported 5 of
+		// 12 reachable relays on 2026-09-09: gossip only reaches a relay
+		// through peers it shares circuits with, and a quiet network has few.
+		live := time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour || s.reachedWithin(rel.Account, 3*time.Hour)
 		if rel.MinRate > 0 {
 			rates = append(rates, int(rel.MinRate))
 			if live {
@@ -1913,6 +1920,55 @@ func (s *Server) WarmPools() {
 }
 
 // reachable reports whether a TCP connection to the relay opens.
+// RunReachability keeps s.reached current: every interval it opens a TCP
+// connection to each listed relay and records the ones that accept. It is
+// evidence for the stats page and nothing else — no money and no routing
+// decision reads it, so a relay that answers a SYN and nothing more gains
+// only a place in a count. Eight at a time, four seconds each, so a registry
+// full of dead records costs about twenty seconds a sweep, off every path.
+func (s *Server) RunReachability(every time.Duration) {
+	for {
+		s.sweepReachability()
+		time.Sleep(every)
+	}
+}
+
+func (s *Server) sweepReachability() {
+	if s.Registry == nil {
+		return
+	}
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, rel := range s.Registry.All() {
+		if rel.Unlisted || (s.Key != nil && rel.Account == s.Key.Address) {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(rel *RelayInfo) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if reachable(rel, 4*time.Second) {
+				s.reachMu.Lock()
+				if s.reached == nil {
+					s.reached = map[string]time.Time{}
+				}
+				s.reached[rel.Account] = time.Now()
+				s.reachMu.Unlock()
+			}
+		}(rel)
+	}
+	wg.Wait()
+}
+
+// reachedWithin reports whether a TCP connection to acct opened in the last d.
+func (s *Server) reachedWithin(acct string, d time.Duration) bool {
+	s.reachMu.Lock()
+	defer s.reachMu.Unlock()
+	t, ok := s.reached[acct]
+	return ok && time.Since(t) < d
+}
+
 func reachable(rel *RelayInfo, timeout time.Duration) bool {
 	c, err := (&net.Dialer{Timeout: timeout, Control: DialControl}).Dial("tcp", rel.Desc.Addr())
 	if err != nil {
