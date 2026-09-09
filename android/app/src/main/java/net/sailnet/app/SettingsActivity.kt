@@ -89,18 +89,21 @@ class SettingsActivity : AppCompatActivity() {
             val spinner = android.widget.Spinner(ctx).apply { adapter = android.widget.ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, if (labels.isEmpty()) listOf("connect first") else labels) }
             val code = EditText(ctx).apply { hint = "code"; inputType = android.text.InputType.TYPE_CLASS_NUMBER; filters = arrayOf(android.text.InputFilter.LengthFilter(6)) }
             val pair = android.widget.Button(ctx, null, android.R.attr.borderlessButtonStyle).apply { text = "Pair" }
+            // What happened, in the window itself: a toast under a dialog is easy to miss.
+            val note = android.widget.TextView(ctx).apply { setPadding(0, 0, 0, dp(4)); textSize = 13f }
             pair.setOnClickListener {
                 if (accounts.isEmpty()) return@setOnClickListener
                 val account = accounts[spinner.selectedItemPosition]; val typed = code.text.toString().trim()
-                pair.isEnabled = false; pair.text = "…"
+                if (typed.length != 6) { note.text = "The code is six digits"; return@setOnClickListener }
+                pair.isEnabled = false; pair.text = "…"; note.text = "Pairing…"
                 Thread {
                     val res = try { org.json.JSONObject(Mobile.pairRelay(account, typed)) } catch (e: Exception) { org.json.JSONObject().put("ok", false).put("error", e.message ?: "failed") }
                     activity?.runOnUiThread {
                         pair.isEnabled = true; pair.text = "Pair"
                         if (res.optBoolean("ok")) {
                             val have = pairedAccounts().toMutableList(); if (!have.contains(account)) have.add(account)
-                            p.edit().putString("mine", have.joinToString("\n")).apply(); code.setText(""); showPaired(); refreshRelaySummary()
-                        } else android.widget.Toast.makeText(ctx, res.optString("error"), android.widget.Toast.LENGTH_LONG).show()
+                            p.edit().putString("mine", have.joinToString("\n")).apply(); code.setText(""); note.text = "Paired"; showPaired(); refreshRelaySummary()
+                        } else note.text = res.optString("error")
                     }
                 }.start()
             }
@@ -110,6 +113,7 @@ class SettingsActivity : AppCompatActivity() {
                 addView(code, android.widget.LinearLayout.LayoutParams(dp(80), android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
                 addView(pair)
             })
+            root.addView(note)
 
             AlertDialog.Builder(ctx).setTitle("My relay").setView(root).setPositiveButton("Done", null).show()
         }

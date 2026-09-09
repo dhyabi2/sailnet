@@ -2,6 +2,7 @@ package relay
 
 import (
 	"crypto/rand"
+	"golang.org/x/crypto/blake2b"
 
 	"crypto/sha256"
 	"crypto/subtle"
@@ -69,6 +70,62 @@ func NewPairingCode(path string) (string, time.Time, error) {
 
 // tryPair checks a code against the pairing file and, on success, makes
 // ownerHex (the hex public key of the wallet that paid the circuit) an owner.
+// PairingTag is the tag a wallet uses to open the short free circuit that
+// carries its pairing code: it can only be formed by that wallet for this
+// relay, and the relay honours it only while a code is active (tryPair).
+func PairingTag(relayPub, clientPub [32]byte) [32]byte {
+	h, _ := blake2b.New256(nil)
+	h.Write([]byte("sailnet-pairing"))
+	h.Write(relayPub[:])
+	h.Write(clientPub[:])
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// PairingBytes is what a pairing circuit may carry: the code and the answer,
+// nothing a stranger could use, and only for the five minutes a code lives.
+const PairingBytes = 256 << 10
+
+// PairingCreate is what a pairing CREATE carries after the signature instead
+// of a payment: the wallet's public key, so the relay can recompute the tag
+// and check the signature (a CREATE otherwise names only the circuit's
+// ephemeral key). A relay from before pairing reads it as a payment it
+// cannot parse and refuses, which is the right answer there.
+func PairingCreate(walletPub [32]byte) []byte {
+	return append([]byte("pair:"), walletPub[:]...)
+}
+
+// pairingCreate admits a CREATE whose tag is the pairing tag of the signing
+// wallet, without payment, while a code is active. Before this the app had
+// to pay the relay an anchor just to hand over the code, which meant proof
+// of work, a reachable RPC and a ledger wait on a phone — a minute of "…"
+// that often ended in a timeout — and it overwrote the payment the running
+// circuit was made with.
+func (s *Server) pairingCreate(tag string, tagB, clientPub [32]byte, sig, extra []byte) bool {
+	if s.Quota == nil || s.Key == nil || s.PairingFile == "" || len(extra) != 5+32 || string(extra[:5]) != "pair:" {
+		return false
+	}
+	var wallet [32]byte
+	copy(wallet[:], extra[5:])
+	if tagB != PairingTag(s.Key.Public, wallet) || !VerifyCreate(wallet, clientPub, tagB, sig) {
+		return false
+	}
+	raw, err := os.ReadFile(s.PairingFile)
+	if err != nil {
+		return false
+	}
+	var pf pairingFile
+	if json.Unmarshal(raw, &pf) != nil || time.Now().Unix() >= pf.Expires || pf.Attempts >= pairingAttempts {
+		return false
+	}
+	if !s.Quota.Known(tag) {
+		s.Quota.Credit(tag, PairingBytes, hex.EncodeToString(wallet[:]))
+		log.Printf("pairing: a wallet opened a circuit to send its code")
+	}
+	return true
+}
+
 func (s *Server) tryPair(ownerHex, code string) error {
 	if s.PairingFile == "" {
 		return errors.New("pairing is not set up on this relay")
@@ -185,6 +242,7 @@ func (s *Server) handlePair(c *circuit, sid uint16, data []byte) {
 		return
 	}
 	if err := s.tryPair(owner, string(data)); err != nil {
+		log.Printf("pairing: %v", err)
 		s.reply(c, wire.CmdError, sid, []byte(err.Error()))
 		return
 	}

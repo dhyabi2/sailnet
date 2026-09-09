@@ -64,14 +64,17 @@ func (m *manager) PairRelay(account, code string) error {
 	if rel == nil {
 		return errors("that relay is not known to this client yet; wait a minute for the relay list and try again")
 	}
-	if err := m.anchorTo(rel); err != nil {
-		return fmt.Errorf("could not pay the relay an anchor: %w", err)
-	}
-	m.awaitAnchor(4 * time.Second)
-	c, err := relay.Build([]*relay.RelayInfo{rel}, m.tag, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) })
+	sign := func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) }
+	// A pairing circuit is free: the tag says which wallet is asking and the
+	// relay lets it in while a code is active. Nothing is paid, nothing
+	// touches the payment the running circuit was made with.
+	c, err := relay.Build([]*relay.RelayInfo{rel}, relay.PairingTag(rel.Pub, m.key.Public), 20*time.Second, relay.PairingCreate(m.key.Public), sign)
 	if err != nil {
 		if c != nil {
 			c.Close()
+		}
+		if strings.Contains(err.Error(), "hop 0 refused") {
+			return errors("the relay did not accept a pairing circuit: run `sailnode pair` on it for a fresh code (and `sailnode upgrade` if it is older than v0.3.30)")
 		}
 		return fmt.Errorf("could not reach the relay: %w", err)
 	}

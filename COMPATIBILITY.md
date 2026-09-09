@@ -1,4 +1,7 @@
-# Strict rule: the network is live. Never break a running node.
+# Rule 1: the network is live. Never break a running node.
+
+The other standing rules (no centralization, no central custody,
+anti-manipulation) are in `RULES.md`.
 
 Relay operators are strangers. They will not upgrade when we release, and we
 cannot ask them to. From now on every change is judged against one question:
@@ -201,3 +204,18 @@ If the answer is no, the change does not ship, whatever it improves.
   reserved). Direct uses the standard link. The app applies *Network* and the
   paired list at once by reconnecting itself; before, they were read only at
   the next connect, which looked like the app ignoring the setting.
+- **2026-09-10, pairing no longer pays (v0.3.30).** To hand its code to a
+  relay the app used to pay that relay an anchor first — proof of work, a
+  reachable RPC and a ledger wait on a phone, a minute of "…" that often ended
+  in a timeout — and the payment replaced the one the running circuit was made
+  with. Now the app opens a *pairing circuit*: CREATE with tag
+  `blake2b("sailnet-pairing" ‖ relayPub ‖ walletPub)`, signed by the wallet,
+  and `pair:` ‖ walletPub (37 bytes) after the signature where a payment would
+  go. A relay honours it only while a code from `sailnode pair` is active
+  (five minutes, three tries), for 256 KiB, before any rate limit, and credits
+  it to that wallet so `CmdPair` works as before. Relays from before this read
+  the trailer as a payment they cannot parse and refuse the CREATE; the app
+  then says to run `sailnode pair` for a fresh code and `sailnode upgrade`.
+  Nothing is paid to pair any more. Failed attempts are logged on the relay
+  (`pairing: wrong code (1 of 3 tries)`), and the app shows the outcome in
+  the *My relay* window instead of a toast.

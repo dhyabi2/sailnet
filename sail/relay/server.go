@@ -703,6 +703,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 			log.Printf("owner: the operator's own wallet opened a circuit; no payment asked")
 		}
 	}
+	s.pairingCreate(tag, tagB, clientPub, sig, cell.Payload[128:]) // a wallet bringing a pairing code, while one is active (pairing.go)
 	if !s.Quota.Known(tag) {
 		if !s.allowVerify(tag, ip) { // every unverified tag, supplied block or not, is rate-limited
 			s.Metrics.RejectedSpam.Add(1)
@@ -1659,6 +1660,9 @@ func (s *Server) creditFromLedgerOwner(tag string) (string, error) {
 }
 
 func (s *Server) creditFromLedgerImpl(tag string) (string, error) {
+	if s.Nano == nil {
+		return "", errors.New("no ledger to check the payment against")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	infos, err := s.Nano.BlocksInfo(ctx, []string{strings.ToUpper(tag)})

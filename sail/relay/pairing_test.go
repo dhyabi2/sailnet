@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -91,4 +92,50 @@ func TestPairOverTheWireThenRideFree(t *testing.T) {
 		t.Fatal("ping failed on the free circuit")
 	}
 	_ = wire.CmdPair
+}
+
+// A phone with nothing paid opens a pairing circuit while a code is active,
+// hands over the code, and rides free from then on. Without a code the same
+// tag is refused, and the tag of another wallet never opens anything.
+func TestPairWithoutPayingAnAnchor(t *testing.T) {
+	reg := &Registry{}
+	s, ri, _ := startRelay(t, reg, 5, true)
+	dir := t.TempDir()
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	seed := make([]byte, 32)
+	seed[0] = 67
+	phone, _ := nano.DeriveKey(seed, 0)
+	sign := func(pub, tg [32]byte) []byte { return SignCreate(phone, pub, tg) }
+	ptag := PairingTag(ri.Pub, phone.Public)
+
+	if c, err := Build([]*RelayInfo{ri}, ptag, 5*time.Second, PairingCreate(phone.Public), sign); err == nil {
+		c.Close()
+		t.Fatal("no code is active: the pairing tag must be refused")
+	}
+	code, _, _ := NewPairingCode(s.PairingFile)
+	seed[0] = 68
+	other, _ := nano.DeriveKey(seed, 0)
+	if c, err := Build([]*RelayInfo{ri}, ptag, 5*time.Second, PairingCreate(phone.Public), func(pub, tg [32]byte) []byte { return SignCreate(other, pub, tg) }); err == nil {
+		c.Close()
+		t.Fatal("another wallet signing the phone's pairing tag must be refused")
+	}
+	c, err := Build([]*RelayInfo{ri}, ptag, 10*time.Second, PairingCreate(phone.Public), sign)
+	if err != nil {
+		t.Fatalf("the pairing circuit should open free while a code is active: %v", err)
+	}
+	if err := c.Pair(code, 5*time.Second); err != nil {
+		t.Fatalf("pairing over the free circuit failed: %v", err)
+	}
+	c.Close()
+	if _, err := os.Stat(s.PairingFile); err == nil {
+		t.Fatal("a used code must be gone")
+	}
+	c2, err := Build([]*RelayInfo{ri}, OwnerTag(ri.Pub, phone.Public), 10*time.Second, nil, sign)
+	if err != nil {
+		t.Fatalf("the paired phone should ride free: %v", err)
+	}
+	defer c2.Close()
+	if bad := c2.Ping(5 * time.Second); bad != -1 {
+		t.Fatal("ping failed on the free circuit")
+	}
 }
