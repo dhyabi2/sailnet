@@ -21,8 +21,17 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import net.sailnet.mobile.Mobile
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : AppCompatActivity() {
+    companion object {
+        // Where the release list is read from and where the download goes. The
+        // link is a constant, never taken from the answer: the answer decides
+        // only whether to say anything, and only a version string is read.
+        const val RELEASES_URL = "https://api.github.com/repos/dhyabi2/sailnet/releases/latest"
+        const val APK_URL = "https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-Android.apk"
+    }
     private lateinit var status: TextView
     private lateinit var statusDetail: TextView
     private lateinit var address: TextView
@@ -32,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toggle: Button
     private lateinit var qr: ImageView
     private lateinit var fundCard: View
+    private lateinit var updateCard: View
+    private lateinit var updateText: TextView
     private val ui = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,6 +58,12 @@ class MainActivity : AppCompatActivity() {
         toggle = findViewById(R.id.toggle)
         qr = findViewById(R.id.qr)
         fundCard = findViewById(R.id.fundCard)
+        updateCard = findViewById(R.id.updateCard)
+        updateText = findViewById(R.id.updateText)
+        findViewById<Button>(R.id.update).setOnClickListener {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)))
+        }
+        checkForUpdate()
 
         val addr = Mobile.address(filesDir.absolutePath)
         address.text = addr
@@ -279,6 +296,61 @@ class MainActivity : AppCompatActivity() {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("link", url))
             Toast.makeText(this, "No browser found; link copied", Toast.LENGTH_LONG).show()
         }
+    }
+
+    // An update notice is a convenience, never a dependency: one small GET to
+    // the release list at most every six hours, and any failure — no network,
+    // a rate limit, an odd answer — shows nothing and changes nothing. It says
+    // a newer build exists and opens the download in the browser; installing
+    // stays the user's own decision. Every build from v0.2.53 on carries the
+    // same signing key, so the download installs over this one and the wallet
+    // stays where it is.
+    private fun checkForUpdate() {
+        val p = getSharedPreferences("update", MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val cached = p.getString("latest", "") ?: ""
+        if (now - p.getLong("checkedAt", 0L) < 6 * 3600_000L) {
+            showUpdateIfNewer(cached)
+            return
+        }
+        Thread {
+            var latest = ""
+            try {
+                val c = URL(RELEASES_URL).openConnection() as HttpURLConnection
+                c.connectTimeout = 10_000
+                c.readTimeout = 10_000
+                c.setRequestProperty("Accept", "application/vnd.github+json")
+                if (c.responseCode == 200) {
+                    latest = JSONObject(c.inputStream.bufferedReader().readText()).optString("tag_name")
+                }
+                c.disconnect()
+            } catch (_: Exception) {
+            }
+            if (latest.isNotEmpty()) {
+                p.edit().putString("latest", latest).putLong("checkedAt", now).apply()
+                ui.post { showUpdateIfNewer(latest) }
+            }
+        }.start()
+    }
+
+    private fun showUpdateIfNewer(tag: String) {
+        if (tag.isEmpty() || !isNewer(tag, BuildConfig.VERSION_NAME)) return
+        updateText.text = "Sailnet ${tag.removePrefix("v")} is out; this is v${BuildConfig.VERSION_NAME}. It installs over this one and your wallet stays."
+        updateCard.visibility = View.VISIBLE
+    }
+
+    // "v0.3.19" is newer than "0.3.18-2-gabc1234": the leading v and anything
+    // past a dash (a build between tags) are ignored, the rest compared as numbers.
+    private fun isNewer(tag: String, have: String): Boolean {
+        fun parts(s: String) = s.removePrefix("v").substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val a = parts(tag)
+        val b = parts(have)
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
+            if (x != y) return x > y
+        }
+        return false
     }
 
     private fun qrBitmap(text: String, size: Int): Bitmap {
