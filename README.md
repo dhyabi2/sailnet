@@ -141,11 +141,15 @@ Set it up once:
    relay's account, one per row. On the command line: `sailnode client --mine
    nano_…,nano_…`.
 
-From then on a relay of yours is the entry whenever one answers. A relay that
-does not name your wallet refuses the owner tag and the app says so, then
-uses an ordinary entry for that circuit. The owner tag is bound to the relay
-it is for and signed with your key, so it means nothing anywhere else, and to
-everyone but your relay the circuit looks like any other.
+From then on a relay of yours is your exit (or a middle hop) whenever one
+answers — never your entry. You still enter through someone else's relay and
+pay it for its work like any client, so an observer of a relay you run never
+finds your address in its inbound; the owner tag travels inside the circuit
+to your relay, which asks you for nothing. A relay that does not name your
+wallet refuses the tag and the app says so, then pays it like any hop for an
+hour. The tag is bound to the relay it is for and signed with your key, so it
+means nothing anywhere else, and to everyone but your relay the circuit looks
+like any other.
 
 Nano fans have run representatives for years for nothing. This is the same
 arrangement with something in it for you: the network you help carry is the

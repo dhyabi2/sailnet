@@ -176,6 +176,16 @@ type Signer func(clientPub, tag [32]byte) []byte
 var BuildProgress func(hop, total int)
 
 func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byte, sign Signer) (*Circuit, error) {
+	return BuildTags(path, tag, nil, timeout, payment, sign)
+}
+
+// BuildTags is Build with a tag of the client's own for chosen later hops:
+// hopTags[i] rides inside the EXTEND to hop i-1, signed by sign over hop i's
+// key, and hop i-1 forwards it in the CREATE instead of its pool tag. It is
+// how an owner reaches its own relay as a middle or exit without paying it
+// and without entering through it (owner.go). Hops without an entry here
+// are paid by the previous relay's pool, as always.
+func BuildTags(path []*RelayInfo, tag [32]byte, hopTags map[int][32]byte, timeout time.Duration, payment []byte, sign Signer) (*Circuit, error) {
 	if len(path) == 0 {
 		return nil, errors.New("empty path")
 	}
@@ -250,6 +260,10 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 		}
 		payload := append([]byte(path[i].Account), 0)
 		payload = append(payload, pub[:]...)
+		if t, ok := hopTags[i]; ok && sign != nil {
+			payload = append(payload, t[:]...)
+			payload = append(payload, sign(pub, t)...)
+		}
 		if err := c.send(wire.CmdExtend, 0, payload); err != nil {
 			c.Failed = i - 1
 			return c, err

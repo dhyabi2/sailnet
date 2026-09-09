@@ -32,7 +32,7 @@
         <EditTextPreference
             android:key="mine"
             android:title="My relays"
-            android:summary="Accounts of relays you run, one per row. Each must be started with --owner set to this phone's wallet address (or --payout, if that is the same wallet). They become your entry and ask you for nothing: your traffic rides on what your relay earns."
+            android:summary="Accounts of relays you run, one per row. Each must be started with --owner set to this phone's wallet address (or --payout, if that is the same wallet). One of them becomes your exit and asks you for nothing; you still enter through someone else's relay, so nobody watching your relay sees you arrive."
             android:defaultValue="" />
     </PreferenceCategory>
 

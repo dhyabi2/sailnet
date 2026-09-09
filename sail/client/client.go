@@ -148,7 +148,16 @@ type manager struct {
 	// tag (another --owner, or a build from before owner circuits), so it is
 	// not tried again on every build: an hour later it gets another chance.
 	mineRefused map[string]time.Time
-	stealth     bool // every Nano RPC call goes through the circuit; none before one exists
+	// extendOld remembers a relay that answered "bad EXTEND" to an owner tag
+	// riding in the EXTEND: a build from before client tags. For an hour our
+	// own relay is not placed after it; circuits through it pay as usual.
+	extendOld map[string]time.Time
+	// retryPath is set when a build failed only because a hop before ours
+	// could not carry the owner tag: the next attempt takes the very same
+	// path, tag dropped, so the anchor already paid to the entry is used and
+	// no innocent hop is routed around. Consumed by the next attempt.
+	retryPath []*relay.RelayInfo
+	stealth   bool // every Nano RPC call goes through the circuit; none before one exists
 	// censored: bridges are the only entries, nothing is probed or fetched
 	// from listed relays before a circuit exists, and the ledger is never
 	// contacted directly, not even on first run (the bridge grant covers it).
@@ -414,15 +423,11 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			m.entry = e
 		}
 	}
-	if e := pick(func(r *relay.RelayInfo) bool {
-		return m.opts.mine[r.Account] && !m.skip[r.Account] && time.Since(m.mineRefused[r.Account]) > time.Hour
-	}); e != nil {
-		// A relay this wallet owns is the entry whenever one answers: it
-		// asks us for nothing (owner.go), and its float — our own earnings —
-		// prepays the hops beyond it.
-		path = append(path, e)
-		m.entry = e
-	} else if m.entry != nil && !m.skip[m.entry.Account] && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
+	// Never one of our own relays as entry: the entry sees our address, and
+	// an observer of a relay we run must not find us in its inbound. Ours go
+	// at the exit or in the middle (below), where the owner tag rides inside
+	// the EXTEND and no one but that relay learns whose circuit it is.
+	if m.entry != nil && !m.skip[m.entry.Account] && !m.opts.mine[m.entry.Account] && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
 		path = append(path, m.reg.Get(m.entry.Account))
 	} else {
 		// entry must be directly reachable; a bridge (unlisted, unblockable by
@@ -431,7 +436,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		var e *relay.RelayInfo
 		bias = near
 		if m.censored || m.canAfford(m.anchorNeed()) || (m.entry != nil && m.entry.Unlisted) {
-			e = pick(func(r *relay.RelayInfo) bool { return r.Unlisted })
+			e = pick(func(r *relay.RelayInfo) bool { return r.Unlisted && !m.opts.mine[r.Account] })
 		}
 		if e == nil && m.censored {
 			// Every bridge is gone or blocked. A listed relay as entry is
@@ -443,7 +448,7 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			}
 		}
 		if e == nil {
-			e = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagHome == 0 })
+			e = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagHome == 0 && !m.opts.mine[r.Account] })
 		}
 		if e == nil {
 			return nil, errors("no entry relay available")
@@ -457,6 +462,19 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 	// are the ones between relays, so they are the ones kept short.
 	var exit *relay.RelayInfo
 	if m.opts.hops > 1 {
+		if exit = pick(func(r *relay.RelayInfo) bool {
+			return m.mineUsable(r) && !used[r.Account] && r.Flags&token.FlagExit != 0
+		}); exit != nil {
+			used[exit.Account] = true
+			bias = func(r *relay.RelayInfo) float64 {
+				if sameRegion(r, exit) || sameRegion(r, path[0]) {
+					return 4
+				}
+				return 1
+			}
+		}
+	}
+	if exit == nil && m.opts.hops > 1 {
 		exit = pick(func(r *relay.RelayInfo) bool {
 			return r.Flags&token.FlagExit != 0 && diverse(r) && !m.opts.exclude[strings.ToUpper(r.Country)] && (m.opts.exitCC == "" || r.Country == strings.ToUpper(m.opts.exitCC))
 		})
@@ -475,7 +493,10 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 		}
 	}
 	for len(path) < m.opts.hops-1 {
-		r := pick(diverse)
+		r := pick(func(r *relay.RelayInfo) bool { return m.mineUsable(r) && !used[r.Account] })
+		if r == nil {
+			r = pick(diverse)
+		}
 		if r == nil {
 			r = pick(func(r *relay.RelayInfo) bool { return r.Flags&token.FlagHome == 0 }) // relax diversity
 		}
@@ -724,20 +745,15 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.skip = map[string]bool{}
 	for attempt := 0; attempt < 4; attempt++ {
-		path, err := m.choosePath()
-		if err != nil {
-			return nil, err
-		}
-		if m.opts.mine[path[0].Account] {
-			// Our own relay: present the owner tag, signed by this wallet's
-			// key like every CREATE, and buy no anchor. Whatever anchor we
-			// hold stays valid at the relay it was paid to.
-			pub := path[0].Pub
-			if pub == ([32]byte{}) {
-				pub, _ = nano.AddressToPubkey(path[0].Account)
+		path := m.retryPath
+		m.retryPath = nil
+		if path == nil {
+			var err error
+			if path, err = m.choosePath(); err != nil {
+				return nil, err
 			}
-			m.tag, m.payment, m.paidTo = relay.OwnerTag(pub, m.key.Public), nil, path[0].Account
-		} else if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
+		}
+		if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
 			m.tag = [32]byte{} // the anchor belongs to another entry
 		}
 		if m.tag == ([32]byte{}) {
@@ -768,7 +784,8 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		log.Printf("building circuit: %s", strings.Join(names, " → "))
 		m.setStage("Building circuit: hop 1 of " + fmt.Sprint(len(path)))
 		t0 := time.Now()
-		c, err := relay.Build(path, m.tag, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) })
+		hopTags := m.hopTags(path)
+		c, err := relay.BuildTags(path, m.tag, hopTags, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) })
 		if err != nil {
 			if c != nil && c.Failed >= 0 {
 				log.Printf("build failed at hop %d %s: %v", c.Failed, path[c.Failed].Account, err)
@@ -791,17 +808,32 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 					time.Sleep(5 * time.Second)
 				} else if c.Failed == 0 && strings.Contains(err.Error(), "not this relay") {
 					m.tag = [32]byte{} // our anchor is at another entry; it stays valid there
-				} else if c.Failed == 0 && m.opts.mine[path[0].Account] {
-					// Listed as ours, but it refused the owner tag: it names a
-					// different --owner, or runs a build from before owner
-					// circuits existed. Not our entry this time; nothing to pay again.
-					log.Printf("relay %s is listed as yours but did not accept the owner tag: check its --owner (or --payout) is this wallet, and that it is upgraded", short(path[0].Account))
-					m.skip[path[0].Account] = true
+				} else if c.Failed > 0 && strings.Contains(err.Error(), "bad EXTEND") && hopTags != nil {
+					// The hop before ours is a build from before client tags in
+					// the EXTEND: it refused the longer cell, as it always did.
+					// For an hour our relay is not placed after it; through it
+					// we pay as anyone does. Nothing was spent.
+					if _, tagged := hopTags[c.Failed]; tagged {
+						if m.extendOld == nil {
+							m.extendOld = map[string]time.Time{}
+						}
+						m.extendOld[path[c.Failed-1].Account] = time.Now()
+						// Nobody misbehaved: the same path, tag dropped, and the
+						// anchor already at this entry. A new entry would mean a
+						// new anchor, and that is XNO for nothing.
+						delete(m.skip, path[c.Failed].Account)
+						m.mark(path[c.Failed].Account, true)
+						m.retryPath = path
+						log.Printf("relay %s does not carry owner tags yet (older build); paying the ordinary way through it for now", short(path[c.Failed-1].Account))
+					}
+				} else if c.Failed > 0 && m.opts.mine[path[c.Failed].Account] && strings.Contains(err.Error(), "tag you supplied") {
+					// Ours, but it refused the owner tag: another --owner, or a
+					// build from before owner circuits. Not ours to ride for an hour.
+					log.Printf("relay %s is listed as yours but did not accept the owner tag: check its --owner (or --payout) is this wallet, and that it is upgraded", short(path[c.Failed].Account))
 					if m.mineRefused == nil {
 						m.mineRefused = map[string]time.Time{}
 					}
-					m.mineRefused[path[0].Account] = time.Now()
-					m.tag = [32]byte{}
+					m.mineRefused[path[c.Failed].Account] = time.Now()
 				} else if c.Failed == 0 && (strings.Contains(err.Error(), "quota") || strings.Contains(err.Error(), "payment")) {
 					m.tag = [32]byte{} // pay again next time
 					os.Remove(m.anchorPath())
@@ -2081,4 +2113,31 @@ func (m *manager) SetMine(list string) {
 		}
 	}
 	m.opts.mine = mine
+}
+
+// mineUsable is a relay this wallet runs that may take the owner tag now:
+// not skipped this build, not refusing it lately.
+func (m *manager) mineUsable(r *relay.RelayInfo) bool {
+	return m.opts.mine[r.Account] && !m.skip[r.Account] && time.Since(m.mineRefused[r.Account]) > time.Hour
+}
+
+// hopTags is the owner tag for each later hop that is ours, unless the hop
+// before it is known not to carry client tags (an older build): then that
+// hop is paid the ordinary way and nothing is sent that it would refuse.
+func (m *manager) hopTags(path []*relay.RelayInfo) map[int][32]byte {
+	var tags map[int][32]byte
+	for i := 1; i < len(path); i++ {
+		if !m.mineUsable(path[i]) || time.Since(m.extendOld[path[i-1].Account]) < time.Hour {
+			continue // not ours, refusing us lately, or behind a relay that cannot carry the tag: paid the ordinary way
+		}
+		pub := path[i].Pub
+		if pub == ([32]byte{}) {
+			pub, _ = nano.AddressToPubkey(path[i].Account)
+		}
+		if tags == nil {
+			tags = map[int][32]byte{}
+		}
+		tags[i] = relay.OwnerTag(pub, m.key.Public)
+	}
+	return tags
 }

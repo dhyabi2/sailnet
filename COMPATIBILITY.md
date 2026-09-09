@@ -117,3 +117,24 @@ If the answer is no, the change does not ship, whatever it improves.
     all of the relay's earnings — strictly less than that key already holds.
     Nothing self-reported is involved: the proof is a signature bound to the
     relay's own key.
+
+- **2026-09-09, owner circuits ride at a later hop, never the entry (v0.3.21).**
+  A relay this wallet runs is placed as exit or middle, and the owner tag
+  travels inside the EXTEND as an optional `tag ‖ sig` after the x25519 key.
+  The previous relay forwards it in the CREATE instead of its pool tag,
+  prepays nothing and meters nothing for that circuit.
+  - *Old relay before ours:* it checks the EXTEND length exactly and answers
+    `bad EXTEND`, as it always did for anything it does not understand. The
+    client reads that as "no client tags here", remembers it for an hour, and
+    pays the ordinary way through that relay. One refused cell per relay per
+    hour, no XNO spent, the old relay unchanged.
+  - *Old client:* never sends the longer EXTEND; every path is as before.
+  - *Old relay as ours:* refuses the tag as an unpaid CREATE; the middle
+    reports it as the client's tag and does not touch its own pool; the client
+    rests that relay for an hour and pays it like any hop.
+  - *Everyone else:* a client with no relays listed sends nothing new and
+    chooses paths exactly as before (`TestNothingChangesForAClientWithNoRelays`).
+  - *Money:* the entry is paid for its work like any entry; the hop before ours
+    spends nothing on ours; ours asks nothing. No operator earns less.
+  - *Privacy:* the entry sees an ordinary paying client; an observer of a relay
+    we run does not find our address in its inbound; the ledger sees nothing.

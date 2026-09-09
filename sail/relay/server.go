@@ -1248,15 +1248,34 @@ func (s *Server) replyChunks(c *circuit, sid uint16, data []byte) {
 
 // handleExtend: data = nextRelayAccount (string). We dial it, prepay from our
 // pool if needed, CREATE with the client's X25519 pub carried after a NUL.
-func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
+// parseExtend reads an EXTEND payload: account ‖ 0 ‖ x25519 pub[32], and
+// optionally ‖ tag[32] ‖ sig[64] — a tag the client brings for the next hop
+// together with its own signature over it (an owner tag, owner.go). Any
+// other length is what it always was, a bad EXTEND: a relay from before
+// this refuses the longer form the same way, and the client reads that
+// refusal as "pay the ordinary way through this one".
+func parseExtend(data []byte) (acct string, pub [32]byte, clientTag []byte, ok bool) {
 	i := indexByte(data, 0)
-	if i < 0 || len(data[i+1:]) != 32 {
+	if i < 0 {
+		return "", pub, nil, false
+	}
+	rest := data[i+1:]
+	if len(rest) != 32 && len(rest) != 32+32+64 {
+		return "", pub, nil, false
+	}
+	copy(pub[:], rest[:32])
+	if len(rest) > 32 {
+		clientTag = append([]byte(nil), rest[32:]...)
+	}
+	return string(data[:i]), pub, clientTag, true
+}
+
+func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
+	nextAcct, clientPub, clientTag, ok := parseExtend(data)
+	if !ok {
 		s.reply(c, wire.CmdError, sid, []byte("bad EXTEND"))
 		return
 	}
-	nextAcct := string(data[:i])
-	var clientPub [32]byte
-	copy(clientPub[:], data[i+1:])
 	rel := s.Registry.Get(nextAcct)
 	if rel == nil && s.Registry != nil {
 		// A relay this registry has not seen yet (it registered minutes ago):
@@ -1296,12 +1315,18 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 		s.reply(c, wire.CmdError, sid, []byte("next hop is not on the ledger"))
 		return
 	}
-	tag, ready := s.poolTag(rel)
-	if !ready {
-		go s.ensurePool(rel)
-		s.reply(c, wire.CmdError, sid, []byte("pool to "+short(rel.Account)+" is warming up; retry shortly"))
-		return
+	var tag string
+	if clientTag == nil {
+		var ready bool
+		tag, ready = s.poolTag(rel)
+		if !ready {
+			go s.ensurePool(rel)
+			s.reply(c, wire.CmdError, sid, []byte("pool to "+short(rel.Account)+" is warming up; retry shortly"))
+			return
+		}
 	}
+	// With a client tag we prepay nothing and meter nothing for this circuit:
+	// the next hop answers to the client for it, not to our pool.
 	dialTarget := rel
 	if rel.Flags&token.FlagHome != 0 { // home node: its descriptor is its harbour's endpoint
 		if hb := s.Registry.Harbour(rel); hb != nil {
@@ -1317,11 +1342,16 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 		return
 	}
 	nw := newConnWriter(conn, true)
-	tagBytes, _ := hex.DecodeString(tag)
-	var tagArr [32]byte
-	copy(tagArr[:], tagBytes)
-	create := append(clientPub[:], tagBytes...)
-	create = append(create, SignCreate(s.Key, clientPub, tagArr)...)
+	var create []byte
+	if clientTag != nil {
+		create = append(append([]byte(nil), clientPub[:]...), clientTag...) // pub ‖ tag ‖ sig, all the client's
+	} else {
+		tagBytes, _ := hex.DecodeString(tag)
+		var tagArr [32]byte
+		copy(tagArr[:], tagBytes)
+		create = append(clientPub[:], tagBytes...)
+		create = append(create, SignCreate(s.Key, clientPub, tagArr)...)
+	}
 	if rel.Flags&token.FlagHome != 0 {
 		create = append(create, []byte("via:"+rel.Account)...)
 	}
@@ -1335,7 +1365,10 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 	if err != nil || ack.Cmd != wire.CmdCreated {
 		conn.Close()
 		msg := "next hop refused"
-		if err == nil {
+		if err == nil && clientTag != nil {
+			msg = "next hop refused the tag you supplied: " + string(ack.Payload)
+			log.Printf("extend to %s with a client tag refused: %s", short(rel.Account), strings.ToLower(string(ack.Payload)))
+		} else if err == nil {
 			p := strings.ToLower(string(ack.Payload))
 			switch {
 			case strings.Contains(p, "exhausted") || strings.Contains(p, "not found") || strings.Contains(p, "levy") || strings.Contains(p, "not signed"):
@@ -1360,6 +1393,9 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 	}
 	conn.SetReadDeadline(time.Time{})
 	c.next, c.nextID, c.poolAcct = nw, 1, rel.Account
+	if clientTag != nil {
+		c.poolAcct = "" // nothing of ours is being spent at the next hop
+	}
 	s.reply(c, wire.CmdExtended, sid, ack.Payload)
 	// Pump replies from the next hop back to the client, adding our layer.
 	go func() {
