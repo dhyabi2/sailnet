@@ -24,6 +24,7 @@ import (
 // record sizes of real HTTPS for the first records of the connection and
 // afterwards cuts at sizes drawn from the same measurement.
 type connWriter struct {
+	fast   atomic.Bool // Direct (fast): no coalescing wait, no padding; records still cut like HTTPS
 	mu     sync.Mutex
 	c      net.Conn
 	sh     *shape.Shaper
@@ -42,6 +43,18 @@ type connWriter struct {
 type coverParams struct {
 	tick  time.Duration
 	burst int
+}
+
+// SetFast turns coalescing and padding off for the rest of this writer's
+// life: cells go out as they come. TLS records are still cut the way the
+// shaper cuts them, so the link keeps its HTTPS shape but not its rhythm.
+func (w *connWriter) SetFast() { w.fast.Store(true) }
+
+// fastParams is p with the waits and the padding taken out.
+func fastParams(p *shape.Params) *shape.Params {
+	q := *p
+	q.Coalesce, q.MaxDelay, q.PadAfterIdle, q.PadTail = 0, time.Millisecond, 0, 0
+	return &q
 }
 
 // SetCover switches this writer to cadence mode for the rest of its life.
@@ -244,6 +257,9 @@ func (w *connWriter) flush() {
 			}
 		}
 		p := shape.Get()
+		if w.fast.Load() {
+			p = fastParams(p)
+		}
 		if p.Coalesce > 0 {
 			// Gather while cells keep arriving within the quiet gap of each
 			// other, until the byte target, the delay cap, or silence.

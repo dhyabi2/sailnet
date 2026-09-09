@@ -181,3 +181,15 @@ If the answer is no, the change does not ship, whatever it improves.
   - *Privacy:* the code proves shell access to the relay, the circuit proves
     the key; nothing on the ledger. Direct is one hop: the relay (and its
     host) sees the user's address — stated on the switch.
+
+- **2026-09-09, Direct is fast (v0.3.26).** In Direct mode the client sends
+  `CmdFast` (32) on circuit 0 and drops the cover cadence, coalescing wait and
+  padding on its side; a relay that knows the cell does the same toward that
+  client. TLS record cutting is kept, so the link still looks like HTTPS —
+  it just no longer keeps an idle browser's rhythm. `--direct-stealth` (the
+  app: *Keep the disguise in Direct*) keeps everything as before.
+  - *Old relay:* an unknown command on circuit 0 lands in the default branch
+    and is ignored (`TestDirectFastCircuitAndUnknownLinkCommandsAreHarmless`
+    sends it a command it cannot know); the client is faster, the relay still
+    coalesces. Nothing else changes; My relays and Open network are untouched.
+  - *Old client:* never sends it.

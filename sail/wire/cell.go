@@ -456,6 +456,12 @@ const (
 	// the command and says nothing; the client reads the silence as "upgrade it".
 	CmdPair   byte = 30
 	CmdPaired byte = 31
+	// CmdFast: client → entry, on circuit 0: "no coalescing on this link". Sent
+	// only in Direct mode, where the link is a VPN to a box the user owns and
+	// hiding among page loads buys nothing. A relay from before it lands in
+	// the default branch and ignores it: the client is faster, the relay
+	// still coalesces — no harm either way.
+	CmdFast byte = 32
 	// QuotaLowStream is the stream id of an unsolicited CmdQuota from the
 	// entry: the quota is under a quarter, top up now.
 	QuotaLowStream uint16 = 2

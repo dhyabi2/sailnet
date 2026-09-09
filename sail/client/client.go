@@ -124,6 +124,7 @@ type clientOpts struct {
 	entry      string
 	mine       map[string]bool // relays this wallet owns (pair.go): ridden free as exit/middle, or as the one hop in Direct mode
 	mode       string          // open | mine | direct (pair.go)
+	stealth1   bool            // keep the cadence and coalescing in Direct too (slower); default off
 	hopsWanted int             // the configured hops, restored when leaving Direct mode
 	avoid      map[string]bool // relays never used in a path (the home node itself, its harbour)
 }
@@ -815,7 +816,8 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		m.setStage("Building circuit: hop 1 of " + fmt.Sprint(len(path)))
 		t0 := time.Now()
 		hopTags := m.hopTags(path)
-		c, err := relay.BuildTags(path, m.tag, hopTags, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) })
+		fast := m.opts.mode == ModeDirect && !m.opts.stealth1 && m.opts.mine[path[0].Account]
+		c, err := relay.BuildFast(path, m.tag, hopTags, m.opts.timeout, m.payment, func(pub, tag [32]byte) []byte { return relay.SignCreate(m.key, pub, tag) }, fast)
 		if err != nil {
 			if c != nil && c.Failed >= 0 {
 				log.Printf("build failed at hop %d %s: %v", c.Failed, path[c.Failed].Account, err)
@@ -1054,6 +1056,7 @@ func runClient(args []string) {
 	entry := fs.String("entry", "", "pin the entry relay account")
 	mine := fs.String("mine", "", "relay accounts you run, comma-separated: paired with this wallet (sailnode pair) or naming it as --owner/--payout")
 	mode := fs.String("mode", "mine", "how your own relays are used: open (never), mine (free exit, paid entry), direct (one hop through yours, nothing paid)")
+	directStealth := fs.Bool("direct-stealth", false, "in direct mode keep the cover cadence and coalescing (looks like an idle browser to a censor; slower)")
 	stealth := new(bool)
 	*stealth = true // always: no direct Nano RPC except the first-run bootstrap through Sailnet's endpoint
 	dns := fs.String("dns", "127.0.0.1:5300", "answer DNS here by resolving through the circuit at the exit (empty = off)")
@@ -1104,6 +1107,7 @@ func runClient(args []string) {
 	m.opts.entry = *entry
 	m.SetMine(*mine)
 	m.SetMode(*mode)
+	m.SetDirectStealth(*directStealth)
 	SetNick(*nickFlag, m.key.Address)
 	m.SetExcludeExit(*excludeCC)
 	log.SetOutput(RedactingWriter{W: os.Stderr})
@@ -1440,6 +1444,7 @@ func runFetch(args []string) {
 	entry := fs.String("entry", "", "pin the entry relay account")
 	mine := fs.String("mine", "", "relay accounts you run, comma-separated: paired with this wallet (sailnode pair) or naming it as --owner/--payout")
 	mode := fs.String("mode", "mine", "how your own relays are used: open (never), mine (free exit, paid entry), direct (one hop through yours, nothing paid)")
+	directStealth := fs.Bool("direct-stealth", false, "in direct mode keep the cover cadence and coalescing (looks like an idle browser to a censor; slower)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		log.Fatal("usage: sailnode fetch <url>")
@@ -1448,6 +1453,7 @@ func runFetch(args []string) {
 	m.opts.entry = *entry
 	m.SetMine(*mine)
 	m.SetMode(*mode)
+	m.SetDirectStealth(*directStealth)
 	c, err := m.circuit()
 	if err != nil {
 		log.Fatal(err)

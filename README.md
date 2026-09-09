@@ -162,7 +162,11 @@ Then choose how your relays are used — Settings → **Network**:
 | **Open network** | three strangers | full price | the entry only; your relays are not used |
 
 Direct is for the owner of one relay who does not want to pay two strangers;
-My relays is for when you would rather not be seen arriving at your own. If
+My relays is for when you would rather not be seen arriving at your own. Direct
+is also fast: it drops the cover cadence, the coalescing and the padding that
+make a link look like an idle browser, since a VPN to a box you own gains
+nothing from the disguise. On a censored network turn *Keep the disguise in
+Direct* on (`--direct-stealth`); it costs speed and keeps the rhythm. If
 your relay is down in Direct, the app says so and offers the other two rather
 than silently paying. `--owner nano_…` (default `--payout`) still works as
 before for a wallet you set on the relay yourself. The owner tag is bound to

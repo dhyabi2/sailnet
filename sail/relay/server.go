@@ -468,6 +468,10 @@ func (s *Server) serveConn(conn net.Conn, r *bufio.Reader, heartbeat bool) {
 			s.sendRelays(in)
 			continue
 		}
+		if cell.Cmd == wire.CmdFast && cell.CircID == 0 { // Direct (fast): no coalescing toward this client
+			in.SetFast()
+			continue
+		}
 		if cell.Cmd == wire.CmdCover && cell.CircID == 0 && len(cell.Payload) >= 3 { // cadence mode on this link
 			tick := time.Duration(int(cell.Payload[0])<<8|int(cell.Payload[1])) * time.Millisecond
 			burst := int(cell.Payload[2]) // oldest clients: a single byte

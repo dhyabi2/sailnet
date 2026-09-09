@@ -22,6 +22,7 @@ object Prefs {
             .put("bridges", bridges)
             .put("mine", p.getString("mine", "") ?: "")
             .put("mode", p.getString("mode", "mine") ?: "mine")
+            .put("directStealth", p.getBoolean("direct_stealth", false))
             .put("dnsUpstream", "1.1.1.1:53")
             .put("nick", nick(ctx))
             .put("censored", true)

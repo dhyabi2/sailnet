@@ -186,6 +186,13 @@ func Build(path []*RelayInfo, tag [32]byte, timeout time.Duration, payment []byt
 // and without entering through it (owner.go). Hops without an entry here
 // are paid by the previous relay's pool, as always.
 func BuildTags(path []*RelayInfo, tag [32]byte, hopTags map[int][32]byte, timeout time.Duration, payment []byte, sign Signer) (*Circuit, error) {
+	return BuildFast(path, tag, hopTags, timeout, payment, sign, false)
+}
+
+// BuildFast is BuildTags with the entry link in fast mode when fast is set:
+// no cover cadence, no coalescing, no padding — for Direct, where the link
+// is a VPN to a box the user owns and the disguise buys nothing.
+func BuildFast(path []*RelayInfo, tag [32]byte, hopTags map[int][32]byte, timeout time.Duration, payment []byte, sign Signer, fast bool) (*Circuit, error) {
 	if len(path) == 0 {
 		return nil, errors.New("empty path")
 	}
@@ -197,9 +204,13 @@ func BuildTags(path []*RelayInfo, tag [32]byte, hopTags map[int][32]byte, timeou
 	}
 	c.conn, c.w = conn, newConnWriter(conn, true)
 	c.leaf = LeafHash(conn)
+	if fast {
+		c.w.SetFast()
+		c.w.write(&wire.Cell{Cmd: wire.CmdFast}) // a relay from before this ignores it
+	}
 	// Cadence mode on the entry link: both sides send at least one cell per
 	// tick from here on, so the link's rhythm no longer follows the user.
-	if CoverTick > 0 {
+	if CoverTick > 0 && !fast {
 		ms := int(CoverTick / time.Millisecond)
 		// Byte 2 is what a relay from before the burst grew reads: 255 lands
 		// on its own maximum, so an old relay still carries as much as it

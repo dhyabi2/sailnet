@@ -36,6 +36,11 @@
             android:entries="@array/mode_names"
             android:entryValues="@array/mode_values"
             android:defaultValue="mine" />
+        <SwitchPreferenceCompat
+            android:key="direct_stealth"
+            android:title="Keep the disguise in Direct"
+            android:summary="Off: Direct is fast — cells go as they come, no padding. On: the link keeps the idle-browser rhythm (slower); use on a censored network."
+            android:defaultValue="false" />
         <Preference
             android:key="add_relay"
             android:title="Add my relay"

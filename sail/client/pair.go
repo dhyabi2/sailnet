@@ -95,3 +95,8 @@ func (m *manager) directEntry(pick func(func(*relay.RelayInfo) bool) *relay.Rela
 	}
 	return e, nil
 }
+
+// SetDirectStealth keeps the cadence and coalescing on in Direct mode. Off
+// by default: Direct is a VPN to a box the user owns, and the disguise costs
+// speed; on a censored network the operator turns it back on.
+func (m *manager) SetDirectStealth(on bool) { m.opts.stealth1 = on }

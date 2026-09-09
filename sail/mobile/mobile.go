@@ -38,20 +38,21 @@ type Protector interface {
 
 // Options is the JSON the app passes to Start.
 type Options struct {
-	Hops        int    `json:"hops"`        // 2..4, default 3
-	ExitCC      string `json:"exitCC"`      // preferred exit country, "" = any (optional)
-	ExcludeCC   string `json:"excludeCC"`   // exit countries never to use, comma-separated
-	Anchor      string `json:"anchor"`      // least XNO per prepaid anchor, default 0.0005; the anchor actually paid buys a fixed amount of service at the entry relay's published price
-	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
-	Stealth     bool   `json:"stealth"`     // ignored: always on
-	Bridges     string `json:"bridges"`     // bridge lines, newline separated
-	Mine        string `json:"mine"`        // relay accounts this wallet runs, one per line (paired, or naming this wallet as --owner)
-	Mode        string `json:"mode"`        // open | mine | direct — how those relays are used (client/pair.go)
-	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
-	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
-	Censored    bool   `json:"censored"`    // ignored: always on
-	RPCURL      string `json:"rpcUrl"`      // Nano RPC endpoint tried first, default Sailnet's endpoint
-	RPCKey      string `json:"rpcKey"`      // API key for rpc.nano.to (sent to that host only)
+	Hops          int    `json:"hops"`          // 2..4, default 3
+	ExitCC        string `json:"exitCC"`        // preferred exit country, "" = any (optional)
+	ExcludeCC     string `json:"excludeCC"`     // exit countries never to use, comma-separated
+	Anchor        string `json:"anchor"`        // least XNO per prepaid anchor, default 0.0005; the anchor actually paid buys a fixed amount of service at the entry relay's published price
+	MaxRate       string `json:"maxRate"`       // max XNO per MiB on any hop; "" = three times the median published price
+	Stealth       bool   `json:"stealth"`       // ignored: always on
+	Bridges       string `json:"bridges"`       // bridge lines, newline separated
+	Mine          string `json:"mine"`          // relay accounts this wallet runs, one per line (paired, or naming this wallet as --owner)
+	Mode          string `json:"mode"`          // open | mine | direct — how those relays are used (client/pair.go)
+	DirectStealth bool   `json:"directStealth"` // keep the disguise in Direct (slower); default off
+	DNSUpstream   string `json:"dnsUpstream"`   // resolver asked at the exit, default 1.1.1.1:53
+	Nick          string `json:"nick"`          // replaces the wallet address and device IPs in every log and screen
+	Censored      bool   `json:"censored"`      // ignored: always on
+	RPCURL        string `json:"rpcUrl"`        // Nano RPC endpoint tried first, default Sailnet's endpoint
+	RPCKey        string `json:"rpcKey"`        // API key for rpc.nano.to (sent to that host only)
 }
 
 var (
@@ -164,6 +165,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	m.SetExcludeExit(o.ExcludeCC)
 	m.SetMine(o.Mine)
 	m.SetMode(o.Mode)
+	m.SetDirectStealth(o.DirectStealth)
 	mgr = m
 	started = time.Now()
 	go func() { // keep trying while the tunnel is up: funds arriving become a circuit without a tap
