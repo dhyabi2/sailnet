@@ -157,8 +157,9 @@ type manager struct {
 	// path, tag dropped, so the anchor already paid to the entry is used and
 	// no innocent hop is routed around. Consumed by the next attempt.
 	retryPath  []*relay.RelayInfo
-	costLedger *costLedger // what this wallet paid and got (costs.go); lazily loaded
-	stealth    bool        // every Nano RPC call goes through the circuit; none before one exists
+	costLedger *costLedger // what this wallet paid and got (costs.go); loaded once, never under m.mu
+	costOnce   sync.Once
+	stealth    bool // every Nano RPC call goes through the circuit; none before one exists
 	// censored: bridges are the only entries, nothing is probed or fetched
 	// from listed relays before a circuit exists, and the ledger is never
 	// contacted directly, not even on first run (the bridge grant covers it).
@@ -739,8 +740,13 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		}
 		// Rotate without cutting anyone off: the old circuit keeps serving
 		// the streams it has and closes once they are gone.
-		m.sampleUsage(m.cur, m.cur.Tag)
-		go drainCircuit(m.cur)
+		// Ask the old circuit what is left of its anchor, off the lock: this
+		// runs inside circuit(), which holds m.mu, and a quota query is a
+		// network round trip.
+		go func(c *relay.Circuit) {
+			m.sampleUsage(c, c.Tag)
+			drainCircuit(c)
+		}(m.cur)
 		m.cur = nil
 		m.drain = false
 	}

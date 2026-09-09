@@ -37,3 +37,23 @@ func TestCostLedgerAddsUpAndPersists(t *testing.T) {
 		t.Fatal("a window that ends before now covers nothing")
 	}
 }
+
+// The ledger is written from inside the circuit build, which holds m.mu.
+// It must never wait for that lock: a client that paid an anchor and then
+// hung forever is what this would have caught.
+func TestCostLedgerNeverWaitsForTheManagerLock(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	m := &manager{}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		m.costs().paid("nano_relay", "TAG", big.NewInt(1), big.NewInt(1), 1)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("costs() blocked on m.mu while the manager held it")
+	}
+}

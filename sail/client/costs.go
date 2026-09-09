@@ -153,12 +153,11 @@ func (l *costLedger) entries() []costEntry {
 	return out
 }
 
+// costs is the ledger, loaded once. It never takes m.mu: it is called from
+// inside the circuit build, which already holds that lock, and a ledger
+// entry is not worth a deadlock (the ledger has its own mutex).
 func (m *manager) costs() *costLedger {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.costLedger == nil {
-		m.costLedger = loadCosts(filepath.Join(dataDir(), "costs.json"))
-	}
+	m.costOnce.Do(func() { m.costLedger = loadCosts(filepath.Join(dataDir(), "costs.json")) })
 	return m.costLedger
 }
 
