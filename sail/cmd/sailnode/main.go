@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -74,8 +74,10 @@ func main() {
 		runEarn(os.Args[2:])
 	case "costs":
 		client.RunCosts(os.Args[2:]) // what this wallet paid and got, from the device's own ledger
+	case "stats":
+		runStats(os.Args[2:]) // this relay's own /stats, from loopback: no ledger, no RPC
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|upgrade ...")
 		os.Exit(2)
 	}
 }

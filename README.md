@@ -157,6 +157,17 @@ Nano fans have run representatives for years for nothing. This is the same
 arrangement with something in it for you: the network you help carry is the
 one you browse through.
 
+## Watching your relay
+
+```
+sailnode stats             # this relay now: MiB relayed, circuits open, uptime, and the network it sees
+sailnode stats --watch 2   # the same every two seconds, with the rate
+```
+
+It asks the relay's own `/stats` on loopback — one HTTPS request, read from
+memory. No ledger, no RPC, nothing on the network. `--addr` if the relay does
+not listen on `127.0.0.1:443`.
+
 ## Cheaper when it is quiet, and for good Nano citizens
 
 Two things a relay can switch on alone. Neither needs anyone else to agree,
