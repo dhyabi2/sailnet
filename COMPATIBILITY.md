@@ -92,3 +92,28 @@ If the answer is no, the change does not ship, whatever it improves.
   adjustment, which could previously walk the price down 10 % a window with
   nothing under it. An operator names their cost once instead of watching
   the price.
+
+- **2026-09-09, owner circuits: run a relay, ride it free.** A relay names an
+  owner (`--owner`, default `--payout`) and admits a circuit that wallet opens
+  on a signature over an owner tag, with no payment. Checked against every
+  line above:
+  - *Old client, new relay:* nothing changes. The relay adds one hash
+    comparison per CREATE; a tag that is not its owner tag takes the exact
+    paid path it always took. No wire format, cell, or op changed.
+  - *New client, old relay:* a relay listed as `--mine` that predates this
+    presents an unknown tag and refuses it the way it refuses any unpaid
+    CREATE. The client buys no anchor for an owner attempt, so the refusal
+    costs no XNO; it logs why, uses an ordinary entry for that circuit, and
+    leaves that relay alone for an hour.
+  - *Old app, new Go layer:* the `mine` option is absent, so nothing is
+    listed and nothing is tried. *New app, old Go layer:* the field is
+    ignored.
+  - *Rollback:* an owner tag in `quota.wal` is an ordinary credited tag with
+    an owner key; a downgraded relay reads it as one.
+  - *Money and routing:* the owner is not paid by anyone. The hops past the
+    owner's relay are prepaid from its float, exactly as for every circuit,
+    so no other operator carries anything unpaid or earns less. The default
+    (`--payout`) grants free circuits only to the key that already receives
+    all of the relay's earnings — strictly less than that key already holds.
+    Nothing self-reported is involved: the proof is a signature bound to the
+    relay's own key.

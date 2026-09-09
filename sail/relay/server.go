@@ -52,6 +52,10 @@ type Server struct {
 	// has any cached state.
 	BridgeSecret   [16]byte
 	BootstrapBytes int64
+	// Owner is the public key of the wallet that rides this relay without
+	// paying: the operator's own, in their app (--owner, default --payout).
+	// Zero means nobody. See owner.go.
+	Owner [32]byte
 	// GetCertificate, when set (ACME), supplies the live certificate instead of
 	// TLS; the ack then binds whatever leaf is being served right now.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
@@ -673,6 +677,13 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 	sig := cell.Payload[64:128]
 	tag := strings.ToUpper(hex.EncodeToString(cell.Payload[32:64]))
 	ip, _, _ := net.SplitHostPort(in.c.RemoteAddr().String())
+	if s.ownerCreate(tag, tagB, clientPub, sig) {
+		// The operator's own wallet on the operator's own relay: no payment,
+		// no ledger, no rate limit — a signature settled it (owner.go).
+		if s.Quota.Total(tag) == OwnerBytes {
+			log.Printf("owner: the operator's own wallet opened a circuit; no payment asked")
+		}
+	}
 	if !s.Quota.Known(tag) {
 		if !s.allowVerify(tag, ip) { // every unverified tag, supplied block or not, is rate-limited
 			s.Metrics.RejectedSpam.Add(1)

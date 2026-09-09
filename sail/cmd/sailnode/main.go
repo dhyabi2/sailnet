@@ -105,6 +105,7 @@ func runRelay(args []string) {
 	rpcURL := fs.String("rpc", "", "Nano RPC endpoint(s), comma-separated, tried in order (default: Sailnet's endpoint, then public nodes; your own node: http://127.0.0.1:7076)")
 	rpcKey := fs.String("rpc-key", "", "API key for a configured rpc.nano.to endpoint")
 	payout := fs.String("payout", "", "forward everything this node earns to this nano_ address, checked every 15 minutes, keeping only --payout-keep on the node")
+	owner := fs.String("owner", "", "nano_ address whose wallet uses this relay without paying — yours, in the app. Run a relay, ride it free (default: --payout)")
 	payoutKeep := fs.String("payout-keep", "", "XNO kept on the node as operating float for prepaying the next hop; everything above it is forwarded to --payout (default: what eight pool top-ups cost at the peers' published prices, so the float follows what prepaying actually costs rather than being re-tuned by hand — and changing your own --rate does not move it)")
 	levy := fs.Bool("levy", false, "EXPERIMENTAL: pay the daily 10 % redistribution levy (off by default)")
 	unlisted := fs.Bool("unlisted", false, "bridge mode: never publish on the ledger; print a bridge line to hand to clients out of band (censors reading the ledger cannot find this relay)")
@@ -341,6 +342,17 @@ func runRelay(args []string) {
 	}()
 
 	s := &relay.Server{Key: key, Nano: nc, Quota: q, TLS: cert, Registry: reg, Exit: *exit, PoolRaw: poolRaw, PoolBytes: *poolMiB << 20, MinCredit: *minCredit << 20, Decoy: decoyHTML, PoolsFile: filepath.Join(client.DataDir(), "pools.json"), AllowPrivate: *regDir != "", BridgeSecret: bridgeSecret, GetCertificate: getCert, Host: *host}
+	if acct := *owner; acct != "" || *payout != "" {
+		if acct == "" {
+			acct = *payout
+		}
+		pub, err := nano.AddressToPubkey(acct)
+		if err != nil {
+			log.Fatal("--owner: ", err)
+		}
+		s.Owner = pub
+		log.Printf("owner: circuits signed by %s ride this relay free (run a relay, ride it free)", client.Short(acct))
+	}
 	if *unlisted {
 		s.BootstrapBytes = 2 << 20 // a first-run client in a censored network gets 2 MiB to reach the ledger through us
 	}

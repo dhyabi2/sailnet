@@ -45,6 +45,7 @@ type Options struct {
 	MaxRate     string `json:"maxRate"`     // max XNO per MiB on any hop; "" = three times the median published price
 	Stealth     bool   `json:"stealth"`     // ignored: always on
 	Bridges     string `json:"bridges"`     // bridge lines, newline separated
+	Mine        string `json:"mine"`        // relay accounts this wallet runs, one per line: entry, ridden free
 	DNSUpstream string `json:"dnsUpstream"` // resolver asked at the exit, default 1.1.1.1:53
 	Nick        string `json:"nick"`        // replaces the wallet address and device IPs in every log and screen
 	Censored    bool   `json:"censored"`    // ignored: always on
@@ -157,6 +158,7 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	}
 	m.SetCensored(true)
 	m.SetExcludeExit(o.ExcludeCC)
+	m.SetMine(o.Mine)
 	mgr = m
 	started = time.Now()
 	go func() { // keep trying while the tunnel is up: funds arriving become a circuit without a tap

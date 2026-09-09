@@ -122,6 +122,7 @@ type clientOpts struct {
 	regDir  string
 	freeTag string
 	entry   string
+	mine    map[string]bool // relays this wallet owns: used as entry and ridden free (the relay names us as --owner)
 	avoid   map[string]bool // relays never used in a path (the home node itself, its harbour)
 }
 
@@ -143,7 +144,11 @@ type manager struct {
 	entry   *relay.RelayInfo
 	payment []byte // signed blocks of the current anchor (firewall mode)
 	paidTo  string // relay the current anchor was paid to; a different entry needs a new anchor
-	stealth bool   // every Nano RPC call goes through the circuit; none before one exists
+	// mineRefused remembers a relay listed as ours that refused the owner
+	// tag (another --owner, or a build from before owner circuits), so it is
+	// not tried again on every build: an hour later it gets another chance.
+	mineRefused map[string]time.Time
+	stealth     bool // every Nano RPC call goes through the circuit; none before one exists
 	// censored: bridges are the only entries, nothing is probed or fetched
 	// from listed relays before a circuit exists, and the ledger is never
 	// contacted directly, not even on first run (the bridge grant covers it).
@@ -409,7 +414,15 @@ func (m *manager) choosePath() ([]*relay.RelayInfo, error) {
 			m.entry = e
 		}
 	}
-	if m.entry != nil && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
+	if e := pick(func(r *relay.RelayInfo) bool {
+		return m.opts.mine[r.Account] && !m.skip[r.Account] && time.Since(m.mineRefused[r.Account]) > time.Hour
+	}); e != nil {
+		// A relay this wallet owns is the entry whenever one answers: it
+		// asks us for nothing (owner.go), and its float — our own earnings —
+		// prepays the hops beyond it.
+		path = append(path, e)
+		m.entry = e
+	} else if m.entry != nil && !m.skip[m.entry.Account] && m.reg.Get(m.entry.Account) != nil && m.scoreOf(m.entry.Account) >= 0.3 && (m.reg.Get(m.entry.Account).Unlisted || (!m.censored && (len(m.bridges()) == 0 || !m.canAfford(m.anchorNeed())))) {
 		path = append(path, m.reg.Get(m.entry.Account))
 	} else {
 		// entry must be directly reachable; a bridge (unlisted, unblockable by
@@ -715,7 +728,16 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
+		if m.opts.mine[path[0].Account] {
+			// Our own relay: present the owner tag, signed by this wallet's
+			// key like every CREATE, and buy no anchor. Whatever anchor we
+			// hold stays valid at the relay it was paid to.
+			pub := path[0].Pub
+			if pub == ([32]byte{}) {
+				pub, _ = nano.AddressToPubkey(path[0].Account)
+			}
+			m.tag, m.payment, m.paidTo = relay.OwnerTag(pub, m.key.Public), nil, path[0].Account
+		} else if m.tag != ([32]byte{}) && m.opts.freeTag == "" && path[0].Account != m.paidTo {
 			m.tag = [32]byte{} // the anchor belongs to another entry
 		}
 		if m.tag == ([32]byte{}) {
@@ -769,6 +791,17 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 					time.Sleep(5 * time.Second)
 				} else if c.Failed == 0 && strings.Contains(err.Error(), "not this relay") {
 					m.tag = [32]byte{} // our anchor is at another entry; it stays valid there
+				} else if c.Failed == 0 && m.opts.mine[path[0].Account] {
+					// Listed as ours, but it refused the owner tag: it names a
+					// different --owner, or runs a build from before owner
+					// circuits existed. Not our entry this time; nothing to pay again.
+					log.Printf("relay %s is listed as yours but did not accept the owner tag: check its --owner (or --payout) is this wallet, and that it is upgraded", short(path[0].Account))
+					m.skip[path[0].Account] = true
+					if m.mineRefused == nil {
+						m.mineRefused = map[string]time.Time{}
+					}
+					m.mineRefused[path[0].Account] = time.Now()
+					m.tag = [32]byte{}
 				} else if c.Failed == 0 && (strings.Contains(err.Error(), "quota") || strings.Contains(err.Error(), "payment")) {
 					m.tag = [32]byte{} // pay again next time
 					os.Remove(m.anchorPath())
@@ -945,6 +978,7 @@ func runClient(args []string) {
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag (fragment-B hash of a SAIL transfer to the entry) instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
+	mine := fs.String("mine", "", "relay accounts you run, comma-separated: used as entry and ridden free (each relay's --owner or --payout must be this wallet)")
 	stealth := new(bool)
 	*stealth = true // always: no direct Nano RPC except the first-run bootstrap through Sailnet's endpoint
 	dns := fs.String("dns", "127.0.0.1:5300", "answer DNS here by resolving through the circuit at the exit (empty = off)")
@@ -993,6 +1027,7 @@ func runClient(args []string) {
 		m = newManager(*hops, *exitCC, *anchor, *rate, *regDir, *freeTag)
 	}
 	m.opts.entry = *entry
+	m.SetMine(*mine)
 	SetNick(*nickFlag, m.key.Address)
 	m.SetExcludeExit(*excludeCC)
 	log.SetOutput(RedactingWriter{W: os.Stderr})
@@ -1327,12 +1362,14 @@ func runFetch(args []string) {
 	regDir := fs.String("registry-dir", "", "test mode: static relay descriptors directory")
 	freeTag := fs.String("tag", "", "use an existing payment tag instead of paying")
 	entry := fs.String("entry", "", "pin the entry relay account")
+	mine := fs.String("mine", "", "relay accounts you run, comma-separated: used as entry and ridden free (each relay's --owner or --payout must be this wallet)")
 	fs.Parse(args)
 	if fs.NArg() < 1 {
 		log.Fatal("usage: sailnode fetch <url>")
 	}
 	m := newManager(*hops, "", *anchor, *rate, *regDir, *freeTag)
 	m.opts.entry = *entry
+	m.SetMine(*mine)
 	c, err := m.circuit()
 	if err != nil {
 		log.Fatal(err)
@@ -2030,4 +2067,18 @@ func (m *manager) StopFundsWatch() {
 	if stop != nil {
 		stop()
 	}
+}
+
+// SetMine names the relays this wallet runs, comma- or newline-separated.
+// They are preferred as entry and asked for no payment: each must name this
+// wallet as its --owner (or --payout), which is how a relay proves it is
+// ours to itself — the client claims nothing.
+func (m *manager) SetMine(list string) {
+	mine := map[string]bool{}
+	for _, a := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' }) {
+		if strings.HasPrefix(a, "nano_") {
+			mine[a] = true
+		}
+	}
+	m.opts.mine = mine
 }

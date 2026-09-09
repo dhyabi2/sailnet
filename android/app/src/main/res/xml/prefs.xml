@@ -28,6 +28,14 @@
             android:defaultValue="" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Run a relay, ride it free">
+        <EditTextPreference
+            android:key="mine"
+            android:title="My relays"
+            android:summary="Accounts of relays you run, one per row. Each must be started with --owner set to this phone's wallet address (or --payout, if that is the same wallet). They become your entry and ask you for nothing: your traffic rides on what your relay earns."
+            android:defaultValue="" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Wallet">
         <Preference
             android:key="wallet_backup"

@@ -20,6 +20,7 @@ object Prefs {
             .put("rpcKey", "")
             .put("stealth", true)
             .put("bridges", bridges)
+            .put("mine", p.getString("mine", "") ?: "")
             .put("dnsUpstream", "1.1.1.1:53")
             .put("nick", nick(ctx))
             .put("censored", true)

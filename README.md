@@ -109,6 +109,7 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout nano_…` | **set this first.** Forward earnings to a wallet you control, checked every 15 minutes. Without it they accumulate in `SAIL_HOME/wallet.json` on the server, and that seed is the only copy in existence |
 | `--ip 203.0.113.7` | the public IPv4 published on the ledger; detected automatically when omitted |
 | `--cc DE` | ISO country code published on the ledger, so clients can pick paths across countries and exits by country; optional (`XX`) |
+| `--owner nano_…` | the wallet that rides this relay free — yours, in the app. Default: `--payout`. See *Run a relay, ride it free* |
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: what eight pool top-ups cost at the peers' published prices. It follows what prepaying actually costs, and raising your own `--rate` does not move it — what you charge should not decide when you get paid |
 | `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
 | `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
@@ -120,6 +121,35 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--exit=false` | middle relay only |
 | `--rpc http://127.0.0.1:7076` | Nano RPC endpoint(s), comma-separated, tried in order; default Sailnet's endpoint, then public nodes |
 | `--rpc-key …` | API key, only if `--rpc` is rpc.nano.to |
+
+## Run a relay, ride it free
+
+If you run a relay, your own app uses it without paying. The relay names an
+owner — the wallet its earnings go to (`--payout`), or one you give with
+`--owner nano_…` — and a circuit that wallet opens on that relay is admitted
+on a signature alone: no payment, no ledger lookup. The hops beyond it are
+prepaid from the relay's float the way every circuit is, so your traffic is
+paid for out of what your relay earned, which was your money already. Nobody
+else's relay carries anything unpaid; every other operator earns exactly what
+they would have.
+
+Set it up once:
+
+1. On the relay, make `--owner` (or `--payout`) the wallet address shown in
+   your app. Every relay you run can name the same wallet.
+2. In the app, Settings → *Run a relay, ride it free* → *My relays*: paste the
+   relay's account, one per row. On the command line: `sailnode client --mine
+   nano_…,nano_…`.
+
+From then on a relay of yours is the entry whenever one answers. A relay that
+does not name your wallet refuses the owner tag and the app says so, then
+uses an ordinary entry for that circuit. The owner tag is bound to the relay
+it is for and signed with your key, so it means nothing anywhere else, and to
+everyone but your relay the circuit looks like any other.
+
+Nano fans have run representatives for years for nothing. This is the same
+arrangement with something in it for you: the network you help carry is the
+one you browse through.
 
 ## Upgrading
 
