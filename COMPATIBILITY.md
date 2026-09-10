@@ -241,3 +241,9 @@ If the answer is no, the change does not ship, whatever it improves.
   stranger: Direct now takes it straight from the paired list (still skipped
   for a build that just failed, still rested after its own refusal), nearest
   probed one first. Client-side only.
+- **2026-09-10, "connection refused" is not a refusal (v0.3.34).** The v0.3.32
+  test for the relay's own refusal matched the word in the kernel's
+  `connect: connection refused`, which is what a relay's box says while the
+  relay restarts — so `sailnode upgrade` on the operator's relay rested it
+  for an hour again. Only `hop 0 refused:` (the relay speaking) counts now.
+  Client-side only.

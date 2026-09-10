@@ -2168,7 +2168,9 @@ func (m *manager) SetMine(list string) {
 // as opposed to no answer: a dial that fails, a connection that drops, a
 // timeout. Only the relay's word rests it for an hour.
 func ownerRefusal(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "refused")
+	// "hop 0 refused: …" is the relay speaking. "connection refused" is the
+	// kernel of a box whose relay is restarting, and looked the same once.
+	return err != nil && strings.Contains(err.Error(), "hop 0 refused")
 }
 
 // mineUsable is a relay this wallet runs that may take the owner tag now:

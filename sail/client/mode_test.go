@@ -91,7 +91,7 @@ func TestPairingErrorNamesNoAddress(t *testing.T) {
 // A relay of ours that is restarting is not a relay that refused us: only
 // the relay's own answer rests it for an hour, never a dropped connection.
 func TestOnlyARelaysOwnAnswerCountsAsRefusal(t *testing.T) {
-	for _, e := range []string{"hop 0: no CREATED: EOF", "hop 0 (nano_1abc…): dial tcp: i/o timeout", "hop 0: no CREATED: read: connection reset"} {
+	for _, e := range []string{"hop 0: no CREATED: EOF", "hop 0 (nano_1abc…): dial tcp: i/o timeout", "hop 0: no CREATED: read: connection reset", "hop 0 (nano_1abc…): dial tcp relay:443: connect: connection refused"} {
 		if ownerRefusal(errors(e)) {
 			t.Fatalf("%q is not a refusal", e)
 		}
