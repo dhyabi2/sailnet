@@ -181,14 +181,23 @@ one you browse through.
 
 ## Watching your relay
 
+The node keeps running in the terminal you started it in and does not read
+what you type there. Open a **second terminal** and run:
+
 ```
 sailnode stats             # this relay now: MiB relayed, circuits open, uptime, and the network it sees
 sailnode stats --watch 2   # the same every two seconds, with the rate
 ```
 
+If you run the downloaded file directly rather than installing it as
+`sailnode`, the command is `./sailnode-linux-amd64 stats` (or whatever the
+file is called).
+
 It asks the relay's own `/stats` on loopback — one HTTPS request, read from
 memory. No ledger, no RPC, nothing on the network. `--addr` if the relay does
-not listen on `127.0.0.1:443`.
+not listen on `127.0.0.1:443`. Not yet for `earn --home` nodes: a home node
+has no local port, so there is nothing for `stats` to ask; it is earning all
+the same.
 
 ## Cheaper when it is quiet, and for good Nano citizens
 
