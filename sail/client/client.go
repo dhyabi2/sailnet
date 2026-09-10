@@ -864,9 +864,12 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 						m.mineRefused = map[string]time.Time{}
 					}
 					m.mineRefused[path[c.Failed].Account] = time.Now()
-				} else if c.Failed == 0 && m.opts.mode == ModeDirect && m.opts.mine[path[0].Account] {
-					// Ours, but it refused the owner tag: not paired with this
-					// wallet, or a build from before owner circuits. Rest it an hour.
+				} else if c.Failed == 0 && m.opts.mode == ModeDirect && m.opts.mine[path[0].Account] && ownerRefusal(err) {
+					// Ours, and it answered that it will not take the owner tag:
+					// not paired with this wallet, or a build from before owner
+					// circuits. Rest it an hour. (A relay that did not answer at
+					// all — restarting, say — is only skipped this build; before,
+					// a reboot of the operator's own relay locked Direct for an hour.)
 					log.Printf("relay %s is listed as yours but did not accept the owner tag: pair it again (sailnode pair on the relay), or upgrade it", short(path[0].Account))
 					if m.mineRefused == nil {
 						m.mineRefused = map[string]time.Time{}
@@ -2159,6 +2162,13 @@ func (m *manager) SetMine(list string) {
 		}
 	}
 	m.opts.mine = mine
+}
+
+// ownerRefusal is a relay's own answer that the owner tag is not welcome,
+// as opposed to no answer: a dial that fails, a connection that drops, a
+// timeout. Only the relay's word rests it for an hour.
+func ownerRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "refused")
 }
 
 // mineUsable is a relay this wallet runs that may take the owner tag now:

@@ -87,3 +87,16 @@ func TestPairingErrorNamesNoAddress(t *testing.T) {
 		t.Fatalf("the error carries an address: %q", err)
 	}
 }
+
+// A relay of ours that is restarting is not a relay that refused us: only
+// the relay's own answer rests it for an hour, never a dropped connection.
+func TestOnlyARelaysOwnAnswerCountsAsRefusal(t *testing.T) {
+	for _, e := range []string{"hop 0: no CREATED: EOF", "hop 0 (nano_1abc…): dial tcp: i/o timeout", "hop 0: no CREATED: read: connection reset"} {
+		if ownerRefusal(errors(e)) {
+			t.Fatalf("%q is not a refusal", e)
+		}
+	}
+	if !ownerRefusal(errors("hop 0 refused: unknown payment tag")) {
+		t.Fatal("the relay's own refusal must count")
+	}
+}

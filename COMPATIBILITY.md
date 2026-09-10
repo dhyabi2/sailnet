@@ -225,3 +225,10 @@ If the answer is no, the change does not ship, whatever it improves.
   mobile boundary returns now passes `client.Redact`, and the pairing error
   says what to do (`ufw allow 443/tcp`) instead of where it failed. Protocol
   unchanged.
+- **2026-09-10, a rebooting relay of yours is not a refusing one (v0.3.32).**
+  In Direct, a build that failed at the owner's own relay for any reason —
+  "no CREATED: EOF" while it restarted after `sailnode upgrade` — was filed as
+  "did not accept the owner tag" and rested the relay for an hour, leaving the
+  app on "none of your relays is reachable" with both of them up. Only the
+  relay's own refusal counts now; no answer skips it for that build only.
+  Client-side only.
