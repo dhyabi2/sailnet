@@ -103,33 +103,13 @@ func (m *manager) resolveViaCircuit(q []byte, upstream string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := c.Open(upstream, 15*time.Second)
-	if err != nil {
-		return nil, err
+	// One resolver connection per circuit, shared by every lookup (dnspipe.go).
+	m.dnsMu.Lock()
+	if m.dnsCircuit != c || m.dns == nil {
+		m.dnsCircuit = c
+		m.dns = newDNSPipe(func() (io.ReadWriteCloser, error) { return c.Open(upstream, 15*time.Second) })
 	}
-	defer st.Close()
-	msg := make([]byte, 2+len(q))
-	binary.BigEndian.PutUint16(msg, uint16(len(q)))
-	copy(msg[2:], q)
-	if _, err := st.Write(msg); err != nil {
-		return nil, err
-	}
-	var hdr [2]byte
-	done := make(chan error, 1)
-	var ans []byte
-	go func() {
-		if _, err := io.ReadFull(st, hdr[:]); err != nil {
-			done <- err
-			return
-		}
-		ans = make([]byte, binary.BigEndian.Uint16(hdr[:]))
-		_, err := io.ReadFull(st, ans)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		return ans, err
-	case <-time.After(15 * time.Second):
-		return nil, errors("dns: timeout through the circuit")
-	}
+	pipe := m.dns
+	m.dnsMu.Unlock()
+	return pipe.resolve(q, 15*time.Second)
 }

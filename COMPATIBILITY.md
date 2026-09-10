@@ -247,3 +247,14 @@ If the answer is no, the change does not ship, whatever it improves.
   relay restarts — so `sailnode upgrade` on the operator's relay rested it
   for an hour again. Only `hop 0 refused:` (the relay speaking) counts now.
   Client-side only.
+- **2026-09-10, one resolver connection per circuit (v0.3.35).** Every DNS
+  lookup used to open its own stream through the exit: BEGIN, wait for
+  CONNECTED, query, answer — two round trips to the relay per name, and a
+  phone's burst of lookups against a far relay ran into the 15 s stream
+  timeout ("dns: connect timeout through exit"). The client now keeps one
+  DNS-over-TCP connection to the resolver per circuit and pipelines queries
+  on it under ids of its own (RFC 7766), restoring each app's id in the
+  answer; the resolver or exit closing it just means the next lookup opens
+  another. Measured through a 420 ms relay: a lookup 2–3 s → 0.6–0.7 s, a
+  30-lookup burst 2.7 s → 1.5 s. Client-side only; exits and resolvers see
+  ordinary TCP DNS.

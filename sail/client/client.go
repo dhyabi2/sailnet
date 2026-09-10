@@ -159,6 +159,9 @@ type manager struct {
 	// path, tag dropped, so the anchor already paid to the entry is used and
 	// no innocent hop is routed around. Consumed by the next attempt.
 	retryPath  []*relay.RelayInfo
+	dnsMu      sync.Mutex
+	dns        *dnsPipe // the resolver connection for the current circuit (dnspipe.go)
+	dnsCircuit *relay.Circuit
 	costLedger *costLedger // what this wallet paid and got (costs.go); loaded once, never under m.mu
 	costOnce   sync.Once
 	stealth    bool // every Nano RPC call goes through the circuit; none before one exists
