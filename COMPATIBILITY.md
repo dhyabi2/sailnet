@@ -232,3 +232,12 @@ If the answer is no, the change does not ship, whatever it improves.
   app on "none of your relays is reachable" with both of them up. Only the
   relay's own refusal counts now; no answer skips it for that build only.
   Client-side only.
+- **2026-09-10, Direct draws from the paired list (v0.3.33).** The one hop
+  of Direct was drawn from the market's candidate set — alive by this
+  client's own probe or recent gossip, score ≥ 0.3, under the price cap. A
+  phone that had tried its relay while the relay's port was closed had scored
+  it out, and Direct reported "none of your relays is reachable" right after
+  pairing that very relay had succeeded. The user's own relay is not a
+  stranger: Direct now takes it straight from the paired list (still skipped
+  for a build that just failed, still rested after its own refusal), nearest
+  probed one first. Client-side only.

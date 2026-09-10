@@ -91,10 +91,32 @@ func (m *manager) PairRelay(account, code string) error {
 }
 
 // directEntry is the relay of ours to use as the single hop in Direct mode.
-func (m *manager) directEntry(pick func(func(*relay.RelayInfo) bool) *relay.RelayInfo) (*relay.RelayInfo, error) {
-	e := pick(func(r *relay.RelayInfo) bool { return m.mineUsable(r) && r.Flags&token.FlagExit != 0 })
-	if e == nil {
+// It is drawn from the paired list itself, not from the market's candidate
+// set: the alive test, the score and the price cap are how a client judges
+// strangers, and the user's own relay is not a stranger. A phone that had
+// tried the relay while its port was closed had scored it out of existence,
+// and Direct said none of the user's relays was reachable while pairing —
+// which dials the same relay — had just succeeded. Skipped this build or
+// refusing lately still counts; a nearer one (probed) is preferred.
+func (m *manager) directEntry(_ func(func(*relay.RelayInfo) bool) *relay.RelayInfo) (*relay.RelayInfo, error) {
+	var best *relay.RelayInfo
+	for acct := range m.opts.mine {
+		r := m.reg.Get(acct)
+		if r == nil || r.Flags&token.FlagExit == 0 || !m.mineUsable(r) {
+			continue
+		}
+		if best == nil {
+			best = r
+			continue
+		}
+		rb, okb := m.rtt[best.Account]
+		rr, okr := m.rtt[r.Account]
+		if (okr && !okb) || (okr && okb && rr < rb) {
+			best = r
+		}
+	}
+	if best == nil {
 		return nil, errors("none of your relays is reachable right now: switch Network to \"My relays\" or \"Open network\", or check the relay")
 	}
-	return e, nil
+	return best, nil
 }

@@ -100,3 +100,21 @@ func TestOnlyARelaysOwnAnswerCountsAsRefusal(t *testing.T) {
 		t.Fatal("the relay's own refusal must count")
 	}
 }
+
+// Direct uses the paired relay even when this client has scored it down or
+// never probed it: it is the user's own, not a stranger to be judged.
+func TestDirectUsesOurRelayWhateverItsScore(t *testing.T) {
+	m := mineManager(t, nil)
+	m.SetMine("nano_real5")
+	m.SetMode(ModeDirect)
+	delete(m.rtt, "nano_real5") // never probed
+	m.score = map[string]float64{"nano_real5": 0.05}
+	m.scoreAt = map[string]time.Time{"nano_real5": time.Now()}
+	path, err := m.choosePath()
+	if err != nil {
+		t.Fatalf("Direct must still use our relay: %v", err)
+	}
+	if len(path) != 1 || path[0].Account != "nano_real5" {
+		t.Fatalf("got %v", path)
+	}
+}
