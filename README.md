@@ -342,10 +342,11 @@ same way and shows where to get XNO.
 
 On Android, two settings save XNO and battery or spread the connection:
 
-- **Pause when hidden** (on by default): when no Sailnet screen is visible,
-  the circuit closes and nothing is pinged or paid for; the tunnel stays up
-  and drops traffic, so nothing leaks. Opening the app resumes it through
-  the same entry, using the prepaid anchor.
+- **Pause when screen off** (on by default): when the screen goes off, the
+  circuit closes and nothing is pinged or paid for; the tunnel stays up and
+  drops traffic, so nothing leaks. Other apps in front of Sailnet keep using
+  the tunnel. Unlocking resumes it through the same entry, using the
+  prepaid anchor.
 - **Share connection**: other devices use your circuit through a hotspot.
   Android's hotspot never passes through a VPN app, so guests set a proxy
   (`<hotspot address>:8080`, HTTP or SOCKS5) in their Wi-Fi settings.
@@ -354,7 +355,7 @@ On Android, two settings save XNO and battery or spread the connection:
   *My hotspot* uses Android's hotspot, whose name and password stay fixed,
   but a guest without the proxy goes out unprotected. Guests reach public
   HTTPS only, never this phone or its LAN, and are paid for from your
-  wallet. Sharing keeps the app awake while hidden.
+  wallet. Sharing keeps the tunnel up while the screen is off.
 
 ## Built to be hard to censor
 
