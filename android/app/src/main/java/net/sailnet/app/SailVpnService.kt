@@ -123,8 +123,8 @@ class SailVpnService : VpnService(), Protector {
         @Volatile var running = false
         @Volatile var starting = false // between the tap and the tunnel being up
         @Volatile var lastError = ""
-        @Volatile var paused = false // the app is out of sight (SailApp)
-        private const val PAUSED_TEXT = "Paused · open Sailnet to resume"
+        @Volatile var paused = false // the screen is off (SailApp)
+        private const val PAUSED_TEXT = "Paused · unlock to resume"
         private var instance: SailVpnService? = null
 
         /** Main thread only. */

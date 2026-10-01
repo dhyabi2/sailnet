@@ -183,7 +183,7 @@ type manager struct {
 	mu2             sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
 	effCap          uint32       // the price cap the last path selection actually used
 	stage           atomic.Value // what the client is doing right now, for screens
-	// paused: the app is out of sight. No circuit is built, kept alive,
+	// paused: the phone's screen is off. No circuit is built, kept alive,
 	// rotated or paid for; flows fail at once. The anchor tag is kept.
 	paused atomic.Bool
 }
@@ -935,6 +935,11 @@ func (m *manager) drainCircuit(c *relay.Circuit) {
 func (m *manager) keepalive(c *relay.Circuit) {
 	for n := 0; !c.Closed(); n++ {
 		time.Sleep(15*time.Second + time.Duration(mathrand.Intn(12000))*time.Millisecond) // jittered: no fixed rhythm on the wire
+		if c.Closed() {
+			// Closed while we slept (a pause, a rotation, a rebuild): not
+			// a failure, and no reason to mark its hops down.
+			return
+		}
 		if n%10 == 9 {
 			m.sampleUsage(c, c.Tag) // a few minutes apart: the cost ledger follows the meter
 		}
@@ -1518,8 +1523,8 @@ func (m *manager) Shutdown() {
 
 var errPaused = errors("paused")
 
-// Pause closes the circuit and builds none until Resume: the app is out of
-// sight, so nothing is pinged, rotated, topped up or paid for, and flows
+// Pause closes the circuit and builds none until Resume: the screen is
+// off, so nothing is pinged, rotated, topped up or paid for, and flows
 // fail instead of moving metered bytes. The anchor tag and the path are
 // kept, so Resume rebuilds through the same entry and pays nothing new.
 func (m *manager) Pause() {
@@ -1543,7 +1548,7 @@ func (m *manager) Pause() {
 		live.Close()
 	}
 	m.setStage("Paused")
-	log.Printf("paused: no circuit while the app is out of sight")
+	log.Printf("paused: no circuit while the screen is off")
 }
 
 // Resume undoes Pause and builds the circuit again.

@@ -1,37 +1,60 @@
 package net.sailnet.app
 
-import android.app.Activity
 import android.app.Application
-import android.os.Bundle
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
 import androidx.preference.PreferenceManager
 import net.sailnet.mobile.Mobile
 
 /**
- * Out of sight, the tunnel idles.
+ * Screen off, the tunnel idles.
  *
- * When no Sailnet screen is visible (another app in front, or the screen
- * off) the client closes its circuit and stops pinging, rotating and paying;
- * the tunnel stays up and drops traffic, so nothing leaves outside it and
- * nothing is metered. Opening the app resumes it. The short delay keeps a
- * rotation or a hop between Sailnet's own screens from counting as leaving.
+ * When the screen goes off the client closes its circuit and stops pinging,
+ * rotating and paying; the tunnel stays up and drops traffic, so nothing
+ * leaves outside it and nothing is metered. Unlocking resumes it. Other
+ * apps in front of Sailnet keep using the tunnel: pausing whenever Sailnet
+ * was out of sight cut off the browser, the one app a VPN is for. The
+ * short delay keeps a quick off-and-on of the screen from counting.
  */
-class SailApp : Application(), Application.ActivityLifecycleCallbacks {
+class SailApp : Application() {
     private val main = Handler(Looper.getMainLooper())
     private val worker = java.util.concurrent.Executors.newSingleThreadExecutor() // pause and resume land in order
-    private var visible = 0
     private val pause = Runnable {
         // Guests on the hotspot use the tunnel while this phone sleeps.
-        if (visible == 0 && pauseWhenHidden() && Share.mode(this) == "off") setPaused(true)
+        if (pauseWhenScreenOff() && Share.mode(this) == "off") setPaused(true)
+    }
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            when (i.action) {
+                Intent.ACTION_SCREEN_OFF -> main.postDelayed(pause, 1500)
+                // On without a lock screen, or unlocked: resume.
+                Intent.ACTION_SCREEN_ON -> if (!getSystemService(KeyguardManager::class.java).isKeyguardLocked) resume()
+                Intent.ACTION_USER_PRESENT -> resume()
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
-        registerActivityLifecycleCallbacks(this)
+        registerReceiver(screen, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        })
     }
 
-    private fun pauseWhenHidden() =
+    private fun resume() {
+        main.removeCallbacks(pause)
+        setPaused(false)
+    }
+
+    private fun pauseWhenScreenOff() =
         PreferenceManager.getDefaultSharedPreferences(this).getBoolean("pause_hidden", true)
 
     private fun setPaused(p: Boolean) {
@@ -42,21 +65,4 @@ class SailApp : Application(), Application.ActivityLifecycleCallbacks {
             main.post { SailVpnService.showPaused(p) }
         }
     }
-
-    override fun onActivityStarted(a: Activity) {
-        visible++
-        main.removeCallbacks(pause)
-        if (visible == 1) setPaused(false)
-    }
-
-    override fun onActivityStopped(a: Activity) {
-        visible = maxOf(0, visible - 1)
-        if (visible == 0) main.postDelayed(pause, 1500)
-    }
-
-    override fun onActivityCreated(a: Activity, b: Bundle?) {}
-    override fun onActivityResumed(a: Activity) {}
-    override fun onActivityPaused(a: Activity) {}
-    override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
-    override fun onActivityDestroyed(a: Activity) {}
 }

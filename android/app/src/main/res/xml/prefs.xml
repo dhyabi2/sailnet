@@ -27,7 +27,7 @@
             android:summary="Off" />
         <SwitchPreferenceCompat
             android:key="pause_hidden"
-            android:title="Pause when hidden"
+            android:title="Pause when screen off"
             android:summary="Saves XNO and battery."
             android:defaultValue="true" />
     </PreferenceCategory>

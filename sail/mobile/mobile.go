@@ -63,9 +63,9 @@ var (
 	lastErr  string
 	started  time.Time
 	upstream = "1.1.1.1:53"
-	// paused: the app is out of sight (Pause). Kept here as well as in
-	// the manager so a tunnel that finishes starting after the user left
-	// comes up paused too.
+	// paused: the screen is off (Pause). Kept here as well as in the
+	// manager so a tunnel that finishes starting after the screen went
+	// off comes up paused too.
 	paused bool
 )
 
@@ -235,7 +235,7 @@ func Stop() {
 	mgr = nil
 }
 
-// Pause is called when the app goes out of sight: the circuit is closed
+// Pause is called when the screen goes off: the circuit is closed
 // and nothing is built, pinged or paid for until Resume. The tunnel stays
 // up and drops traffic, so nothing leaves outside it.
 func Pause() {
@@ -248,7 +248,7 @@ func Pause() {
 	}
 }
 
-// Resume is called when the app is opened again: the circuit is rebuilt.
+// Resume is called when the phone is unlocked: the circuit is rebuilt.
 func Resume() {
 	mu.Lock()
 	paused = false
