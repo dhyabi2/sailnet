@@ -27,7 +27,9 @@ class SettingsActivity : AppCompatActivity() {
             findPreference<androidx.preference.Preference>("wallet_backup")?.setOnPreferenceClickListener { showBackup(); true }
             findPreference<androidx.preference.Preference>("wallet_restore")?.setOnPreferenceClickListener { showRestore(); true }
             findPreference<androidx.preference.Preference>("relay")?.setOnPreferenceClickListener { showRelayWindow(); true }
+            findPreference<androidx.preference.Preference>("share")?.setOnPreferenceClickListener { showShareWindow(); true }
             refreshRelaySummary()
+            refreshShareSummary()
             androidx.preference.PreferenceManager.getDefaultSharedPreferences(requireContext()).registerOnSharedPreferenceChangeListener(prefWatcher)
             findPreference<androidx.preference.MultiSelectListPreference>("exclude_cc")?.let { pref ->
                 val codes = try { org.json.JSONArray(net.sailnet.mobile.Mobile.countries()) } catch (_: Exception) { org.json.JSONArray() }
@@ -116,6 +118,90 @@ class SettingsActivity : AppCompatActivity() {
             root.addView(note)
 
             AlertDialog.Builder(ctx).setTitle("My relay").setView(root).setPositiveButton("Done", null).show()
+        }
+
+        // One window for sharing: the choice, and what a guest needs to join.
+        private fun showShareWindow() {
+            val ctx = requireContext()
+            val p = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+            val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
+            val root = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
+            val modes = listOf("off" to "Off", "sailnet" to "Sailnet hotspot", "mine" to "My hotspot")
+            val group = android.widget.RadioGroup(ctx)
+            val current = Share.mode(ctx)
+            modes.forEachIndexed { i, (v, label) ->
+                group.addView(android.widget.RadioButton(ctx).apply { id = 200 + i; text = label; isChecked = v == current })
+            }
+            root.addView(group)
+            val info = android.widget.TextView(ctx).apply { setPadding(0, dp(12), 0, dp(4)); setTextIsSelectable(true) }
+            val qr = android.widget.ImageView(ctx)
+            root.addView(info)
+            root.addView(qr, android.widget.LinearLayout.LayoutParams(dp(200), dp(200)).apply { gravity = android.view.Gravity.CENTER_HORIZONTAL })
+            var shownQr = ""
+            val ui = android.os.Handler(android.os.Looper.getMainLooper())
+            val update = object : Runnable {
+                override fun run() {
+                    val mode = Share.mode(ctx)
+                    val proxy = Share.addrs.split(",").filter { it.isNotBlank() }.joinToString("\n") { "Proxy: $it" }
+                    val shared = try { Mobile.shareBytes() } catch (_: Exception) { 0L }
+                    val used = when {
+                        shared >= 1048576 -> "\nShared: ${"%.1f".format(shared / 1048576.0)} MiB"
+                        shared > 0 -> "\nShared: ${(shared + 1023) / 1024} kB"
+                        else -> ""
+                    }
+                    var code = ""
+                    info.text = when {
+                        mode == "off" -> ""
+                        !SailVpnService.running -> "Connect first"
+                        mode == "sailnet" && Share.error.isNotEmpty() -> Share.error
+                        mode == "sailnet" && Share.ssid.isEmpty() -> "Starting…"
+                        mode == "sailnet" -> { code = Share.wifiQr(); "Wi-Fi: ${Share.ssid}\nPassword: ${Share.pass}\n" + proxy.ifEmpty { "Proxy: starting…" } + used }
+                        proxy.isEmpty() -> "Turn on Android's hotspot"
+                        else -> proxy + used
+                    }
+                    if (code != shownQr) {
+                        shownQr = code
+                        if (code.isEmpty()) qr.setImageDrawable(null) else qr.setImageBitmap(Share.qr(code, 400))
+                    }
+                    qr.visibility = if (code.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+                    ui.postDelayed(this, 1000)
+                }
+            }
+            group.setOnCheckedChangeListener { _, id ->
+                val v = modes[id - 200].first
+                if (v == "sailnet" && !hotspotPermitted()) {
+                    pendingShare = true
+                    askHotspotPermission.launch(hotspotPermission())
+                }
+                p.edit().putString("share", v).apply()
+                Share.error = ""
+                Share.apply(ctx)
+                refreshShareSummary()
+            }
+            ui.post(update)
+            AlertDialog.Builder(ctx).setTitle("Share connection").setView(root).setPositiveButton("Done", null)
+                .setOnDismissListener { ui.removeCallbacks(update) }.show()
+        }
+
+        private fun hotspotPermission(): String =
+            if (android.os.Build.VERSION.SDK_INT >= 33) "android.permission.NEARBY_WIFI_DEVICES" else android.Manifest.permission.ACCESS_FINE_LOCATION
+
+        private fun hotspotPermitted() =
+            androidx.core.content.ContextCompat.checkSelfPermission(requireContext(), hotspotPermission()) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        private var pendingShare = false
+        private val askHotspotPermission = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+            if (pendingShare) {
+                pendingShare = false
+                Share.error = if (ok) "" else Share.error
+                context?.let { Share.apply(it) }
+            }
+        }
+
+        private fun refreshShareSummary() {
+            findPreference<androidx.preference.Preference>("share")?.summary = when (Share.mode(requireContext())) {
+                "sailnet" -> "Sailnet hotspot"; "mine" -> "My hotspot"; else -> "Off"
+            }
         }
 
         private fun pairedAccounts(): List<String> {

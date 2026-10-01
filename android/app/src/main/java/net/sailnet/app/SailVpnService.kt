@@ -58,6 +58,7 @@ class SailVpnService : VpnService(), Protector {
                 running = true
                 starting = false
                 SailTileService.refresh(this)
+                android.os.Handler(mainLooper).post { Share.apply(this) }
                 updateNotification(if (paused) PAUSED_TEXT else "Connected through the Sailnet circuit")
             } catch (e: Exception) {
                 // No black hole: a failed start tears the tunnel down and says
@@ -77,6 +78,7 @@ class SailVpnService : VpnService(), Protector {
     override fun protect(fd: Long): Boolean = protect(fd.toInt())
 
     private fun stopTunnel() {
+        android.os.Handler(mainLooper).post { Share.stop() }
         starting = false
         try { Mobile.stop() } catch (_: Exception) {}
         tun?.close()

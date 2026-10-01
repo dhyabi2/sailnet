@@ -22,7 +22,8 @@ class SailApp : Application(), Application.ActivityLifecycleCallbacks {
     private val worker = java.util.concurrent.Executors.newSingleThreadExecutor() // pause and resume land in order
     private var visible = 0
     private val pause = Runnable {
-        if (visible == 0 && pauseWhenHidden()) setPaused(true)
+        // Guests on the hotspot use the tunnel while this phone sleeps.
+        if (visible == 0 && pauseWhenHidden() && Share.mode(this) == "off") setPaused(true)
     }
 
     override fun onCreate() {

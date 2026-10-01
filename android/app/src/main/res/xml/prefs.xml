@@ -21,6 +21,10 @@
             android:key="relay"
             android:title="My relay"
             android:summary="Open network" />
+        <Preference
+            android:key="share"
+            android:title="Share connection"
+            android:summary="Off" />
         <SwitchPreferenceCompat
             android:key="pause_hidden"
             android:title="Pause when hidden"

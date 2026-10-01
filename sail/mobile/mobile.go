@@ -259,6 +259,61 @@ func Resume() {
 	}
 }
 
+var (
+	shareMu sync.Mutex
+	shareLn = map[string]net.Listener{} // hotspot address → listener
+)
+
+// ShareListen serves guests on each of the given hotspot addresses (comma
+// separated) at port, and stops listening on any address no longer given;
+// "" stops sharing. Returns the addresses actually listened on.
+//
+// Only hotspot addresses are passed, never the phone's own Wi-Fi or mobile
+// address: a guest there would be anyone on that network, paying from this
+// wallet.
+func ShareListen(addrs string, port int) string {
+	shareMu.Lock()
+	defer shareMu.Unlock()
+	want := map[string]bool{}
+	for _, a := range strings.Split(addrs, ",") {
+		if ip := net.ParseIP(strings.TrimSpace(a)); ip != nil {
+			want[net.JoinHostPort(ip.String(), fmt.Sprint(port))] = true
+		}
+	}
+	for a, ln := range shareLn {
+		if !want[a] {
+			ln.Close()
+			delete(shareLn, a)
+		}
+	}
+	serve := func() func(net.Conn) {
+		mu.Lock()
+		m := mgr
+		mu.Unlock()
+		if m == nil {
+			return nil
+		}
+		return m.ServeShare
+	}
+	var on []string
+	for a := range want {
+		if _, ok := shareLn[a]; !ok {
+			ln, err := client.ShareListener(a, serve)
+			if err != nil {
+				log.Printf("share: cannot listen on port %d", port) // the error names the address
+				continue
+			}
+			shareLn[a] = ln
+		}
+		on = append(on, a)
+	}
+	return strings.Join(on, ",")
+}
+
+// ShareBytes is what guests have moved since the app started. It takes no
+// lock, so a screen can ask it on its main thread.
+func ShareBytes() int64 { return client.ShareBytes.Load() }
+
 // Rebuild drops the current circuit and builds a new one (new exit).
 func Rebuild() {
 	mu.Lock()
@@ -342,6 +397,7 @@ func Status() string {
 		out["uptime"] = int(time.Since(started).Seconds())
 		out["needsFunds"] = m.NeedsFunds()
 		out["paused"] = m.Paused()
+		out["shareBytes"] = client.ShareBytes.Load()
 		out["stage"] = m.Stage()
 	}
 	logs.mu.Lock()
