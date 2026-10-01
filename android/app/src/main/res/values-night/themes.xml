@@ -3,8 +3,7 @@
     <style name="Theme.Sailnet" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
         <item name="colorPrimary">#000000</item>
         <item name="colorPrimaryVariant">#0A4F4B</item>
-        <!-- The accent: checked switches and radios, section titles. White vanished on the light screens. -->
-        <item name="colorSecondary">#0A4F4B</item>
+        <item name="colorSecondary">#FFFFFF</item>
         <item name="colorOnPrimary">#FFFFFF</item>
     </style>
 </resources>
