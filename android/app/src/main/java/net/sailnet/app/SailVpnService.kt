@@ -15,6 +15,11 @@ import net.sailnet.mobile.Protector
 class SailVpnService : VpnService(), Protector {
     private var tun: ParcelFileDescriptor? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopTunnel()
@@ -53,7 +58,7 @@ class SailVpnService : VpnService(), Protector {
                 running = true
                 starting = false
                 SailTileService.refresh(this)
-                updateNotification("Connected through the Sailnet circuit")
+                updateNotification(if (paused) PAUSED_TEXT else "Connected through the Sailnet circuit")
             } catch (e: Exception) {
                 // No black hole: a failed start tears the tunnel down and says
                 // why, so the phone keeps its normal connection and the user
@@ -82,6 +87,7 @@ class SailVpnService : VpnService(), Protector {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         stopTunnel()
         super.onDestroy()
     }
@@ -115,5 +121,15 @@ class SailVpnService : VpnService(), Protector {
         @Volatile var running = false
         @Volatile var starting = false // between the tap and the tunnel being up
         @Volatile var lastError = ""
+        @Volatile var paused = false // the app is out of sight (SailApp)
+        private const val PAUSED_TEXT = "Paused · open Sailnet to resume"
+        private var instance: SailVpnService? = null
+
+        /** Main thread only. */
+        fun showPaused(p: Boolean) {
+            paused = p
+            val s = instance ?: return
+            if (running) s.updateNotification(if (p) PAUSED_TEXT else "Connected through the Sailnet circuit")
+        }
     }
 }

@@ -113,16 +113,32 @@ class MainActivity : AppCompatActivity() {
                 else -> prepareAndStart()
             }
         }
-        ui.post(refresh)
         title = "Sailnet · " + Prefs.nick(this)
         checkFunds(andConnect = true)
     }
 
 
 
+    // The screen is drawn only while it can be seen: a status poll every
+    // 1.5 s behind a closed app was heat for nothing.
+    private var visible = false
+
+    override fun onStart() {
+        super.onStart()
+        visible = true
+        ui.removeCallbacks(refresh)
+        ui.post(refresh)
+    }
+
+    override fun onStop() {
+        visible = false
+        ui.removeCallbacks(refresh)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
-        if (!funded && !checkingFunds && !SailVpnService.running) checkFunds(andConnect = false)
+        if (!funded && !checkingFunds && !SailVpnService.running) checkFunds(andConnect = connectWhenFunded)
     }
 
     private val refresh = object : Runnable {
@@ -176,7 +192,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 toggle.isEnabled = running || starting || funded
             } catch (_: Exception) {}
-            ui.postDelayed(this, 1500)
+            if (visible) ui.postDelayed(this, 1500)
         }
     }
 
@@ -215,7 +231,9 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     // Keep looking: money may arrive from the faucet, or by
                     // hand from the address on screen.
-                    ui.postDelayed({ checkFunds(andConnect) }, 15000)
+                    // While the app is hidden, onResume checks again on return.
+                    connectWhenFunded = andConnect
+                    ui.postDelayed({ if (visible) checkFunds(andConnect) }, 15000)
                 }
             }
         }.start()
@@ -255,6 +273,7 @@ class MainActivity : AppCompatActivity() {
     private var lastBalance = ""
 
     private var checkingFunds = false
+    private var connectWhenFunded = false
     private var funded = false
     private var fundNote = ""
 

@@ -63,6 +63,10 @@ var (
 	lastErr  string
 	started  time.Time
 	upstream = "1.1.1.1:53"
+	// paused: the app is out of sight (Pause). Kept here as well as in
+	// the manager so a tunnel that finishes starting after the user left
+	// comes up paused too.
+	paused bool
 )
 
 type ringLog struct {
@@ -164,8 +168,14 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 	m.SetExcludeExit(o.ExcludeCC)
 	m.SetMine(o.Mine)
 	m.SetMode(o.Mode)
+	mu.Lock()
 	mgr = m
+	pause := paused
+	mu.Unlock()
 	started = time.Now()
+	if pause {
+		m.Pause()
+	}
 	go func() { // keep trying while the tunnel is up: funds arriving become a circuit without a tap
 		for {
 			time.Sleep(20 * time.Second)
@@ -174,6 +184,9 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 			mu.Unlock()
 			if cur != m {
 				return
+			}
+			if m.Paused() {
+				continue
 			}
 			if c, err := m.Circuit(); err == nil && c != nil {
 				m.StopFundsWatch()
@@ -201,7 +214,9 @@ func Start(home, optionsJSON string, tunFd int, mtu int, p Protector) (err error
 		netst, tunDev = st, dev
 		log.Printf("tun attached (fd %d, mtu %d)", tunFd, mtu)
 	}
-	go m.Circuit() // build the first circuit now so the first app request does not wait for payment
+	if !m.Paused() {
+		go m.Circuit() // build the first circuit now so the first app request does not wait for payment
+	}
 	return nil
 }
 
@@ -218,6 +233,30 @@ func Stop() {
 		tunDev = nil
 	}
 	mgr = nil
+}
+
+// Pause is called when the app goes out of sight: the circuit is closed
+// and nothing is built, pinged or paid for until Resume. The tunnel stays
+// up and drops traffic, so nothing leaves outside it.
+func Pause() {
+	mu.Lock()
+	paused = true
+	m := mgr
+	mu.Unlock()
+	if m != nil {
+		m.Pause()
+	}
+}
+
+// Resume is called when the app is opened again: the circuit is rebuilt.
+func Resume() {
+	mu.Lock()
+	paused = false
+	m := mgr
+	mu.Unlock()
+	if m != nil {
+		m.Resume()
+	}
 }
 
 // Rebuild drops the current circuit and builds a new one (new exit).
@@ -302,6 +341,7 @@ func Status() string {
 		}
 		out["uptime"] = int(time.Since(started).Seconds())
 		out["needsFunds"] = m.NeedsFunds()
+		out["paused"] = m.Paused()
 		out["stage"] = m.Stage()
 	}
 	logs.mu.Lock()
@@ -361,7 +401,9 @@ func (h *handler) HandleTCP(conn adapter.TCPConn) {
 		}
 		c, err := h.m.Circuit()
 		if err != nil {
-			log.Printf("tcp flow: %v", err) // never the destination
+			if !h.m.Paused() {
+				log.Printf("tcp flow: %v", err) // never the destination
+			}
 			return
 		}
 		st, err := c.OpenOptimistic(dst)
@@ -392,7 +434,7 @@ func (h *handler) HandleUDP(conn adapter.UDPConn) {
 				go func() {
 					if ans, err := h.m.ResolveViaCircuit(q, upstream); err == nil {
 						conn.WriteTo(ans, from)
-					} else {
+					} else if !h.m.Paused() {
 						logDNSErr(err)
 					}
 				}()

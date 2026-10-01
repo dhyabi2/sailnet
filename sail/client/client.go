@@ -183,6 +183,9 @@ type manager struct {
 	mu2             sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
 	effCap          uint32       // the price cap the last path selection actually used
 	stage           atomic.Value // what the client is doing right now, for screens
+	// paused: the app is out of sight. No circuit is built, kept alive,
+	// rotated or paid for; flows fail at once. The anchor tag is kept.
+	paused atomic.Bool
 }
 
 // dialViaCircuit is the transport for Nano RPC in stealth mode: the request
@@ -743,8 +746,14 @@ func (m *manager) loadAnchor() {
 
 // circuit returns a healthy circuit, building and paying as needed.
 func (m *manager) circuit() (*relay.Circuit, error) {
+	if m.paused.Load() {
+		return nil, errPaused
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.paused.Load() { // paused while this caller waited for the lock
+		return nil, errPaused
+	}
 	if m.cur != nil && !m.cur.Closed() && !m.drain && time.Since(m.cur.Built) < m.rotateAfter() {
 		return m.cur, nil
 	}
@@ -759,7 +768,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		// network round trip.
 		go func(c *relay.Circuit) {
 			m.sampleUsage(c, c.Tag)
-			drainCircuit(c)
+			m.drainCircuit(c)
 		}(m.cur)
 		m.cur = nil
 		m.drain = false
@@ -913,10 +922,11 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	return nil, errors("could not build a circuit")
 }
 
-// drainCircuit closes c once its streams are done (or after a long grace).
-func drainCircuit(c *relay.Circuit) {
+// drainCircuit closes c once its streams are done (or after a long grace,
+// or at once on a pause: a background app's stream is still metered).
+func (m *manager) drainCircuit(c *relay.Circuit) {
 	deadline := time.Now().Add(30 * time.Minute)
-	for !c.Closed() && c.Streams() > 0 && time.Now().Before(deadline) {
+	for !c.Closed() && c.Streams() > 0 && time.Now().Before(deadline) && !m.paused.Load() {
 		time.Sleep(5 * time.Second)
 	}
 	c.Close()
@@ -1506,6 +1516,49 @@ func (m *manager) Shutdown() {
 	m.setStage("")
 }
 
+var errPaused = errors("paused")
+
+// Pause closes the circuit and builds none until Resume: the app is out of
+// sight, so nothing is pinged, rotated, topped up or paid for, and flows
+// fail instead of moving metered bytes. The anchor tag and the path are
+// kept, so Resume rebuilds through the same entry and pays nothing new.
+func (m *manager) Pause() {
+	if m.paused.Swap(true) {
+		return
+	}
+	m.StopFundsWatch()
+	m.mu.Lock()
+	c := m.cur
+	live := m.live.Load() // taken now: a Resume racing this must keep the circuit it builds
+	m.cur = nil
+	if c != nil && !c.Closed() && len(c.Path) > 0 {
+		m.retryPath = c.Path
+	}
+	m.mu.Unlock()
+	if c != nil {
+		m.sampleUsage(c, c.Tag) // the cost ledger keeps what this circuit used
+		c.Close()
+	}
+	if live != nil {
+		live.Close()
+	}
+	m.setStage("Paused")
+	log.Printf("paused: no circuit while the app is out of sight")
+}
+
+// Resume undoes Pause and builds the circuit again.
+func (m *manager) Resume() {
+	if !m.paused.Swap(false) {
+		return
+	}
+	log.Printf("resumed")
+	m.setStage("")
+	go m.circuit()
+}
+
+// Paused reports whether Pause is in effect.
+func (m *manager) Paused() bool { return m.paused.Load() }
+
 // lastStage is the most recent stage of any manager in this process, so a
 // screen can show progress while the manager is still being constructed.
 var lastStage atomic.Value
@@ -2025,6 +2078,9 @@ func CachedCountries() []string {
 // a circuit within seconds. Everything travels inside the tunnel connection
 // to the entry; the client opens nothing else. Idempotent.
 func (m *manager) EnsureFundsWatch() {
+	if m.paused.Load() {
+		return
+	}
 	m.mu.Lock()
 	if m.fundsWatch != nil || !m.NeedsFunds() {
 		m.mu.Unlock()
@@ -2093,6 +2149,9 @@ func (m *manager) startFundsPoll() {
 			time.Sleep(30 * time.Second)
 			if !m.NeedsFunds() {
 				return
+			}
+			if m.paused.Load() {
+				continue
 			}
 			m.pocket()
 			if !m.NeedsFunds() {

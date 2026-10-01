@@ -21,6 +21,11 @@
             android:key="relay"
             android:title="My relay"
             android:summary="Open network" />
+        <SwitchPreferenceCompat
+            android:key="pause_hidden"
+            android:title="Pause when hidden"
+            android:summary="Saves XNO and battery."
+            android:defaultValue="true" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Censored networks">
