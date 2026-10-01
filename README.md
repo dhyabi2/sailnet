@@ -340,6 +340,22 @@ capture, DNS through the circuit and the status endpoint for the browser
 extension. Android: install the APK from Releases; the app funds itself the
 same way and shows where to get XNO.
 
+On Android, two settings save XNO and battery or spread the connection:
+
+- **Pause when hidden** (on by default): when no Sailnet screen is visible,
+  the circuit closes and nothing is pinged or paid for; the tunnel stays up
+  and drops traffic, so nothing leaks. Opening the app resumes it through
+  the same entry, using the prepaid anchor.
+- **Share connection**: other devices use your circuit through a hotspot.
+  Android's hotspot never passes through a VPN app, so guests set a proxy
+  (`<hotspot address>:8080`, HTTP or SOCKS5) in their Wi-Fi settings.
+  *Sailnet hotspot* opens its own network and shows its QR; it has no
+  internet of its own, so a guest without the proxy reaches nothing.
+  *My hotspot* uses Android's hotspot, whose name and password stay fixed,
+  but a guest without the proxy goes out unprotected. Guests reach public
+  HTTPS only, never this phone or its LAN, and are paid for from your
+  wallet. Sharing keeps the app awake while hidden.
+
 ## Built to be hard to censor
 
 Every one of these is in the code today, not a plan.
