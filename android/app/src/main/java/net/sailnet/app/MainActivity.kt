@@ -141,12 +141,22 @@ class MainActivity : AppCompatActivity() {
         if (!funded && !checkingFunds && !SailVpnService.running) checkFunds(andConnect = connectWhenFunded)
     }
 
-    private val refresh = object : Runnable {
-        override fun run() {
+    // The status call waits while a circuit is being built and paid for,
+    // which on a slow network is many seconds: it runs off the main thread,
+    // and only the drawing happens here. One call at a time.
+    private val statusWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    private val refresh = Runnable {
+        statusWorker.execute {
+            // If it fails the service flags still drive the texts.
+            val s = try { JSONObject(Mobile.status()) } catch (_: Exception) { JSONObject() }
+            ui.post { draw(s) }
+        }
+    }
+
+    private fun draw(s: JSONObject) {
+        run {
             try {
-                // A status call must never stall the screen; if it fails the
-                // service flags still drive the texts.
-                val s = try { JSONObject(Mobile.status()) } catch (_: Exception) { JSONObject() }
                 val running = s.optBoolean("running")
                 val starting = SailVpnService.starting || s.optBoolean("starting")
                 val stage = s.optString("stage")
@@ -192,7 +202,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 toggle.isEnabled = running || starting || funded
             } catch (_: Exception) {}
-            if (visible) ui.postDelayed(this, 1500)
+            ui.removeCallbacks(refresh)
+            if (visible) ui.postDelayed(refresh, 1500)
         }
     }
 
