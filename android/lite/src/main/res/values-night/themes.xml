@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SailnetLite" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#000000</item>
+        <item name="colorPrimaryVariant">#0A4F4B</item>
+        <item name="colorSecondary">#FFFFFF</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+</resources>
