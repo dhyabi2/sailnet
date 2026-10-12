@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -184,21 +183,16 @@ func EnsureFunded(ctx context.Context) (f Funding) {
 
 // readBalance fills in the balance and whether it is enough to connect.
 func readBalance(ctx context.Context, nc *nano.Client, key *nano.Key, f *Funding) {
-	anchor := RequiredXNO()
 	if info, ok, err := nc.AccountInfo(ctx, key.Address); err != nil {
 		f.Err = "could not reach the ledger to read the balance"
 	} else if ok {
-		if _, busy := cacheLedgerState(key, info); busy {
-			// A send is recording its block; the cache is its to write.
-			// Report what the ledger just said rather than wait for it.
-			if bal, good := new(big.Int).SetString(strings.TrimSpace(info.Balance), 10); good && bal.Sign() >= 0 {
-				f.Balance = token.FormatXNO(bal)
-				f.NeedsFunds = anchor != nil && bal.Cmp(anchor) < 0
-				f.Err = ""
-				return
-			}
-		}
+		// If a send holds the account's lock, this writes nothing (the send
+		// refreshes the cache itself) and the cached state is reported below
+		// as it stands: the raw ledger answer may come from a node lagging
+		// behind the cache, and reporting it would make the balance flap.
+		cacheLedgerState(key, info)
 	}
+	anchor := RequiredXNO()
 	if _, bal, _, _, cached := chainState(key).Get(); cached {
 		f.Balance = token.FormatXNO(bal)
 		f.NeedsFunds = anchor != nil && bal.Cmp(anchor) < 0

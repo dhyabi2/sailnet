@@ -370,16 +370,12 @@ func TestLedgerReadStepsAsideForARacingSend(t *testing.T) {
 	}
 }
 
-// A funds poll during a send reports the balance the ledger gave it right
-// away instead of blocking for the whole send.
-func TestFundsPollDoesNotWaitForASend(t *testing.T) {
-	t.Setenv("SAIL_HOME", t.TempDir())
-	key, err := nano.DeriveKey(make([]byte, 32), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// pollDuringASend runs readBalance against a node answering body while a
+// send holds the account's lock, and fails if the poll waits for the send.
+func pollDuringASend(t *testing.T, key *nano.Key, body string) Funding {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"frontier": "%s", "balance": "2000000000000000000000000000000", "block_count": "3", "representative": "%s"}`, someFrontier, someRep)
+		fmt.Fprint(w, body)
 	}))
 	defer srv.Close()
 	nc := &nano.Client{URLs: []string{srv.URL}, HTTP: srv.Client(), Budget: nano.NewBudget(50, 100)}
@@ -394,14 +390,61 @@ func TestFundsPollDoesNotWaitForASend(t *testing.T) {
 	}()
 	select {
 	case f := <-done:
-		if f.Balance != token.FormatXNO(rawBalance(t, "2000000000000000000000000000000")) || f.Err != "" {
-			t.Fatalf("poll during a send: balance %q err %q, want the ledger's", f.Balance, f.Err)
-		}
+		return f
 	case <-time.After(5 * time.Second):
 		t.Fatal("a funds poll waited for the send holding the account's lock")
 	}
-	if _, _, _, _, cached := chainState(key).Get(); cached {
+	return Funding{}
+}
+
+// A funds poll during a send returns at once with the cached state, as the
+// poll always reports it, and leaves the cache to the send.
+func TestFundsPollDoesNotWaitForASend(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	key, err := nano.DeriveKey(make([]byte, 32), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := nano.AddressToPubkey(someRep)
+	var mine [32]byte
+	mine[0] = 0x5A
+	cached := rawBalance(t, "1000000000000000000000000000000") // 1 XNO
+	chainState(key).Set(mine, cached, rep, true)               // no height: the ledger's longer chain would win if it could write
+
+	f := pollDuringASend(t, key, fmt.Sprintf(`{"frontier": "%s", "balance": "2000000000000000000000000000000", "block_count": "3", "representative": "%s"}`, someFrontier, someRep))
+	if f.Balance != token.FormatXNO(cached) || f.Err != "" {
+		t.Fatalf("poll during a send: balance %q err %q, want the cached %s", f.Balance, f.Err, token.FormatXNO(cached))
+	}
+	if front, bal, _, _, _ := chainState(key).Get(); front != mine || bal.Cmp(cached) != 0 {
 		t.Fatal("the poll wrote the cache while a send held the lock")
+	}
+}
+
+// A node lagging behind the cache (its older frontier, a lower count, a
+// different balance) must not show through a poll that runs during a send:
+// the balance would flap between the two, and a low one could read as an
+// empty wallet and send the client after the faucet.
+func TestFundsPollDuringASendDoesNotShowALaggingNode(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	key, err := nano.DeriveKey(make([]byte, 32), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := nano.AddressToPubkey(someRep)
+	var mine [32]byte
+	mine[0] = 0x5B
+	cached := rawBalance(t, "50000000000000000000000000000") // 0.05 XNO
+	chainState(key).SetFromLedger(mine, cached, rep, true, 5)
+	if anchor := RequiredXNO(); anchor != nil && cached.Cmp(anchor) < 0 {
+		t.Skipf("0.05 XNO is below the anchor %s; the test assumes it can pay", anchor)
+	}
+
+	f := pollDuringASend(t, key, fmt.Sprintf(`{"frontier": "%s", "balance": "2000000000000000000000000000000", "block_count": "4", "representative": "%s"}`, someFrontier, someRep))
+	if f.Balance != token.FormatXNO(cached) || f.NeedsFunds || f.Err != "" {
+		t.Fatalf("poll during a send behind a lagging node: balance %q needsFunds %v err %q, want the cached %s", f.Balance, f.NeedsFunds, f.Err, token.FormatXNO(cached))
+	}
+	if front, bal, _, _, _ := chainState(key).Get(); front != mine || bal.Cmp(cached) != 0 || chainState(key).Height() != 5 {
+		t.Fatal("the lagging node's state reached the cache")
 	}
 }
 
