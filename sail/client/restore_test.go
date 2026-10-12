@@ -314,3 +314,71 @@ func TestNonsenseFromTheLedgerIsIgnored(t *testing.T) {
 		t.Error("a nil chain state was accepted")
 	}
 }
+
+// A send holds the account's lock while it records its block; a ledger read
+// racing it must wait for that lock and read the cache afresh, or it puts
+// the older ledger state back over the block and the next payment forks.
+func TestLedgerReadCannotLoseARacingSend(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	key, err := nano.DeriveKey(make([]byte, 32), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFront := frontier32(t, someFrontier)
+	rep := frontier32(t, someFrontier)
+	chainState(key).SetFromLedger(oldFront, big.NewInt(100), rep, true, 5)
+
+	// The ledger has moved on to F at height 5 (another node's view of the
+	// same height), while a send is about to record B at height 6.
+	var ledgerFront, sent [32]byte
+	ledgerFront[0], sent[0] = 0xF0, 0xB0
+	info := nano.AccountInfo{Frontier: fmt.Sprintf("%X", ledgerFront), Balance: "90", Representative: someRep, BlockCount: "5"}
+
+	unlock := (&nano.Account{Key: key}).Lock()
+	st := chainState(key) // the send loads the cache under its lock
+	done := make(chan bool)
+	go func() { done <- cacheLedgerState(key, info) }()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		unlock()
+		t.Fatal("the ledger read ran while a send held the account's lock")
+	default:
+	}
+	st.Set(sent, big.NewInt(80), rep, true)
+	unlock()
+	if <-done {
+		t.Fatal("the ledger read overwrote the block a send had just recorded")
+	}
+	got, bal, _, _, ok := chainState(key).Get()
+	if !ok || got != sent || bal.Cmp(big.NewInt(80)) != 0 || chainState(key).Height() != 6 {
+		t.Fatalf("cache = %X %v height %d, want the sent block at height 6", got, bal, chainState(key).Height())
+	}
+}
+
+// A cache with no height (written after an open block) learns it from a
+// ledger read that agrees with its frontier, and from then on a node that
+// is behind it cannot roll it back.
+func TestAgreeingLedgerReadRecordsTheHeight(t *testing.T) {
+	st := newState(t)
+	front := frontier32(t, someFrontier)
+	st.Set(front, big.NewInt(10), front, true) // an open block: height unknown
+	if h := st.Height(); h != 0 {
+		t.Fatalf("height after open = %d, want 0", h)
+	}
+	if cacheAccountInfo(st, nano.AccountInfo{Frontier: someFrontier, Balance: "10", Representative: someRep, BlockCount: "5"}) {
+		t.Fatal("an agreeing ledger read replaced the cache")
+	}
+	if h := nano.LoadChainState(st.Path).Height(); h != 5 {
+		t.Fatalf("height after agreeing read = %d, want 5", h)
+	}
+	var behind [32]byte
+	behind[0] = 0xAA
+	st = nano.LoadChainState(st.Path)
+	if cacheAccountInfo(st, nano.AccountInfo{Frontier: fmt.Sprintf("%X", behind), Balance: "20", Representative: someRep, BlockCount: "4"}) {
+		t.Fatal("a ledger read shorter than the recorded height was accepted")
+	}
+	if got, _, _, _, _ := nano.LoadChainState(st.Path).Get(); got != front {
+		t.Fatalf("frontier = %X, want %X", got, front)
+	}
+}

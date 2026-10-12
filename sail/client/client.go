@@ -1619,13 +1619,25 @@ func (m *manager) pocket() {
 	}
 	if info, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
 		m.directBootstrap = false // chain state is cached now: no more direct ledger calls
-		if cacheAccountInfo(chainState(m.key), info) {
+		if cacheLedgerState(m.key, info) {
 			log.Printf("wallet state read from the ledger")
 		}
 		if _, bal, _, _, cached := chainState(m.key).Get(); cached {
 			log.Printf("wallet balance %s XNO", token.FormatXNO(bal))
 		}
 	}
+}
+
+// cacheLedgerState caches what the ledger reports about key's wallet. It
+// holds the account's publishing lock from reading the cached state to
+// writing it: a send running beside it (a circuit build paying its entry
+// while the wallet is refreshed) records its block under that same lock,
+// and an unlocked read-compare-write could put the older ledger state back
+// over that block, so the next payment would fork. The caller must not
+// already hold the lock.
+func cacheLedgerState(key *nano.Key, info nano.AccountInfo) bool {
+	defer (&nano.Account{Key: key}).Lock()()
+	return cacheAccountInfo(chainState(key), info)
 }
 
 // cacheAccountInfo copies what the ledger reports about a wallet into its
@@ -1649,6 +1661,9 @@ func (m *manager) pocket() {
 // A cache that predates heights being recorded (an older build wrote it)
 // cannot be compared that way, so it is trusted only while it is fresh — a
 // stale one is exactly the bug this fixes.
+//
+// st must have been loaded under the account's lock, still held; see
+// cacheLedgerState.
 func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if st == nil {
 		return false
@@ -1671,7 +1686,13 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	copy(f[:], front)
 	if prev, _, _, _, cached := st.Get(); cached {
 		if prev == f {
-			return false // the ledger agrees with what we have
+			// The ledger agrees with what we have. A cache that never
+			// learned its height (an open block, a node that gave none)
+			// learns it here, so later reads can refuse a node behind it.
+			if heightKnown && ledgerHeight > 0 && st.Height() != ledgerHeight {
+				st.SetHeight(ledgerHeight)
+			}
+			return false
 		}
 		if h := st.Height(); h > 0 {
 			// A chain longer than ours is the ledger's to describe; one
