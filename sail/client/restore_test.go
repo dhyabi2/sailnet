@@ -448,6 +448,29 @@ func TestFundsPollDuringASendDoesNotShowALaggingNode(t *testing.T) {
 	}
 }
 
+// A wallet restored from its seed on a new device has no cache yet. A poll
+// that steps aside for a send must not call it empty and send the client
+// after the faucet: with nothing cached, it reports what the ledger said,
+// and still writes nothing.
+func TestFundsPollDuringASendWithNoCacheReportsTheLedger(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	key, err := nano.DeriveKey(make([]byte, 32), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := rawBalance(t, "2000000000000000000000000000000") // 2 XNO
+	if anchor := RequiredXNO(); anchor != nil && ledger.Cmp(anchor) < 0 {
+		t.Skipf("2 XNO is below the anchor %s; the test assumes it can pay", anchor)
+	}
+	f := pollDuringASend(t, key, fmt.Sprintf(`{"frontier": "%s", "balance": "%s", "block_count": "3", "representative": "%s"}`, someFrontier, ledger, someRep))
+	if f.Balance != token.FormatXNO(ledger) || f.NeedsFunds || f.Err != "" {
+		t.Fatalf("poll during a send with no cache: balance %q needsFunds %v err %q, want the ledger's %s", f.Balance, f.NeedsFunds, f.Err, token.FormatXNO(ledger))
+	}
+	if _, _, _, _, cached := chainState(key).Get(); cached {
+		t.Fatal("the poll wrote the cache while a send held the lock")
+	}
+}
+
 // A cache with no height (written after an open block) learns it from a
 // ledger read that agrees with its frontier, and from then on a node that
 // is behind it cannot roll it back.
