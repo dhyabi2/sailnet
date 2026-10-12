@@ -268,3 +268,5 @@ If the answer is no, the change does not ship, whatever it improves.
   relay's and faucet's chain files (`cmd/sailnode`, `sailnode`) gain the two
   fields as well; only the client's ledger read decides anything by them,
   so relays and faucets behave exactly as before.
+  A cache ahead of the ledger (a block not yet seen there) is kept until a
+  send or receive re-reads the account, as before.

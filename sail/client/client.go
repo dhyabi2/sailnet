@@ -1642,11 +1642,13 @@ func (m *manager) pocket() {
 // that with an older frontier would build the next block on a stale one.
 // The ledger's block count says which side is ahead: a chain that grew
 // past what we cached is the ledger's to describe, and one that has not
-// caught up to a block we just published is left alone while that block
-// could still land (ten minutes). A cache that predates heights being
-// recorded (an older build wrote it) cannot be compared that way, so it is
-// trusted only while it is fresh — a stale one is exactly the bug this
-// fixes.
+// caught up to a block we just published is left alone, however old the
+// cache is: a node lagging behind a confirmed block must not roll the
+// wallet back onto a frontier it already spent from, or the next block
+// forks. Such a cache is kept until a send or receive re-reads the account.
+// A cache that predates heights being recorded (an older build wrote it)
+// cannot be compared that way, so it is trusted only while it is fresh — a
+// stale one is exactly the bug this fixes.
 func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if st == nil {
 		return false
@@ -1673,15 +1675,10 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 		}
 		if h := st.Height(); h > 0 {
 			// A chain longer than ours is the ledger's to describe; one
-			// shorter has not caught up to the block we just published —
-			// unless that was long enough ago for it to have landed. A
-			// block the ledger still lacks after that never reached it
-			// (or the height came from a node that lied), and the ledger
-			// is the truth.
-			if !heightKnown {
-				return false
-			}
-			if ledgerHeight < h && freshChainState(st.WrittenAt()) {
+			// shorter has not caught up to the block we just published (or
+			// comes from a node lagging behind it), and is refused however
+			// old the cache is.
+			if !heightKnown || ledgerHeight < h {
 				return false
 			}
 		} else if at := st.WrittenAt(); at == 0 {
