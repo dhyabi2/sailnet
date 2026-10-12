@@ -564,6 +564,31 @@ settings (exit exclusion, bridges). It runs the same client as
 `Sailnet-macOS-AppleSilicon.dmg`, `Sailnet-macOS-Intel.dmg` and
 `Sailnet-Windows.exe`. Every file in a release has a `.sha256` beside it.
 
+### macOS: install and open in one command
+
+```sh
+arch=$(uname -m | sed 's/arm64/AppleSilicon/; s/x86_64/Intel/')
+curl -fsSL -o /tmp/Sailnet.dmg "https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-macOS-$arch.dmg" \
+  && curl -fsSL "https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-macOS-$arch.dmg.sha256" | sed 's#  .*#  /tmp/Sailnet.dmg#' | shasum -a 256 -c - \
+  && hdiutil attach -nobrowse -quiet /tmp/Sailnet.dmg \
+  && rm -rf /Applications/Sailnet.app \
+  && cp -R "/Volumes/Sailnet/Sailnet.app" /Applications/ \
+  && hdiutil detach -quiet /Volumes/Sailnet \
+  && open -a Sailnet
+```
+
+The download is checked against the `.sha256` published beside it before
+anything is replaced, the way the Linux one-command above checks the binary
+(macOS ships `shasum`, not `sha256sum`), and `rm -rf` is what makes the
+line an update as well as a first install: `cp -R` into an existing
+`Sailnet.app` nests a copy inside it instead. A download by `curl` carries
+no quarantine attribute, so Gatekeeper does not ask about the unsigned
+build; the app opens by itself and CONNECT is the button at the top. While
+connected it turns on the system SOCKS proxy, so browsers need no setup —
+Terminal and other apps that ignore system proxies can point at
+`socks5://127.0.0.1:1080`, or run `sailnode client --capture` for the
+whole device.
+
 The `Desktop apps` workflow signs and notarizes when the certificates are in
 the repository secrets (Developer ID certificate and notarytool credentials
 for macOS, a code-signing PFX for Windows; see the workflow header). Without
