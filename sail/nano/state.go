@@ -84,7 +84,11 @@ func (s *ChainState) Set(frontier [32]byte, bal *big.Int, rep [32]byte, opened b
 
 // SetFromLedger records the state account_info reported, at the height it
 // reported (0 = it gave none, so the height is unknown again). Nothing was
-// published, so nothing is added: a ledger read never grows the chain.
+// published, so nothing is added: a ledger read never grows the chain. A
+// read that agrees with the cached frontier never lowers the height already
+// known for it either: the height at a frontier cannot shrink, so a lower
+// count is a node that answered wrongly, and believing it would let a node
+// lagging behind that frontier roll the cache back.
 func (s *ChainState) SetFromLedger(frontier [32]byte, bal *big.Int, rep [32]byte, opened bool, height uint64) {
 	if s == nil {
 		return
@@ -95,13 +99,16 @@ func (s *ChainState) SetFromLedger(frontier [32]byte, bal *big.Int, rep [32]byte
 // record writes the state; grow takes the height from the one it replaces,
 // one block longer when it is known.
 func (s *ChainState) record(frontier [32]byte, bal *big.Int, rep [32]byte, opened bool, height uint64, grow bool) {
+	front := strings.ToUpper(hex.EncodeToString(frontier[:]))
 	s.mu.Lock()
 	if grow {
 		if height = s.v.Height; height > 0 {
 			height++
 		}
+	} else if strings.EqualFold(s.v.Frontier, front) && s.v.Height > height {
+		height = s.v.Height
 	}
-	s.v = chainStateFile{Frontier: strings.ToUpper(hex.EncodeToString(frontier[:])), Balance: bal.String(), Rep: strings.ToUpper(hex.EncodeToString(rep[:])), Opened: opened, Height: height, At: time.Now().Unix()}
+	s.v = chainStateFile{Frontier: front, Balance: bal.String(), Rep: strings.ToUpper(hex.EncodeToString(rep[:])), Opened: opened, Height: height, At: time.Now().Unix()}
 	data, _ := json.MarshalIndent(s.v, "", "  ")
 	s.mu.Unlock()
 	if s.Path != "" {
@@ -110,12 +117,17 @@ func (s *ChainState) record(frontier [32]byte, bal *big.Int, rep [32]byte, opene
 }
 
 // SetHeight records the chain height the frontier is at, as account_info
-// reported it.
+// reported it. It only ever raises the height: the frontier has not moved,
+// and its height cannot shrink, so a lower count is a node's mistake.
 func (s *ChainState) SetHeight(h uint64) {
 	if s == nil || h == 0 {
 		return
 	}
 	s.mu.Lock()
+	if h <= s.v.Height {
+		s.mu.Unlock()
+		return
+	}
 	s.v.Height = h
 	data, _ := json.MarshalIndent(s.v, "", "  ")
 	s.mu.Unlock()

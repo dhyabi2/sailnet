@@ -1689,7 +1689,10 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 			// The ledger agrees with what we have. A cache that never
 			// learned its height (an open block, a node that gave none)
 			// learns it here, so later reads can refuse a node behind it.
-			if heightKnown && ledgerHeight > 0 && st.Height() != ledgerHeight {
+			// The height is only ever raised: a lower count for the same
+			// frontier is a node answering wrongly, and recording it would
+			// let a node lagging behind this frontier roll the cache back.
+			if heightKnown && ledgerHeight > st.Height() {
 				st.SetHeight(ledgerHeight)
 			}
 			return false

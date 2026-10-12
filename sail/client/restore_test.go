@@ -382,3 +382,35 @@ func TestAgreeingLedgerReadRecordsTheHeight(t *testing.T) {
 		t.Fatalf("frontier = %X, want %X", got, front)
 	}
 }
+
+// The height at a frontier cannot shrink. A node that agrees with the
+// cached frontier but reports too low a block count must not lower the
+// known height, or a later node lagging behind that frontier (an older
+// frontier, at a count between the two) would look longer and roll the
+// cache back, and the next offline payment would fork.
+func TestAgreeingReadWithALowCountCannotLetALaggingNodeRollBack(t *testing.T) {
+	st := newState(t)
+	rep, _ := nano.AddressToPubkey(someRep)
+	var mine [32]byte
+	mine[0], mine[31] = 0xAA, 0xBB
+	st.SetFromLedger(mine, big.NewInt(9), rep, true, 10)
+
+	if cacheAccountInfo(st, nano.AccountInfo{Frontier: fmt.Sprintf("%X", mine), Balance: "9", Representative: someRep, BlockCount: "1"}) {
+		t.Fatal("an agreeing read replaced the cache")
+	}
+	if h := nano.LoadChainState(st.Path).Height(); h != 10 {
+		t.Fatalf("height after an agreeing read with a low count = %d, want 10 kept", h)
+	}
+	st = nano.LoadChainState(st.Path)
+	if cacheAccountInfo(st, nano.AccountInfo{Frontier: someFrontier, Balance: "10", Representative: someRep, BlockCount: "9"}) {
+		t.Fatal("a node lagging behind the cached frontier rolled the cache back")
+	}
+	if front, bal, _, _, _ := st.Get(); front != mine || bal.Cmp(big.NewInt(9)) != 0 || st.Height() != 10 {
+		t.Fatalf("frontier %X balance %s height %d, want the cached block at height 10", front, bal, st.Height())
+	}
+	// A higher count for the same frontier is still learned.
+	cacheAccountInfo(st, nano.AccountInfo{Frontier: fmt.Sprintf("%X", mine), Balance: "9", Representative: someRep, BlockCount: "11"})
+	if h := st.Height(); h != 11 {
+		t.Fatalf("height after an agreeing read with a higher count = %d, want 11", h)
+	}
+}

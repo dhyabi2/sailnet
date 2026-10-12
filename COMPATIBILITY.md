@@ -274,4 +274,5 @@ If the answer is no, the change does not ship, whatever it improves.
   block or a node answer without `block_count`; such a cache follows the
   10-minute rule (kept while younger than ten minutes, replaced by the
   ledger's state after that) until a ledger read agreeing with its frontier
-  records the height.
+  records the height. A read agreeing with the cached frontier only ever raises the
+  recorded height, never lowers it.

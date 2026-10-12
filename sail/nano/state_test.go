@@ -85,13 +85,41 @@ func TestALedgerReadNeverGrowsTheHeight(t *testing.T) {
 			t.Fatalf("read %d: height %d, want the ledger's 40", i, st.Height())
 		}
 	}
+	// The same frontier without a count (or with a lower one) keeps the
+	// height already known for it: the height at a frontier cannot shrink.
 	noCount.Store(true)
 	for i := 0; i < 3; i++ {
 		if _, _, _, _, err := a.frontier(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if st.Height() != 0 {
-			t.Fatalf("read %d without block_count: height %d, want unknown (0)", i, st.Height())
+		if st.Height() != 40 {
+			t.Fatalf("read %d without block_count: height %d, want 40 kept", i, st.Height())
 		}
+	}
+}
+
+// A ledger read that agrees with the cached frontier only ever raises the
+// known height; one that moved the frontier takes the ledger's count.
+func TestALedgerReadNeverLowersTheHeightAtTheSameFrontier(t *testing.T) {
+	rep, _ := AddressToPubkey(testRep)
+	st := &ChainState{Path: filepath.Join(t.TempDir(), "chain.json")}
+	var f, g [32]byte
+	f[0], g[0] = 1, 2
+	st.SetFromLedger(f, big.NewInt(5), rep, true, 10)
+	st.SetFromLedger(f, big.NewInt(5), rep, true, 1)
+	if h := LoadChainState(st.Path).Height(); h != 10 {
+		t.Fatalf("height %d after a low count at the same frontier, want 10", h)
+	}
+	st.SetHeight(3)
+	if h := st.Height(); h != 10 {
+		t.Fatalf("SetHeight lowered the height to %d", h)
+	}
+	st.SetFromLedger(f, big.NewInt(5), rep, true, 12)
+	if h := st.Height(); h != 12 {
+		t.Fatalf("height %d after a higher count, want 12", h)
+	}
+	st.SetFromLedger(g, big.NewInt(4), rep, true, 13)
+	if h := st.Height(); h != 13 {
+		t.Fatalf("height %d at a new frontier, want the ledger's 13", h)
 	}
 }
