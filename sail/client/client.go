@@ -1637,15 +1637,17 @@ func (m *manager) pocket() {
 // its money was received long ago — so nothing could tell the client it had
 // any, and it waited forever for a payment that had already arrived.
 //
-// It writes only into an empty cache. A local state can legitimately be
-// ahead of what the ledger reports, when a block was sent moments ago and is
-// not yet confirmed; overwriting that with an older frontier would build the
-// next block on a stale one.
+// A local state can also legitimately be ahead of what the ledger reports,
+// when a block was sent moments ago and is not yet confirmed; overwriting
+// that with an older frontier would build the next block on a stale one.
+// The ledger's block count says which side is ahead: a chain that grew
+// past what we cached is the ledger's to describe, and one that has not
+// caught up to a block we just published is left alone. A cache that
+// predates heights being recorded (an older build wrote it) cannot be
+// compared that way, so it is trusted only while it is fresh — a stale one
+// is exactly the bug this fixes.
 func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if st == nil {
-		return false
-	}
-	if _, _, _, _, cached := st.Get(); cached {
 		return false
 	}
 	front, err := hex.DecodeString(strings.TrimSpace(info.Frontier))
@@ -1660,9 +1662,30 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if err != nil {
 		return false
 	}
+	ledgerHeight, heightErr := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64)
+	heightKnown := heightErr == nil
 	var f [32]byte
 	copy(f[:], front)
+	if prev, _, _, _, cached := st.Get(); cached {
+		if prev == f {
+			return false // the ledger agrees with what we have
+		}
+		if h := st.Height(); h > 0 {
+			// A chain longer than ours is the ledger's to describe; one
+			// shorter has not caught up to the block we just published.
+			if !heightKnown || ledgerHeight < h {
+				return false
+			}
+		} else if time.Since(time.Unix(st.WrittenAt(), 0)) < 10*time.Minute {
+			// No height was ever recorded: a state written moments ago may
+			// be a block still travelling to the ledger, so it is kept.
+			return false
+		}
+	}
 	st.Set(f, bal, rep, true)
+	if heightKnown {
+		st.SetHeight(ledgerHeight)
+	}
 	return true
 }
 

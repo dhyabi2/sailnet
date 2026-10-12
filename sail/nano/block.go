@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -110,6 +111,9 @@ func (a *Account) frontier(ctx context.Context) ([32]byte, *big.Int, [32]byte, b
 		return [32]byte{}, nil, [32]byte{}, false, err
 	}
 	a.State.Set(prev, bal, rep, true)
+	if n, err := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64); err == nil {
+		a.State.SetHeight(n)
+	}
 	return prev, bal, rep, true, nil
 }
 
