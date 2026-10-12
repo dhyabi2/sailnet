@@ -1642,10 +1642,11 @@ func (m *manager) pocket() {
 // that with an older frontier would build the next block on a stale one.
 // The ledger's block count says which side is ahead: a chain that grew
 // past what we cached is the ledger's to describe, and one that has not
-// caught up to a block we just published is left alone. A cache that
-// predates heights being recorded (an older build wrote it) cannot be
-// compared that way, so it is trusted only while it is fresh — a stale one
-// is exactly the bug this fixes.
+// caught up to a block we just published is left alone while that block
+// could still land (ten minutes). A cache that predates heights being
+// recorded (an older build wrote it) cannot be compared that way, so it is
+// trusted only while it is fresh — a stale one is exactly the bug this
+// fixes.
 func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if st == nil {
 		return false
@@ -1672,16 +1673,22 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 		}
 		if h := st.Height(); h > 0 {
 			// A chain longer than ours is the ledger's to describe; one
-			// shorter has not caught up to the block we just published.
-			if !heightKnown || ledgerHeight < h {
+			// shorter has not caught up to the block we just published —
+			// unless that was long enough ago for it to have landed. A
+			// block the ledger still lacks after that never reached it
+			// (or the height came from a node that lied), and the ledger
+			// is the truth.
+			if !heightKnown {
+				return false
+			}
+			if ledgerHeight < h && freshChainState(st.WrittenAt()) {
 				return false
 			}
 		} else if at := st.WrittenAt(); at == 0 {
 			return false // no height and no time: nothing says it is stale
-		} else if age := time.Since(time.Unix(at, 0)); age < 10*time.Minute && age > -time.Minute {
+		} else if freshChainState(at) {
 			// No height was ever recorded: a state written moments ago may
-			// be a block still travelling to the ledger, so it is kept. A
-			// time in the future is a clock that cannot be trusted.
+			// be a block still travelling to the ledger, so it is kept.
 			return false
 		}
 	}
@@ -1690,6 +1697,18 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	}
 	st.SetFromLedger(f, bal, rep, true, ledgerHeight)
 	return true
+}
+
+// freshChainState reports whether a chain state recorded at the Unix time
+// at was written recently enough that a block it holds may still be
+// travelling to the ledger. A time in the future is a clock that cannot be
+// trusted, and an unknown time (0) is never fresh.
+func freshChainState(at int64) bool {
+	if at == 0 {
+		return false
+	}
+	age := time.Since(time.Unix(at, 0))
+	return age < 10*time.Minute && age > -time.Minute
 }
 
 // cliBridges holds --bridge lines until the registry exists.

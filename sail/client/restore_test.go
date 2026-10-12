@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -227,6 +228,90 @@ func TestACacheStampedInTheFutureIsNotTrustedAsFresh(t *testing.T) {
 	}
 	if cacheAccountInfo(write(time.Now().Add(20*time.Second)), ledger) {
 		t.Fatal("a state within the clock skew allowance was overwritten")
+	}
+}
+
+// A block we signed can also never land: an offline payment that hit a
+// publish error no relay recovered from leaves the cache one block ahead of
+// a ledger that keeps reporting the old frontier. Kept while the block may
+// still be travelling, the cache must give way to the ledger once that is
+// no longer possible, or the client waits for money forever.
+func TestABlockThatNeverLandedGivesWayToTheLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chain.json")
+	rep, _ := nano.AddressToPubkey(someRep)
+	var mine [32]byte
+	mine[0], mine[31] = 0xAA, 0xBB
+	write := func(height uint64, at time.Time) *nano.ChainState {
+		data := fmt.Sprintf(`{"frontier": "%X", "balance": "9", "representative": "%X", "opened": true, "height": %d, "at": %d}`, mine, rep, height, at.Unix())
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return nano.LoadChainState(path)
+	}
+	ledger := nano.AccountInfo{Frontier: someFrontier, Balance: "10", Representative: someRep, BlockCount: "62"}
+
+	// Signed just now: the ledger may not have it yet.
+	st := write(63, time.Now())
+	if cacheAccountInfo(st, ledger) {
+		t.Fatal("a block signed moments ago was overwritten before it could land")
+	}
+	if front, _, _, _, _ := st.Get(); front != mine || st.Height() != 63 {
+		t.Fatalf("frontier %X height %d, want the local state kept", front, st.Height())
+	}
+
+	// Signed eleven minutes ago and still not on the ledger: it never will be.
+	st = write(63, time.Now().Add(-11*time.Minute))
+	if !cacheAccountInfo(st, ledger) {
+		t.Fatal("a block that never reached the ledger was kept forever")
+	}
+	front, bal, _, _, _ := st.Get()
+	if front != frontier32(t, someFrontier) || bal.Cmp(big.NewInt(10)) != 0 || st.Height() != 62 {
+		t.Fatalf("frontier %X balance %s height %d, want the ledger's", front, bal, st.Height())
+	}
+}
+
+// One node that answered with an absurd block count must not lock the
+// wallet out of every honest answer after it.
+func TestAHeightFromALyingNodeGivesWayToTheLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chain.json")
+	rep, _ := nano.AddressToPubkey(someRep)
+	var lie [32]byte
+	lie[0], lie[31] = 0x66, 0x77
+	stale := time.Now().Add(-11 * time.Minute)
+	data := fmt.Sprintf(`{"frontier": "%X", "balance": "1", "representative": "%X", "opened": true, "height": %d, "at": %d}`, lie, rep, uint64(math.MaxUint64-1), stale.Unix())
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := nano.LoadChainState(path)
+	if !cacheAccountInfo(st, nano.AccountInfo{Frontier: someFrontier, Balance: "10", Representative: someRep, BlockCount: "62"}) {
+		t.Fatal("an honest ledger answer was refused because of a lying node's height")
+	}
+	front, bal, _, _, _ := st.Get()
+	if front != frontier32(t, someFrontier) || bal.Cmp(big.NewInt(10)) != 0 || st.Height() != 62 {
+		t.Fatalf("frontier %X balance %s height %d, want the ledger's", front, bal, st.Height())
+	}
+}
+
+// Restore tools and tar can leave a file's mtime at the epoch; nothing that
+// just wrote it would. Such a legacy file is stale, not of unknown age.
+func TestALegacyCacheWithAnEpochMtimeIsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chain.json")
+	rep, _ := nano.AddressToPubkey(someRep)
+	legacy := fmt.Sprintf(`{"frontier": "%s", "balance": "9", "representative": "%X", "opened": true}`, someFrontier, rep)
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	var newFront [32]byte
+	newFront[0], newFront[31] = 0x21, 0x43
+	st := nano.LoadChainState(path)
+	if !cacheAccountInfo(st, nano.AccountInfo{Frontier: fmt.Sprintf("%X", newFront), Balance: "5", Representative: someRep, BlockCount: "7"}) {
+		t.Fatal("a legacy cache with an epoch mtime was never refreshed")
+	}
+	if front, bal, _, _, _ := st.Get(); front != newFront || bal.Cmp(big.NewInt(5)) != 0 || st.Height() != 7 {
+		t.Fatalf("frontier %X balance %s height %d, want the ledger's", front, bal, st.Height())
 	}
 }
 

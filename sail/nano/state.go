@@ -39,7 +39,12 @@ func LoadChainState(path string) *ChainState {
 		json.Unmarshal(data, &s.v)
 		if s.v.At == 0 {
 			if fi, err := os.Stat(path); err == nil {
-				s.v.At = fi.ModTime().Unix()
+				// A write never leaves an mtime at or before the epoch;
+				// restore tools and tar do. Such a file is as old as a
+				// file can be, so it is aged as the oldest known time.
+				if s.v.At = fi.ModTime().Unix(); s.v.At <= 0 {
+					s.v.At = 1
+				}
 			}
 		}
 	}

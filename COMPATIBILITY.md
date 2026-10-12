@@ -264,4 +264,7 @@ If the answer is no, the change does not ship, whatever it improves.
   ledger read can tell a stale cache from a block still travelling. The
   `representative` key is unchanged. An older build ignores the new fields
   and reads the file as before; a file it wrote, with neither, is aged by its
-  modification time. Client-side only.
+  modification time. The file is written by code the relay shares, so the
+  relay's and faucet's chain files (`cmd/sailnode`, `sailnode`) gain the two
+  fields as well; only the client's ledger read decides anything by them,
+  so relays and faucets behave exactly as before.
