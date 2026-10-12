@@ -1619,7 +1619,7 @@ func (m *manager) pocket() {
 	}
 	if info, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
 		m.directBootstrap = false // chain state is cached now: no more direct ledger calls
-		if cacheLedgerState(m.key, info) {
+		if wrote, _ := cacheLedgerState(m.key, info); wrote {
 			log.Printf("wallet state read from the ledger")
 		}
 		if _, bal, _, _, cached := chainState(m.key).Get(); cached {
@@ -1633,11 +1633,20 @@ func (m *manager) pocket() {
 // writing it: a send running beside it (a circuit build paying its entry
 // while the wallet is refreshed) records its block under that same lock,
 // and an unlocked read-compare-write could put the older ledger state back
-// over that block, so the next payment would fork. The caller must not
+// over that block, so the next payment would fork.
+//
+// A send holds that lock from its own ledger read through proof-of-work to
+// publishing, which can take minutes; a balance poll must not wait that
+// long, so when the lock is taken it writes nothing and reports busy. The
+// send refreshes the cache from the ledger itself. The caller must not
 // already hold the lock.
-func cacheLedgerState(key *nano.Key, info nano.AccountInfo) bool {
-	defer (&nano.Account{Key: key}).Lock()()
-	return cacheAccountInfo(chainState(key), info)
+func cacheLedgerState(key *nano.Key, info nano.AccountInfo) (wrote, busy bool) {
+	unlock, ok := (&nano.Account{Key: key}).TryLock()
+	if !ok {
+		return false, true
+	}
+	defer unlock()
+	return cacheAccountInfo(chainState(key), info), false
 }
 
 // cacheAccountInfo copies what the ledger reports about a wallet into its

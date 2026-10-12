@@ -1,15 +1,19 @@
 package client
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/dhyabi2/sail/nano"
+	"github.com/dhyabi2/sail/token"
 )
 
 const (
@@ -315,10 +319,13 @@ func TestNonsenseFromTheLedgerIsIgnored(t *testing.T) {
 	}
 }
 
-// A send holds the account's lock while it records its block; a ledger read
-// racing it must wait for that lock and read the cache afresh, or it puts
-// the older ledger state back over the block and the next payment forks.
-func TestLedgerReadCannotLoseARacingSend(t *testing.T) {
+// A send holds the account's lock from its own ledger read until it has
+// recorded its block, which can take minutes of proof-of-work. A ledger
+// read racing it must neither write the cache under it (it would put the
+// older ledger state back over the block, and the next payment would fork)
+// nor wait for the whole send: it steps aside at once, and the send's
+// block stays.
+func TestLedgerReadStepsAsideForARacingSend(t *testing.T) {
 	t.Setenv("SAIL_HOME", t.TempDir())
 	key, err := nano.DeriveKey(make([]byte, 32), 0)
 	if err != nil {
@@ -336,23 +343,65 @@ func TestLedgerReadCannotLoseARacingSend(t *testing.T) {
 
 	unlock := (&nano.Account{Key: key}).Lock()
 	st := chainState(key) // the send loads the cache under its lock
-	done := make(chan bool)
-	go func() { done <- cacheLedgerState(key, info) }()
-	time.Sleep(50 * time.Millisecond)
+	type result struct{ wrote, busy bool }
+	done := make(chan result, 1)
+	go func() { w, b := cacheLedgerState(key, info); done <- result{w, b} }()
+	var r result
 	select {
-	case <-done:
+	case r = <-done:
+	case <-time.After(2 * time.Second):
 		unlock()
-		t.Fatal("the ledger read ran while a send held the account's lock")
-	default:
+		t.Fatal("the ledger read waited for the send holding the account's lock")
+	}
+	if r.wrote || !r.busy {
+		unlock()
+		t.Fatalf("ledger read during a send: wrote %v busy %v, want it to step aside", r.wrote, r.busy)
 	}
 	st.Set(sent, big.NewInt(80), rep, true)
 	unlock()
-	if <-done {
-		t.Fatal("the ledger read overwrote the block a send had just recorded")
-	}
 	got, bal, _, _, ok := chainState(key).Get()
 	if !ok || got != sent || bal.Cmp(big.NewInt(80)) != 0 || chainState(key).Height() != 6 {
 		t.Fatalf("cache = %X %v height %d, want the sent block at height 6", got, bal, chainState(key).Height())
+	}
+	// With the send done, the next read takes the lock and decides as usual
+	// (here: the ledger is behind the sent block, so nothing changes).
+	if w, b := cacheLedgerState(key, info); w || b {
+		t.Fatalf("read after the send: wrote %v busy %v, want neither", w, b)
+	}
+}
+
+// A funds poll during a send reports the balance the ledger gave it right
+// away instead of blocking for the whole send.
+func TestFundsPollDoesNotWaitForASend(t *testing.T) {
+	t.Setenv("SAIL_HOME", t.TempDir())
+	key, err := nano.DeriveKey(make([]byte, 32), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"frontier": "%s", "balance": "2000000000000000000000000000000", "block_count": "3", "representative": "%s"}`, someFrontier, someRep)
+	}))
+	defer srv.Close()
+	nc := &nano.Client{URLs: []string{srv.URL}, HTTP: srv.Client(), Budget: nano.NewBudget(50, 100)}
+
+	unlock := (&nano.Account{Key: key}).Lock()
+	defer unlock()
+	done := make(chan Funding, 1)
+	go func() {
+		var f Funding
+		readBalance(context.Background(), nc, key, &f)
+		done <- f
+	}()
+	select {
+	case f := <-done:
+		if f.Balance != token.FormatXNO(rawBalance(t, "2000000000000000000000000000000")) || f.Err != "" {
+			t.Fatalf("poll during a send: balance %q err %q, want the ledger's", f.Balance, f.Err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a funds poll waited for the send holding the account's lock")
+	}
+	if _, _, _, _, cached := chainState(key).Get(); cached {
+		t.Fatal("the poll wrote the cache while a send held the lock")
 	}
 }
 

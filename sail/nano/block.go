@@ -151,6 +151,17 @@ func (a *Account) Lock() func() {
 	return m.(*sync.Mutex).Unlock
 }
 
+// TryLock takes the account's publishing lock only if no one holds it. It
+// reports whether it did, and returns the unlock func when it did; a caller
+// that cannot wait for a whole send (a balance poll) uses it to step aside.
+func (a *Account) TryLock() (func(), bool) {
+	m, _ := acctLocks.LoadOrStore(a.Key.Address, &sync.Mutex{})
+	if !m.(*sync.Mutex).TryLock() {
+		return nil, false
+	}
+	return m.(*sync.Mutex).Unlock, true
+}
+
 // signAndPublish fills work + signature and processes the block.
 func (a *Account) signAndPublish(ctx context.Context, b *Block, subtype string, root [32]byte, threshold uint64) (string, error) {
 	h, err := b.Hash()
