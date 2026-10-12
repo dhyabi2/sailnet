@@ -24,17 +24,24 @@ type ChainState struct {
 type chainStateFile struct {
 	Frontier string `json:"frontier"`
 	Balance  string `json:"balance"`
-	Rep      string `json:"rep"`
+	Rep      string `json:"representative"`
 	Opened   bool   `json:"opened"`
 	Height   uint64 `json:"height,omitempty"` // blocks in the account chain at this frontier; 0 = never learned
-	At       int64  `json:"at,omitempty"`    // when the state was recorded; 0 = before it was recorded (older build)
+	At       int64  `json:"at,omitempty"`     // when the state was recorded; absent in a file an older build wrote
 }
 
-// LoadChainState reads the cache at path (missing file = empty state).
+// LoadChainState reads the cache at path (missing file = empty state). A
+// file an older build wrote carries no time, but that build rewrote it on
+// every block, so its modification time says when the state was recorded.
 func LoadChainState(path string) *ChainState {
 	s := &ChainState{Path: path}
 	if data, err := os.ReadFile(path); err == nil {
 		json.Unmarshal(data, &s.v)
+		if s.v.At == 0 {
+			if fi, err := os.Stat(path); err == nil {
+				s.v.At = fi.ModTime().Unix()
+			}
+		}
 	}
 	return s
 }
@@ -67,12 +74,29 @@ func (s *ChainState) Set(frontier [32]byte, bal *big.Int, rep [32]byte, opened b
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	h := s.v.Height
-	if h > 0 {
-		h++
+	s.record(frontier, bal, rep, opened, 0, true)
+}
+
+// SetFromLedger records the state account_info reported, at the height it
+// reported (0 = it gave none, so the height is unknown again). Nothing was
+// published, so nothing is added: a ledger read never grows the chain.
+func (s *ChainState) SetFromLedger(frontier [32]byte, bal *big.Int, rep [32]byte, opened bool, height uint64) {
+	if s == nil {
+		return
 	}
-	s.v = chainStateFile{Frontier: strings.ToUpper(hex.EncodeToString(frontier[:])), Balance: bal.String(), Rep: strings.ToUpper(hex.EncodeToString(rep[:])), Opened: opened, Height: h, At: time.Now().Unix()}
+	s.record(frontier, bal, rep, opened, height, false)
+}
+
+// record writes the state; grow takes the height from the one it replaces,
+// one block longer when it is known.
+func (s *ChainState) record(frontier [32]byte, bal *big.Int, rep [32]byte, opened bool, height uint64, grow bool) {
+	s.mu.Lock()
+	if grow {
+		if height = s.v.Height; height > 0 {
+			height++
+		}
+	}
+	s.v = chainStateFile{Frontier: strings.ToUpper(hex.EncodeToString(frontier[:])), Balance: bal.String(), Rep: strings.ToUpper(hex.EncodeToString(rep[:])), Opened: opened, Height: height, At: time.Now().Unix()}
 	data, _ := json.MarshalIndent(s.v, "", "  ")
 	s.mu.Unlock()
 	if s.Path != "" {
@@ -81,8 +105,7 @@ func (s *ChainState) Set(frontier [32]byte, bal *big.Int, rep [32]byte, opened b
 }
 
 // SetHeight records the chain height the frontier is at, as account_info
-// reported it. It corrects the +1 Set assumed when the frontier came from
-// the ledger rather than from a block we published ourselves.
+// reported it.
 func (s *ChainState) SetHeight(h uint64) {
 	if s == nil || h == 0 {
 		return
@@ -106,8 +129,8 @@ func (s *ChainState) Height() uint64 {
 	return s.v.Height
 }
 
-// WrittenAt is when the state was recorded. The zero time means a cache
-// written by an older build that kept no timestamp.
+// WrittenAt is when the state was recorded (for a file an older build wrote,
+// its modification time). Zero means it is not known.
 func (s *ChainState) WrittenAt() int64 {
 	if s == nil {
 		return 0

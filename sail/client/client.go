@@ -1676,16 +1676,19 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 			if !heightKnown || ledgerHeight < h {
 				return false
 			}
-		} else if time.Since(time.Unix(st.WrittenAt(), 0)) < 10*time.Minute {
+		} else if at := st.WrittenAt(); at == 0 {
+			return false // no height and no time: nothing says it is stale
+		} else if age := time.Since(time.Unix(at, 0)); age < 10*time.Minute && age > -time.Minute {
 			// No height was ever recorded: a state written moments ago may
-			// be a block still travelling to the ledger, so it is kept.
+			// be a block still travelling to the ledger, so it is kept. A
+			// time in the future is a clock that cannot be trusted.
 			return false
 		}
 	}
-	st.Set(f, bal, rep, true)
-	if heightKnown {
-		st.SetHeight(ledgerHeight)
+	if !heightKnown {
+		ledgerHeight = 0
 	}
+	st.SetFromLedger(f, bal, rep, true, ledgerHeight)
 	return true
 }
 

@@ -156,39 +156,77 @@ func TestABlockStillTravellingToTheLedgerIsKept(t *testing.T) {
 	}
 }
 
-// A cache written by an older build keeps no height and no time. Fresh, it
-// may be a block still travelling, so it is trusted; grown old, it is
-// exactly the stale state the ledger read exists to correct.
+// A cache written by an older build keeps no height and no time, exactly
+// as the released build writes it. That build rewrote the file on every
+// block, so its modification time says how old it is. Fresh, it may be a
+// block still travelling, so it is trusted; grown old, it is exactly the
+// stale state the ledger read exists to correct.
 func TestALegacyCacheIsKeptFreshAndCorrectedWhenStale(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chain.json")
 	old := frontier32(t, someFrontier)
 	rep, _ := nano.AddressToPubkey(someRep)
-	base := fmt.Sprintf(`{"frontier": "%X", "balance": "749499999999999999999999999", "rep": "%X", "opened": true`, old, rep)
+	legacy := fmt.Sprintf(`{
+  "frontier": "%X",
+  "balance": "749499999999999999999999999",
+  "representative": "%X",
+  "opened": true
+}`, old, rep)
 	var newFront [32]byte
 	newFront[0], newFront[31] = 0xEE, 0xFF
 	ledger := nano.AccountInfo{Frontier: fmt.Sprintf("%X", newFront), Balance: "74749499999999999999999999994", Representative: someRep, BlockCount: "62"}
 
-	// Written moments ago by an older build (no height, but recent): kept.
-	fresh := base + fmt.Sprintf(`, "at": %d}`, time.Now().Unix())
-	if err := os.WriteFile(path, []byte(fresh), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if cacheAccountInfo(nano.LoadChainState(path), ledger) {
-		t.Fatal("a state just written was overwritten before its block could land")
-	}
-
-	// Long stale (the older build wrote it days ago): corrected.
-	if err := os.WriteFile(path, []byte(base+"}"), 0o600); err != nil {
+	// Written moments ago by the older build (no height, no time): kept.
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	st := nano.LoadChainState(path)
+	if cacheAccountInfo(st, ledger) {
+		t.Fatal("a state just written was overwritten before its block could land")
+	}
+	front, _, gotRep, _, cached := st.Get()
+	if !cached || front != old || gotRep != rep {
+		t.Fatalf("the fresh legacy state changed: frontier %X rep %X", front, gotRep)
+	}
+
+	// Written by the older build eleven minutes ago: corrected.
+	stale := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(path, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	st = nano.LoadChainState(path)
 	if !cacheAccountInfo(st, ledger) {
 		t.Fatal("a stale cache with no height was never corrected")
 	}
-	_, bal, _, _, cached := st.Get()
-	if !cached || bal.Cmp(rawBalance(t, "74749499999999999999999999994")) != 0 {
-		t.Fatalf("balance %s, want the ledger's", bal)
+	front, bal, gotRep, _, cached := st.Get()
+	if !cached || front != newFront || bal.Cmp(rawBalance(t, "74749499999999999999999999994")) != 0 {
+		t.Fatalf("frontier %X balance %s, want the ledger's", front, bal)
+	}
+	if gotRep != rep || st.Height() != 62 {
+		t.Fatalf("rep %X height %d, want the ledger's", gotRep, st.Height())
+	}
+}
+
+// A recorded time in the future is a clock that cannot be trusted, not a
+// state written moments ago: beyond a minute of skew it is treated as stale.
+func TestACacheStampedInTheFutureIsNotTrustedAsFresh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chain.json")
+	rep, _ := nano.AddressToPubkey(someRep)
+	var newFront [32]byte
+	newFront[0], newFront[31] = 0x12, 0x34
+	ledger := nano.AccountInfo{Frontier: fmt.Sprintf("%X", newFront), Balance: "5", Representative: someRep, BlockCount: "7"}
+	write := func(at time.Time) *nano.ChainState {
+		data := fmt.Sprintf(`{"frontier": "%s", "balance": "9", "representative": "%X", "opened": true, "at": %d}`, someFrontier, rep, at.Unix())
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return nano.LoadChainState(path)
+	}
+	if !cacheAccountInfo(write(time.Now().Add(time.Hour)), ledger) {
+		t.Fatal("a state stamped an hour ahead was trusted as fresh")
+	}
+	if cacheAccountInfo(write(time.Now().Add(20*time.Second)), ledger) {
+		t.Fatal("a state within the clock skew allowance was overwritten")
 	}
 }
 

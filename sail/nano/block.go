@@ -110,10 +110,8 @@ func (a *Account) frontier(ctx context.Context) ([32]byte, *big.Int, [32]byte, b
 	if err != nil {
 		return [32]byte{}, nil, [32]byte{}, false, err
 	}
-	a.State.Set(prev, bal, rep, true)
-	if n, err := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64); err == nil {
-		a.State.SetHeight(n)
-	}
+	n, _ := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64)
+	a.State.SetFromLedger(prev, bal, rep, true, n)
 	return prev, bal, rep, true, nil
 }
 

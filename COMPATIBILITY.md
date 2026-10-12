@@ -258,3 +258,10 @@ If the answer is no, the change does not ship, whatever it improves.
   another. Measured through a 420 ms relay: a lookup 2–3 s → 0.6–0.7 s, a
   30-lookup burst 2.7 s → 1.5 s. Client-side only; exits and resolvers see
   ordinary TCP DNS.
+- **2026-10-12, the chain-state file learns its height and age.** The
+  cached `chain-*.json` gains two optional fields, `height` (blocks in the
+  account chain at the cached frontier) and `at` (when it was written), so a
+  ledger read can tell a stale cache from a block still travelling. The
+  `representative` key is unchanged. An older build ignores the new fields
+  and reads the file as before; a file it wrote, with neither, is aged by its
+  modification time. Client-side only.
