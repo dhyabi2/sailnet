@@ -393,3 +393,25 @@ func TestRedeemedCodeDoesNotComeBackAfterAWrongGuess(t *testing.T) {
 		}
 	}
 }
+
+// `sailnode unpair` also voids a code still pending for that wallet: a code
+// minted for it just before the unpair cannot pair it again.
+func TestUnpairVoidsAPendingCodeForThatWallet(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone := testKey(t, 1), testKey(t, 2)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	code, _, err := NewPairingCodeFor(s.PairingFile, time.Now().Add(time.Hour), phone.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveOwner(s.OwnersFile, phone.Public); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tryPair(hex.EncodeToString(phone.Public[:]), code); err == nil {
+		t.Fatal("a code minted before the unpair must not pair the wallet")
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, phone.Public)); ok {
+		t.Fatal("the unpaired wallet must not be an owner")
+	}
+}

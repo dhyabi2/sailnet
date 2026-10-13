@@ -322,7 +322,25 @@ func readOwnersOrEmpty(path string) (map[[32]byte]int64, error) {
 // free access, open circuits included. It reports whether the wallet was
 // there. The relay takes the same lock for its own edits, so neither undoes
 // the other's.
+//
+// A pending code bound to that wallet (pairing.json beside owners.json) is
+// voided too, so a code minted just before the unpair cannot re-pair it.
+// Locks are taken pairing first, then owners, as tryPair takes them.
 func RemoveOwner(path string, pub [32]byte) (bool, error) {
+	pairing := filepath.Join(filepath.Dir(path), "pairing.json")
+	unlockPairing, err := lockFile(pairing)
+	if err != nil {
+		return false, err
+	}
+	defer unlockPairing()
+	if raw, err := os.ReadFile(pairing); err == nil {
+		var pf pairingFile
+		if json.Unmarshal(raw, &pf) == nil && pf.Wallet != "" && strings.EqualFold(pf.Wallet, hex.EncodeToString(pub[:])) {
+			if err := os.Remove(pairing); err != nil && !os.IsNotExist(err) {
+				return false, err
+			}
+		}
+	}
 	unlock, err := lockFile(path)
 	if err != nil {
 		return false, err
