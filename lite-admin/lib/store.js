@@ -90,14 +90,22 @@ async function admit(token, wallet) {
   return { rec };
 }
 
+// lookup re-reads a token's record (null: none).
+async function lookup(token) {
+  return readPath(path(hash(token)));
+}
+
 // setRelayUntil records the end time a pairing code was just minted with,
 // re-reading the record so a change the admin page made meanwhile is kept.
-async function setRelayUntil(token, until) {
+// It writes only while the record is still what the code was minted for
+// (same expiry and wallet, not switched off); it reports whether it did.
+async function setRelayUntil(token, until, wallet) {
   const h = hash(token);
   const rec = await readPath(path(h));
-  if (!rec) return;
+  if (!rec || rec.revoked || rec.expires !== until || rec.wallet !== wallet) return false;
   rec.relayUntil = until;
   await write(h, rec);
+  return true;
 }
 
 // update changes one token found by its id (admin page).
@@ -112,4 +120,4 @@ async function update(id, change) {
   return null;
 }
 
-module.exports = { create, all, admit, update, setRelayUntil };
+module.exports = { create, all, admit, update, lookup, setRelayUntil };

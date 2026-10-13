@@ -67,7 +67,15 @@ async function api(method, payload) {
 
 function cell(text, cls) { const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; return td; }
 function action(name, fn) { const b = document.createElement('button'); b.className = 'quiet'; b.textContent = name; b.onclick = () => run(fn); return b; }
-async function run(fn) { $('msg').textContent = ''; try { await fn(); await load(); } catch (e) { $('msg').textContent = e.message; } }
+// The list is reloaded even when the action failed: a 502 means the change
+// was saved but the relay did not confirm it, and the list should show that.
+async function run(fn) {
+  $('msg').textContent = '';
+  let err = null;
+  try { await fn(); } catch (e) { err = e; }
+  try { await load(); } catch (e) { err = err || e; }
+  if (err) $('msg').textContent = err.message;
+}
 
 async function load() {
   const { tokens } = await api('GET');

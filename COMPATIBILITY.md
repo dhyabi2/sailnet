@@ -290,7 +290,8 @@ If the answer is no, the change does not ship, whatever it improves.
     read-modify-write of them, by the relay or by `sailnode pair` / `unpair`,
     holds an exclusive lock on `owners.json.lock` / `pairing.json.lock` next
     to them, so `unpair` is never written back by a pairing or a sweep. The
-    lock files are harmless to an older build.
+    lock files are harmless to an older build. On Solaris, illumos, AIX and
+    Windows there is no flock and the lock is skipped.
   - *CLI.* `sailnode pair --until <unix> --wallet nano_…` (both optional;
     without them a code pairs any wallet for good, as before) also prints a
     fixed line, `Pairing bound: wallet=<nano_…|any> until=<unix|0>`.
@@ -298,28 +299,42 @@ If the answer is no, the change does not ship, whatever it improves.
   - *Old relay, new gate.* An old `sailnode pair` ignores the flags and would
     mint a code that pairs any wallet for good; it prints no `Pairing bound:`
     line, so the gate refuses it ("relay too old") and hands out no code.
-    Lite joins that need a code fail until the relay is upgraded; phones
-    already paired keep riding. An old relay has no `unpair` either, so
+    Lite joins that need a code (a phone not yet paired) fail until the
+    relay is upgraded. A phone already paired still connects: a re-pair the
+    gate tries on its own (below) that fails is logged and skipped, the join
+    answers without a code, `relayUntil` is left as it was, and the next
+    join tries again. An old relay has no `unpair` either, so
     switching a token off in lite-admin reports that the relay did not end
     the phone's access. **Upgrade the relay before the gate and the admin
     app.** lite-admin now needs the same `RELAY_SSH_*` variables as the gate.
   - *New relay, old gate.* The old gate runs `sailnode pair` with no flags and
     gets what it always got: a code that pairs any wallet for good.
   - *Gate token records* gain `relayUntil`, the end time the relay was last
-    given for the token's wallet. When it differs from the token's `expires`
-    (the operator extended the token, or switched it off and on again; a
-    record from before this has none), the next join mints a code even for a
-    paired phone, and the Lite app pairs again with it, so the relay learns
-    the new end time. A Lite app from before this ignores a code it did not
-    ask for, so after an extension the relay keeps the old end time for it
-    and drops it then; ship the app update with the gate. The app does not
-    yet notice the relay refusing its owner circuit by itself: a join that
-    finds the end times out of step is what makes it pair again. Switching a
-    token off, or freeing its phone, runs `sailnode unpair` for its wallet.
+    given for the token's wallet. The Lite app now sends `repair: true` with
+    its join, meaning it pairs again with any code it is handed. For such an
+    app, when `relayUntil` differs from the token's `expires` (the operator
+    extended the token, or switched it off and on again; a record from
+    before this has none), the join mints a code even though the phone is
+    paired, and the app pairs again with it, so the relay learns the new end
+    time. `relayUntil` is written only after that code was minted, and only
+    if the record still has the expiry and wallet it was minted for and is
+    not switched off; a token switched off or freed while the code was being
+    minted gets no code, and the gate runs `sailnode unpair` for the wallet.
+    A Lite app from before this sends no `repair`: it gets a code only when
+    it asks for one, as before, and `relayUntil` is not touched for it. Such
+    an app keeps the relay's old end time after an extension and is dropped
+    at that time until it is updated; the operator can also run `sailnode
+    unpair` for it by hand. The app does not yet notice the relay refusing
+    its owner circuit by itself: a join that finds the end times out of step
+    is what makes it pair again. Switching a token off, or freeing its
+    phone, runs `sailnode unpair` for its wallet; if the relay does not
+    confirm, lite-admin keeps the change, says so, and names the command to
+    run on the relay.
   - *Wallets paired before this* have no end time and stay owners for good.
     They are not migrated. For each existing Lite wallet, the operator runs
-    `sailnode unpair nano_…` on the relay (the app pairs again, with an end
-    time, on its next connect), or lets the phone re-pair.
+    `sailnode unpair nano_…` on the relay (a current Lite app pairs again,
+    with an end time, on its next connect; an older one only once it is
+    updated or asks for a code), or lets the phone re-pair.
   - *Rollback.* An older relay reads `owners.json` as a plain list and ignores
     `expires`: every end-timed owner becomes a permanent one. It also ignores
     the wallet binding of an active code. After downgrading, unpair Lite

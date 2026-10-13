@@ -159,7 +159,7 @@ it starts (`docker logs sailnet` shows it). On the command line the same is
 A code can be limited: `sailnode pair --until <unix time> --wallet nano_…`
 pairs only that wallet, and only until then — the relay stops carrying it
 free at that time, open circuits included (the Lite gate mints its codes this
-way). `sailnode unpair nano_…` ends a paired wallet's free access at once.
+way). `sailnode unpair nano_…` ends a paired wallet's free access within a minute.
 
 Then choose how your relays are used — Settings → **Network**:
 

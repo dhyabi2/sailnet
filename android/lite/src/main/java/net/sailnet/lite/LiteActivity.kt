@@ -104,7 +104,7 @@ class LiteActivity : AppCompatActivity() {
         // the phone until the circuit is built.
         worker.execute {
             val needCode = !Gate.paired(this) || token != Gate.token(this)
-            val r = Gate.post("join", JSONObject().put("token", token).put("wallet", Mobile.address(filesDir.absolutePath)).put("needCode", needCode))
+            val r = Gate.post("join", JSONObject().put("token", token).put("wallet", Mobile.address(filesDir.absolutePath)).put("needCode", needCode).put("repair", true))
             main.post {
                 asking = false
                 if (!r.ok) { note = r.error; return@post }

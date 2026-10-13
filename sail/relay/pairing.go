@@ -347,15 +347,20 @@ func RemoveOwner(path string, pub [32]byte) (bool, error) {
 // unpair` removed since the last sweep is not written back; if it cannot be
 // read, nothing is written.
 func (s *Server) addOwner(pub [32]byte, until int64) error {
-	s.ownersMu.Lock()
-	defer s.ownersMu.Unlock()
 	if s.OwnersFile == "" {
+		s.ownersMu.Lock()
+		defer s.ownersMu.Unlock()
 		if s.Owners == nil {
 			s.Owners = map[[32]byte]int64{}
 		}
 		s.Owners[pub] = until
 		return nil
 	}
+	// The file is locked, read and written before ownersMu is taken, so a
+	// slow disk or a held lock never stalls a CREATE (ownerCreate); the map
+	// is only swapped under it.
+	s.ownersFileMu.Lock()
+	defer s.ownersFileMu.Unlock()
 	unlock, err := lockFile(s.OwnersFile)
 	if err != nil {
 		return err
@@ -369,13 +374,26 @@ func (s *Server) addOwner(pub [32]byte, until int64) error {
 	if err := writeOwners(s.OwnersFile, m); err != nil {
 		return err
 	}
+	gone := s.swapOwners(m)
+	for _, p := range gone {
+		s.endOwnerGrant(p) // unpaired since the last sweep: the sweep will not see it go now
+	}
+	return nil
+}
+
+// swapOwners makes m the relay's owner list and returns the wallets it held
+// that m does not.
+func (s *Server) swapOwners(m map[[32]byte]int64) [][32]byte {
+	s.ownersMu.Lock()
+	defer s.ownersMu.Unlock()
+	var gone [][32]byte
 	for p := range s.Owners {
 		if _, ok := m[p]; !ok {
-			s.endOwnerGrant(p) // unpaired since the last sweep: the sweep will not see it go now
+			gone = append(gone, p)
 		}
 	}
 	s.Owners = m
-	return nil
+	return gone
 }
 
 // LoadOwners reads owners.json, if any, into s.Owners.
@@ -449,44 +467,47 @@ func (s *Server) endOwnerGrant(pub [32]byte) {
 func (s *Server) SweepOwners() {
 	var gone [][32]byte
 	now := time.Now().Unix()
-	s.ownersMu.Lock()
-	locked := false // owners.json is locked and was read: memory and file agree
-	unlock := func() {}
+	fromFile := false
 	if s.OwnersFile != "" {
-		if u, err := lockFile(s.OwnersFile); err != nil {
+		// File work first, outside ownersMu (see addOwner).
+		s.ownersFileMu.Lock()
+		defer s.ownersFileMu.Unlock()
+		if unlock, err := lockFile(s.OwnersFile); err != nil {
 			log.Printf("owners: %v", err)
 		} else {
-			unlock = u
+			defer unlock()
 			if m, err := readOwnersOrEmpty(s.OwnersFile); err != nil {
 				log.Printf("owners: %v", err)
 			} else {
-				for p := range s.Owners {
-					if _, ok := m[p]; !ok {
-						gone = append(gone, p)
+				fromFile = true
+				expired := false
+				for p, until := range m {
+					if until != 0 && now >= until {
+						delete(m, p)
+						expired = true
 					}
 				}
-				s.Owners = m
-				locked = true
+				if expired {
+					if err := writeOwners(s.OwnersFile, m); err != nil {
+						log.Printf("owners: %v", err)
+					}
+				}
+				gone = s.swapOwners(m) // expired and unpaired alike
 			}
 		}
 	}
-	expired := false
-	for p, until := range s.Owners {
-		if until != 0 && now >= until {
-			gone = append(gone, p)
-			delete(s.Owners, p)
-			expired = true
+	if !fromFile {
+		// No file, or it could not be read or locked: memory alone ends the
+		// expired ones and the file is left as it is.
+		s.ownersMu.Lock()
+		for p, until := range s.Owners {
+			if until != 0 && now >= until {
+				gone = append(gone, p)
+				delete(s.Owners, p)
+			}
 		}
+		s.ownersMu.Unlock()
 	}
-	// Written back only when the file was read under the lock just now;
-	// otherwise memory alone ends them and the file is left as it is.
-	if expired && locked {
-		if err := writeOwners(s.OwnersFile, s.Owners); err != nil {
-			log.Printf("owners: %v", err)
-		}
-	}
-	unlock()
-	s.ownersMu.Unlock()
 	for _, p := range gone {
 		s.endOwnerGrant(p)
 	}
