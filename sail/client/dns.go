@@ -22,12 +22,20 @@ func (m *manager) serveDNS(addr, upstream string) {
 		log.Printf("dns: cannot listen on %s: %v", addr, err)
 		return
 	}
+	m.mu.Lock()
+	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+		m.mu.Unlock()
+		pc.Close()
+		return
+	}
+	m.dnsPC = pc
+	m.mu.Unlock()
 	log.Printf("DNS through the circuit on %s (upstream %s at the exit)", addr, upstream)
 	buf := make([]byte, 4096)
 	for {
 		n, from, err := pc.ReadFrom(buf)
 		if err != nil {
-			continue
+			return // the socket closed (Shutdown): the resolver stops with the manager
 		}
 		q := append([]byte(nil), buf[:n]...)
 		go func() {
