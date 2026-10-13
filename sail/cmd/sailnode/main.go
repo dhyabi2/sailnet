@@ -42,7 +42,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|unpair|upgrade ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -77,11 +77,13 @@ func main() {
 	case "stats":
 		runStats(os.Args[2:]) // this relay's own /stats, from loopback: no ledger, no RPC
 	case "pair":
-		runPair() // print a one-time code that lets the app make this wallet an owner
+		runPair(os.Args[2:]) // print a one-time code that lets the app make this wallet an owner
+	case "unpair":
+		runUnpair(os.Args[2:]) // end a paired wallet's free access on this relay
 	case "pair-relay":
 		client.RunPairRelay(os.Args[2:]) // the other side: pair this wallet with a relay, by its code
 	default:
-		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|upgrade ...")
+		fmt.Println("usage: sailnode relay|client|relays|fetch|wallet|costs|stats|pair|unpair|upgrade ...")
 		os.Exit(2)
 	}
 }
@@ -364,6 +366,7 @@ func runRelay(args []string) {
 	if n := s.LoadOwners(); n > 0 {
 		log.Printf("owners: %d paired wallet(s) ride this relay free", n)
 	}
+	go s.RunOwners(time.Minute) // end times and `sailnode unpair` take effect here, open circuits included
 	if acct := *owner; acct != "" || *payout != "" {
 		if acct == "" {
 			acct = *payout
@@ -987,15 +990,53 @@ func runHome(key *nano.Key, nc *nano.Client, rate string, exit bool, harbourAcct
 
 // runPair mints a pairing code for the relay whose data directory this is
 // (SAIL_HOME, or the installed service's). The running relay reads the file
-// when the code arrives, so nothing is restarted.
-func runPair() {
+// when the code arrives, so nothing is restarted. --until bounds the free
+// access the code grants; the relay enforces it.
+func runPair(args []string) {
+	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	until := fs.Int64("until", 0, "Unix time at which the paired wallet stops riding this relay free (0: never)")
+	fs.Parse(args)
+	var end time.Time
+	if *until != 0 {
+		end = time.Unix(*until, 0)
+		if !end.After(time.Now()) {
+			log.Fatalf("pair: --until %d is not in the future", *until)
+		}
+	}
 	useServiceHome() // the installed service's data directory, not the shell user's
 	os.MkdirAll(client.DataDir(), 0o700)
-	code, exp, err := relay.NewPairingCode(filepath.Join(client.DataDir(), "pairing.json"))
+	code, exp, err := relay.NewPairingCodeUntil(filepath.Join(client.DataDir(), "pairing.json"), end)
 	if err != nil {
 		log.Fatalf("pair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
 	}
 	fmt.Printf("Pairing code:  %s %s\n", code[:3], code[3:])
 	fmt.Printf("Valid until %s, one use. In the Sailnet app: Settings → My relays → Add relay, pick this relay, enter the code.\n", exp.Format("15:04"))
-	fmt.Println("Once paired, that phone rides this relay free (Direct: 1 hop, nothing paid).")
+	if end.IsZero() {
+		fmt.Println("Once paired, that phone rides this relay free (Direct: 1 hop, nothing paid).")
+	} else {
+		fmt.Printf("Once paired, that phone rides this relay free until %s.\n", end.UTC().Format(time.RFC3339))
+	}
+}
+
+// runUnpair ends a paired wallet's free access: it leaves owners.json, and
+// the running relay cuts it off, open circuits included, within a minute.
+func runUnpair(args []string) {
+	if len(args) != 1 {
+		fmt.Println("usage: sailnode unpair nano_...")
+		os.Exit(2)
+	}
+	pub, err := nano.AddressToPubkey(args[0])
+	if err != nil {
+		log.Fatalf("unpair: %v", err)
+	}
+	useServiceHome()
+	ok, err := relay.RemoveOwner(filepath.Join(client.DataDir(), "owners.json"), pub)
+	if err != nil {
+		log.Fatalf("unpair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
+	}
+	if !ok {
+		fmt.Println("That wallet is not paired with this relay.")
+		return
+	}
+	fmt.Println("Unpaired. The relay stops carrying that wallet free within a minute.")
 }

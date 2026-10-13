@@ -50,7 +50,20 @@ func (s *Server) ownerCreate(tag string, tagB, clientPub [32]byte, sig []byte) b
 		return false
 	}
 	owner, ok := s.ownerFor(tagB) // --owner/--payout, or anyone paired since (pairing.go)
-	if !ok || !VerifyCreate(owner, clientPub, tagB, sig) {
+	if !ok {
+		// A wallet whose free access has ended (its end time passed, or it
+		// was unpaired) still has the bytes its owner tag was credited; the
+		// paid path would spend them. Empty them first.
+		if b, err := hex.DecodeString(s.Quota.Owner(tag)); err == nil && len(b) == 32 && s.Key != nil {
+			var w [32]byte
+			copy(w[:], b)
+			if tagB == OwnerTag(s.Key.Public, w) {
+				s.endOwnerGrant(w)
+			}
+		}
+		return false
+	}
+	if !VerifyCreate(owner, clientPub, tagB, sig) {
 		return false
 	}
 	if !s.Quota.Credit(tag, OwnerBytes, hex.EncodeToString(owner[:])) && s.Quota.Remaining(tag) < OwnerBytes/2 {

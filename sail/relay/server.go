@@ -58,10 +58,12 @@ type Server struct {
 	Owner [32]byte
 	// Owners are wallets paired later (pairing.go); OwnersFile persists them,
 	// PairingFile holds the salted hash of the code `sailnode pair` printed.
-	Owners      map[[32]byte]bool
+	// The value is when the owner's free access ends (Unix seconds), 0 never.
+	Owners      map[[32]byte]int64
 	OwnersFile  string
 	PairingFile string
 	ownersMu    sync.Mutex
+	ownersMod   time.Time // owners.json as last read, so an edit is noticed (SweepOwners)
 	// RepFriends and RepBonus: more bytes per XNO for payers whose account
 	// votes for one of these Nano representatives (repbonus.go). Off when
 	// either is empty.

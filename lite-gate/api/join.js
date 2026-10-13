@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
     const { rec, error } = await store.admit(token, wallet);
     if (error) return res.status(403).json({ ok: false, error });
     const out = { ok: true, account: process.env.RELAY_ACCOUNT, expires: rec.expires };
-    if (needCode) out.code = await pairingCode();
+    if (needCode) out.code = await pairingCode(rec.expires); // the relay ends the free access when the token does
     return res.status(200).json(out);
   } catch (e) {
     console.error('join:', e.message);
