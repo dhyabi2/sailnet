@@ -579,6 +579,34 @@ Windows shows SmartScreen's "Run anyway".
 Build locally: `cd sail && go build ./cmd/sailgui` (needs a C compiler; on
 Windows, MSYS2/mingw-w64).
 
+### macOS: install and open in one command
+
+```sh
+arch=$(uname -m | sed 's/arm64/AppleSilicon/; s/x86_64/Intel/')
+mnt=$(mktemp -d) \
+  && curl -fsSL -o /tmp/Sailnet.dmg "https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-macOS-$arch.dmg" \
+  && curl -fsSL "https://github.com/dhyabi2/sailnet/releases/latest/download/Sailnet-macOS-$arch.dmg.sha256" | sed 's#  .*#  /tmp/Sailnet.dmg#' | shasum -a 256 -c - \
+  && hdiutil attach -nobrowse -quiet -mountpoint "$mnt" /tmp/Sailnet.dmg \
+  && rm -rf /Applications/Sailnet.app \
+  && cp -R "$mnt/Sailnet.app" /Applications/ \
+  && hdiutil detach -quiet "$mnt" \
+  && open -a Sailnet
+```
+
+The download is checked against the `.sha256` published beside it before
+anything is replaced, the way the Linux one-command above checks the binary
+(macOS ships `shasum`, not `sha256sum`). The image is mounted on a fresh
+temporary directory, so a Sailnet volume left open from an earlier DMG
+cannot be copied by mistake. `rm -rf` makes the line a clean update as well
+as a first install, since `cp -R` over an existing `Sailnet.app` would leave
+files from the old version inside it. If Sailnet is already running, quit it
+first so the new version is the one that opens. Right-click → Open above
+applies to a download made in a browser; a download by `curl` carries no
+quarantine attribute, so Gatekeeper does not ask, and the app opens by
+itself with CONNECT as the button at the top. While connected it turns on
+the system SOCKS proxy, so browsers need no setup; Terminal and other apps
+that ignore system proxies can point at `socks5://127.0.0.1:1080`.
+
 ## Website and brand
 
 `website/` is the static site and its two small API functions (`/api/stats`,
