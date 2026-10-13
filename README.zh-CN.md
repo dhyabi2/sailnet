@@ -155,6 +155,11 @@ Pairing code:  483 920      (valid five minutes, one use)
 （`docker logs sailnet` 可以看到）。在命令行中，同样的操作是
 `sailnode pair-relay nano_<relay> 483920`，然后 `--mine nano_<relay>`。
 
+代码可以加限制：`sailnode pair --until <unix 时间> --wallet nano_…`
+只配对该钱包，并且只到那个时间为止——到时 relay 不再免费承载它，
+已开启的线路也一样（Lite 网关就是这样生成代码的）。
+`sailnode unpair nano_…` 在一分钟内结束一个已配对钱包的免费使用。
+
 然后选择如何使用你的 relay——设置 → **Network**：
 
 | 模式 | 路径 | 你支付 | 谁能看到你的地址 |

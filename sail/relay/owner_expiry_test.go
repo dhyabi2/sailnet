@@ -1,0 +1,417 @@
+package relay
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/dhyabi2/sail/nano"
+)
+
+// setPairingUntil stamps the active pairing code with the time the access it
+// was minted for ends, as `sailnode pair --until` writes it.
+func setPairingUntil(t *testing.T, path string, until int64) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["owner_expires"] = until
+	raw, _ = json.Marshal(m)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A wallet paired with a code that carries an end time rides free until
+// then and not a second longer: the relay refuses its owner tag, empties
+// what the tag was credited, and does so again after a restart. Owners
+// written without an end time stay owners.
+func TestPairedOwnerExpiresOnTheRelay(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone, old := testKey(t, 1), testKey(t, 2), testKey(t, 3)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+
+	// owners.json as relays before expiry wrote it: a plain list, permanent.
+	legacy, _ := json.Marshal(map[string][]string{"owners": {hex.EncodeToString(old.Public[:])}})
+	if err := os.WriteFile(s.OwnersFile, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s.LoadOwners() != 1 {
+		t.Fatal("a legacy owners.json must load")
+	}
+
+	code, _, err := NewPairingCode(s.PairingFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Unix() + 2
+	setPairingUntil(t, s.PairingFile, until)
+	if err := s.tryPair(hex.EncodeToString(phone.Public[:]), code); err != nil {
+		t.Fatalf("pairing: %v", err)
+	}
+	tag := OwnerTag(relayKey.Public, phone.Public)
+	clientPub, sig, tagHex := createFrom(phone, tag)
+	if !s.ownerCreate(tagHex, tag, clientPub, sig) {
+		t.Fatal("before its end time the paired wallet rides free")
+	}
+
+	for time.Now().Unix() < until {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if s.ownerCreate(tagHex, tag, clientPub, sig) {
+		t.Fatal("after its end time the paired wallet must not ride free")
+	}
+	if rem := s.Quota.Remaining(tagHex); rem > 0 {
+		t.Fatalf("an expired owner tag must keep nothing to spend, has %d bytes", rem)
+	}
+	again := ownerServer(t, relayKey, [32]byte{})
+	again.OwnersFile = s.OwnersFile
+	again.LoadOwners()
+	if _, ok := again.ownerFor(tag); ok {
+		t.Fatal("the end time must survive a restart")
+	}
+
+	oldTag := OwnerTag(relayKey.Public, old.Public)
+	oc, osig, oHex := createFrom(old, oldTag)
+	if !s.ownerCreate(oHex, oldTag, oc, osig) || !again.ownerCreate(oHex, oldTag, oc, osig) {
+		t.Fatal("an owner written without an end time stays an owner")
+	}
+}
+
+// Over the wire: once the end time passes, the owner tag no longer opens a
+// circuit on the relay, whatever the app does.
+func TestExpiredOwnerIsRefusedOverTheWire(t *testing.T) {
+	reg := &Registry{}
+	s, ri, _ := startRelay(t, reg, 5, true)
+	dir := t.TempDir()
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	phone := testKey(t, 69)
+	sign := func(pub, tg [32]byte) []byte { return SignCreate(phone, pub, tg) }
+
+	code, _, _ := NewPairingCode(s.PairingFile)
+	until := time.Now().Unix() + 3
+	setPairingUntil(t, s.PairingFile, until)
+	c, err := Build([]*RelayInfo{ri}, PairingTag(ri.Pub, phone.Public), 10*time.Second, PairingCreate(phone.Public), sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Pair(code, 5*time.Second); err != nil {
+		t.Fatalf("pairing failed: %v", err)
+	}
+	c.Close()
+	tag := OwnerTag(ri.Pub, phone.Public)
+	c2, err := Build([]*RelayInfo{ri}, tag, 10*time.Second, nil, sign)
+	if err != nil {
+		t.Fatalf("before its end time the paired phone rides free: %v", err)
+	}
+	c2.Close()
+
+	for time.Now().Unix() < until {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if c3, err := Build([]*RelayInfo{ri}, tag, 5*time.Second, nil, sign); err == nil {
+		c3.Close()
+		t.Fatal("after its end time the owner tag must be refused")
+	}
+}
+
+// `sailnode unpair` (RemoveOwner) and the relay's sweep end a wallet's free
+// access at once, a circuit already open on its owner tag included; an end
+// time passing does the same. Other owners keep riding.
+func TestUnpairedOrExpiredOwnerLosesOpenCircuits(t *testing.T) {
+	reg := &Registry{}
+	s, ri, _ := startRelay(t, reg, 5, true)
+	dir := t.TempDir()
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	pair := func(k int, until time.Time) func(pub, tg [32]byte) []byte {
+		phone := testKey(t, byte(k))
+		sign := func(pub, tg [32]byte) []byte { return SignCreate(phone, pub, tg) }
+		code, _, err := NewPairingCodeUntil(s.PairingFile, until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := Build([]*RelayInfo{ri}, PairingTag(ri.Pub, phone.Public), 10*time.Second, PairingCreate(phone.Public), sign)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Pair(code, 5*time.Second); err != nil {
+			t.Fatalf("pairing failed: %v", err)
+		}
+		c.Close()
+		return sign
+	}
+	open := func(k int, sign func(pub, tg [32]byte) []byte) *Circuit {
+		c, err := Build([]*RelayInfo{ri}, OwnerTag(ri.Pub, testKey(t, byte(k)).Public), 10*time.Second, nil, sign)
+		if err != nil {
+			t.Fatalf("owner %d should ride free: %v", k, err)
+		}
+		t.Cleanup(c.Close)
+		if c.Ping(5*time.Second) != -1 {
+			t.Fatalf("owner %d: ping failed", k)
+		}
+		return c
+	}
+	until := time.Now().Add(3 * time.Second)
+	signA, signB, signC := pair(70, time.Time{}), pair(71, time.Time{}), pair(72, until)
+	a, b, c := open(70, signA), open(71, signB), open(72, signC)
+
+	if ok, err := RemoveOwner(s.OwnersFile, testKey(t, 70).Public); !ok || err != nil {
+		t.Fatalf("RemoveOwner: %v %v", ok, err)
+	}
+	s.SweepOwners()
+	if a.Ping(3*time.Second) == -1 {
+		t.Fatal("an unpaired owner's open circuit must stop")
+	}
+	if b.Ping(5*time.Second) != -1 || c.Ping(5*time.Second) != -1 {
+		t.Fatal("the other owners keep riding")
+	}
+	if x, err := Build([]*RelayInfo{ri}, OwnerTag(ri.Pub, testKey(t, 70).Public), 5*time.Second, nil, signA); err == nil {
+		x.Close()
+		t.Fatal("an unpaired owner's tag must be refused")
+	}
+
+	for time.Now().Before(until) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	s.SweepOwners()
+	if c.Ping(3*time.Second) == -1 {
+		t.Fatal("an expired owner's open circuit must stop")
+	}
+	if b.Ping(5*time.Second) != -1 {
+		t.Fatal("a permanent owner keeps riding")
+	}
+	m, err := readOwners(s.OwnersFile)
+	if err != nil || len(m) != 1 {
+		t.Fatalf("owners.json should hold only the permanent owner left: %v %v", m, err)
+	}
+}
+
+// A code minted for one wallet (`sailnode pair --wallet`, as the Lite gate
+// mints them for the wallet its token is bound to) pairs that wallet and no
+// other: handing the six digits to another phone gets that phone nothing,
+// and does not use the code up.
+func TestPairingCodeBoundToAWalletPairsOnlyThatWallet(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone, stranger := testKey(t, 1), testKey(t, 2), testKey(t, 3)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	code, _, err := NewPairingCode(s.PairingFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(s.PairingFile)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	m["wallet"] = hex.EncodeToString(phone.Public[:])
+	raw, _ = json.Marshal(m)
+	os.WriteFile(s.PairingFile, raw, 0o600)
+
+	if err := s.tryPair(hex.EncodeToString(stranger.Public[:]), code); err == nil {
+		t.Fatal("a code minted for one wallet must not pair another")
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, stranger.Public)); ok {
+		t.Fatal("the other wallet must not be an owner")
+	}
+	if err := s.tryPair(hex.EncodeToString(phone.Public[:]), code); err != nil {
+		t.Fatalf("the wallet the code was minted for pairs: %v", err)
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, phone.Public)); !ok {
+		t.Fatal("the bound wallet should now be an owner")
+	}
+}
+
+// `sailnode unpair` edits owners.json from another process. A pairing
+// (addOwner) or a sweep that follows must not write the removed wallet
+// back, and the wallet's owner grant ends even when a pairing, not the
+// sweep, is the first to notice it is gone.
+func TestUnpairIsNotUndoneByALaterPairingOrSweep(t *testing.T) {
+	dir := t.TempDir()
+	relayKey := testKey(t, 1)
+	a, b, c := testKey(t, 80), testKey(t, 81), testKey(t, 82)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile = filepath.Join(dir, "owners.json")
+	for _, k := range []*nano.Key{a, b} {
+		if err := s.addOwner(k.Public, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tagA := OwnerTag(relayKey.Public, a.Public)
+	clientPub, sig, tagHexA := createFrom(a, tagA)
+	if !s.ownerCreate(tagHexA, tagA, clientPub, sig) {
+		t.Fatal("a paired wallet rides free")
+	}
+
+	if ok, err := RemoveOwner(s.OwnersFile, a.Public); !ok || err != nil { // the CLI, between two sweeps
+		t.Fatalf("RemoveOwner: %v %v", ok, err)
+	}
+	if err := s.addOwner(c.Public, time.Now().Unix()+3600); err != nil {
+		t.Fatal(err)
+	}
+	s.SweepOwners()
+	m, err := readOwners(s.OwnersFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m[a.Public]; ok || len(m) != 2 {
+		t.Fatalf("the unpaired wallet came back: %v", m)
+	}
+	if _, ok := s.ownerFor(tagA); ok {
+		t.Fatal("the unpaired wallet must not be an owner")
+	}
+	if s.Quota.Remaining(tagHexA) > 0 {
+		t.Fatal("the unpaired wallet's owner grant must be emptied")
+	}
+	if s.ownerCreate(tagHexA, tagA, clientPub, sig) {
+		t.Fatal("the unpaired wallet's owner tag must be refused")
+	}
+}
+
+// The same, with the CLI, pairings and sweeps all at once: every wallet
+// unpaired stays unpaired, every wallet paired stays paired.
+func TestConcurrentUnpairPairAndSweepKeepEveryChange(t *testing.T) {
+	dir := t.TempDir()
+	relayKey := testKey(t, 1)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile = filepath.Join(dir, "owners.json")
+	var old, fresh [][32]byte
+	for i := 0; i < 20; i++ {
+		old = append(old, testKey(t, byte(100+i)).Public)
+		fresh = append(fresh, testKey(t, byte(140+i)).Public)
+	}
+	for _, p := range old {
+		if err := s.addOwner(p, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for i := range old {
+		wg.Add(3)
+		go func(p [32]byte) {
+			defer wg.Done()
+			if ok, err := RemoveOwner(s.OwnersFile, p); !ok || err != nil {
+				t.Errorf("RemoveOwner: %v %v", ok, err)
+			}
+		}(old[i])
+		go func(p [32]byte) {
+			defer wg.Done()
+			if err := s.addOwner(p, 0); err != nil {
+				t.Errorf("addOwner: %v", err)
+			}
+		}(fresh[i])
+		go func() { defer wg.Done(); s.SweepOwners() }()
+	}
+	wg.Wait()
+	s.SweepOwners()
+	m, err := readOwners(s.OwnersFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range old {
+		if _, ok := m[p]; ok {
+			t.Fatal("an unpaired wallet was written back")
+		}
+	}
+	for _, p := range fresh {
+		if _, ok := m[p]; !ok {
+			t.Fatal("a paired wallet was lost")
+		}
+	}
+	if len(s.Owners) != len(fresh) {
+		t.Fatalf("the relay holds %d owners, want %d", len(s.Owners), len(fresh))
+	}
+}
+
+// A code is one use: a wrong guess racing the right one must not write the
+// redeemed code back (it would then pair a second time), and one arriving
+// after it finds no code at all.
+func TestRedeemedCodeDoesNotComeBackAfterAWrongGuess(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone := testKey(t, 1), testKey(t, 2)
+	phoneHex := hex.EncodeToString(phone.Public[:])
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+
+	code, _, err := NewPairingCode(s.PairingFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := "000000"
+	if code == wrong {
+		wrong = "111111"
+	}
+	if err := s.tryPair(phoneHex, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tryPair(phoneHex, wrong); err == nil || !strings.Contains(err.Error(), "no pairing code") {
+		t.Fatalf("a guess after the code was used: %v", err)
+	}
+	if _, err := os.Stat(s.PairingFile); !os.IsNotExist(err) {
+		t.Fatal("a wrong guess must not bring a redeemed code back")
+	}
+
+	for round := 0; round < 20; round++ {
+		code, _, err := NewPairingCode(s.PairingFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrong := "000000"
+		if code == wrong {
+			wrong = "111111"
+		}
+		var wg sync.WaitGroup
+		var paired atomic.Int32
+		for i := 0; i < 3; i++ {
+			wg.Add(1)
+			go func(c string) {
+				defer wg.Done()
+				if s.tryPair(phoneHex, c) == nil {
+					paired.Add(1)
+				}
+			}(map[bool]string{true: code, false: wrong}[i == 0])
+		}
+		wg.Wait()
+		if paired.Load() != 1 {
+			t.Fatalf("round %d: the right code paired %d times", round, paired.Load())
+		}
+		if _, err := os.Stat(s.PairingFile); !os.IsNotExist(err) {
+			t.Fatalf("round %d: the redeemed code is back on disk", round)
+		}
+		if err := s.tryPair(phoneHex, code); err == nil {
+			t.Fatalf("round %d: the redeemed code paired again", round)
+		}
+	}
+}
+
+// `sailnode unpair` also voids a code still pending for that wallet: a code
+// minted for it just before the unpair cannot pair it again.
+func TestUnpairVoidsAPendingCodeForThatWallet(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone := testKey(t, 1), testKey(t, 2)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	code, _, err := NewPairingCodeFor(s.PairingFile, time.Now().Add(time.Hour), phone.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RemoveOwner(s.OwnersFile, phone.Public); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tryPair(hex.EncodeToString(phone.Public[:]), code); err == nil {
+		t.Fatal("a code minted before the unpair must not pair the wallet")
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, phone.Public)); ok {
+		t.Fatal("the unpaired wallet must not be an owner")
+	}
+}

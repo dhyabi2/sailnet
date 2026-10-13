@@ -156,6 +156,11 @@ paid as an owner. A relay that has no owner yet prints a code by itself when
 it starts (`docker logs sailnet` shows it). On the command line the same is
 `sailnode pair-relay nano_<relay> 483920`, then `--mine nano_<relay>`.
 
+A code can be limited: `sailnode pair --until <unix time> --wallet nano_…`
+pairs only that wallet, and only until then — the relay stops carrying it
+free at that time, open circuits included (the Lite gate mints its codes this
+way). `sailnode unpair nano_…` ends a paired wallet's free access within a minute.
+
 Then choose how your relays are used — Settings → **Network**:
 
 | mode | path | you pay | who sees your address |

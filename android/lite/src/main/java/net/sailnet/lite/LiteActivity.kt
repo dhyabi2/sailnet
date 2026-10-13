@@ -104,11 +104,13 @@ class LiteActivity : AppCompatActivity() {
         // the phone until the circuit is built.
         worker.execute {
             val needCode = !Gate.paired(this) || token != Gate.token(this)
-            val r = Gate.post("join", JSONObject().put("token", token).put("wallet", Mobile.address(filesDir.absolutePath)).put("needCode", needCode))
+            val r = Gate.post("join", JSONObject().put("token", token).put("wallet", Mobile.address(filesDir.absolutePath)).put("needCode", needCode).put("repair", true))
             main.post {
                 asking = false
                 if (!r.ok) { note = r.error; return@post }
-                if (needCode) Gate.setPaired(this, false)
+                // The gate also hands a paired phone a code when the relay's end
+                // time for it is out of date (the token was extended): pair again.
+                if (needCode || r.json.optString("code").isNotEmpty()) Gate.setPaired(this, false)
                 Gate.remember(this, token, r.json.optString("account"), r.json.optLong("expires"))
                 LiteVpnService.pendingCode = r.json.optString("code")
                 val ask = VpnService.prepare(this)
