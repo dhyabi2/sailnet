@@ -155,6 +155,12 @@ func (c *Client) Call(ctx context.Context, body map[string]any, out any) error {
 		}
 		return nil
 	}
+	// Every endpoint was in cooldown (a 429 benches one): nothing was
+	// tried, so lastErr is nil. Saying so beats a nil-pointer panic in
+	// the caller — and the caller retries.
+	if lastErr == nil {
+		lastErr = errors.New("every Nano RPC endpoint is cooling down")
+	}
 	return fmt.Errorf("ledger unreachable: %s", stripURL(lastErr.Error()))
 }
 
