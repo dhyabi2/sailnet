@@ -148,6 +148,14 @@ func (m *manager) ServeStatus(addr string) {
 		log.Printf("status: %v", err)
 		return
 	}
+	m.mu.Lock()
+	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+		m.mu.Unlock()
+		ln.Close()
+		return
+	}
+	m.statusLn = ln
+	m.mu.Unlock()
 	log.Printf("status endpoint on http://%s/status", addr)
 	http.Serve(ln, mux)
 }
