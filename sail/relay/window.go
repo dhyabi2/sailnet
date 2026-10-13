@@ -50,6 +50,24 @@ func (c *cellQueue) pop() (d []byte, credit uint32) {
 	if len(c.q) == 0 {
 		return nil, 0
 	}
+	return c.take()
+}
+
+// tryPop takes the next cell if one is queued, without waiting. It owes
+// credit exactly as pop does: a reader that empties the window through
+// tryPop and then waits in pop must already have handed it back, or the
+// peer has nothing left to send and the wait never ends.
+func (c *cellQueue) tryPop() (d []byte, credit uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.q) == 0 {
+		return nil, 0
+	}
+	return c.take()
+}
+
+// take removes the head cell and settles the credit; c.mu is held.
+func (c *cellQueue) take() (d []byte, credit uint32) {
 	d = c.q[0]
 	c.q[0] = nil
 	c.q = c.q[1:]
@@ -68,19 +86,6 @@ func (c *cellQueue) pop() (d []byte, credit uint32) {
 		c.drained = false
 	}
 	return d, credit
-}
-
-func (c *cellQueue) tryPop() []byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.q) == 0 {
-		return nil
-	}
-	d := c.q[0]
-	c.q[0] = nil
-	c.q = c.q[1:]
-	c.consumed++
-	return d
 }
 
 func (c *cellQueue) len() int {

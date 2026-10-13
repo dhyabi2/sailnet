@@ -743,29 +743,32 @@ func (s *Stream) Read(p []byte) (int, error) {
 	if !s.flow {
 		return s.pr.Read(p)
 	}
+	var owed uint32
 	if len(s.rbuf) == 0 {
 		d, credit := s.rx.pop() // blocks; nil once the stream ended and the queue is empty
 		if d == nil {
 			return 0, io.EOF
 		}
 		s.rbuf = d
-		if credit > 0 {
-			var b [4]byte
-			binary.BigEndian.PutUint32(b[:], credit)
-			s.c.send(wire.CmdCredit, s.id, b[:])
-		}
+		owed += credit
 	}
 	n := copy(p, s.rbuf)
 	s.rbuf = s.rbuf[n:]
 	// Fill the rest of p from cells already queued: fewer, larger reads.
 	for len(s.rbuf) == 0 && n < len(p) {
-		d := s.rx.tryPop()
+		d, credit := s.rx.tryPop()
 		if d == nil {
 			break
 		}
+		owed += credit
 		k := copy(p[n:], d)
 		s.rbuf = d[k:]
 		n += k
+	}
+	if owed > 0 { // window taken by this read goes back now, not when the next cell arrives
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], owed)
+		s.c.send(wire.CmdCredit, s.id, b[:])
 	}
 	return n, nil
 }
