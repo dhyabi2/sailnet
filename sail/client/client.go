@@ -189,17 +189,18 @@ type manager struct {
 	fundsWatch      func()    // stops the confirmation watch while waiting for funds
 	faucetAt        time.Time // last faucet claim (one per day)
 	polling         bool      // startFundsPoll is running
-	// dnsPC and statusLn are the servers this manager started (ServeDNS,
+	// dnsPC and statusSrv are the servers this manager started (ServeDNS,
 	// ServeStatus). Shutdown closes them: a disconnected app must leave no
 	// port behind, or the next connect collides with a dead manager's
 	// servers and its status endpoint keeps answering "running" for a
-	// tunnel that no longer exists.
-	dnsPC    net.PacketConn
-	statusLn net.Listener
-	stopped  bool         // Shutdown ran: servers started after it close at once
-	mu2      sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
-	effCap   uint32       // the price cap the last path selection actually used
-	stage    atomic.Value // what the client is doing right now, for screens
+	// tunnel that no longer exists. The status server is closed whole, not
+	// just its listener, so a kept-alive connection is cut too.
+	dnsPC     net.PacketConn
+	statusSrv *http.Server
+	stopped   bool         // Shutdown ran: servers started after it close at once, no circuit is built
+	mu2       sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
+	effCap    uint32       // the price cap the last path selection actually used
+	stage     atomic.Value // what the client is doing right now, for screens
 	// paused: the phone's screen is off. No circuit is built, kept alive,
 	// rotated or paid for; flows fail at once. The anchor tag is kept.
 	paused atomic.Bool
@@ -771,6 +772,9 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopped { // a shut-down manager builds and pays for nothing
+		return nil, errStopped
+	}
 	if m.paused.Load() { // paused while this caller waited for the lock
 		return nil, errPaused
 	}
@@ -1590,25 +1594,29 @@ func (m *manager) Shutdown() {
 	c := m.cur
 	m.cur = nil
 	m.stopped = true
-	pc, ln := m.dnsPC, m.statusLn
-	m.dnsPC, m.statusLn = nil, nil
+	pc, srv := m.dnsPC, m.statusSrv
+	m.dnsPC, m.statusSrv = nil, nil
 	m.mu.Unlock()
+	// The servers go first: they are what the next connect needs free, and
+	// closing a circuit can take a while.
+	if pc != nil {
+		pc.Close() // the DNS resolver stops with the manager, not with the process
+	}
+	if srv != nil {
+		srv.Close() // so does the status endpoint, kept-alive connections included
+	}
 	if c != nil {
 		c.Close()
 	}
 	if live := m.live.Load(); live != nil {
 		live.Close()
 	}
-	if pc != nil {
-		pc.Close() // the DNS resolver stops with the manager, not with the process
-	}
-	if ln != nil {
-		ln.Close() // so does the status endpoint: after a disconnect it must not answer at all
-	}
 	m.setStage("")
 }
 
 var errPaused = errors("paused")
+
+var errStopped = errors("stopped")
 
 // Pause closes the circuit and builds none until Resume: the screen is
 // off, so nothing is pinged, rotated, topped up or paid for, and flows

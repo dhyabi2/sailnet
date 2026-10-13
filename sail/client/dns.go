@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/binary"
+	stdErrors "errors"
 	"io"
 	"log"
 	"net"
@@ -34,8 +35,14 @@ func (m *manager) serveDNS(addr, upstream string) {
 	buf := make([]byte, 4096)
 	for {
 		n, from, err := pc.ReadFrom(buf)
-		if err != nil {
+		if stdErrors.Is(err, net.ErrClosed) {
 			return // the socket closed (Shutdown): the resolver stops with the manager
+		}
+		if err != nil {
+			// One bad datagram (an oversized query is an error on Windows)
+			// must not kill the resolver.
+			log.Printf("dns: read: %v", err)
+			continue
 		}
 		q := append([]byte(nil), buf[:n]...)
 		go func() {
