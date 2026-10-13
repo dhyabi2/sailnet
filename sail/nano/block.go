@@ -122,7 +122,8 @@ func (a *Account) frontier(ctx context.Context) ([32]byte, *big.Int, [32]byte, b
 }
 
 // work obtains PoW for root: the cache first (filled ahead of time by
-// PrecomputeWork), then the RPC, then the CPU as a last resort.
+// PrecomputeWork), then the RPC, then the CPU as a last resort: one core,
+// one search at a time process-wide (cpuWorkSlot), ending with ctx.
 func (a *Account) work(ctx context.Context, root [32]byte, threshold uint64) (string, error) {
 	if w, ok := CachedWork(root, threshold); ok {
 		return w, nil
@@ -135,7 +136,18 @@ func (a *Account) work(ctx context.Context, root [32]byte, threshold uint64) (st
 	if !AllowCPUWork && !a.AllowCPU {
 		return "", errors.New("proof-of-work service unavailable; retry later")
 	}
-	w := GenerateWorkCPU(root, threshold)
+	if err := takeCPUSlot(ctx); err != nil {
+		return "", err
+	}
+	defer func() { <-cpuWorkSlot }()
+	// Another send may have found work for this root while we queued.
+	if w, ok := CachedWork(root, threshold); ok {
+		return w, nil
+	}
+	w, err := searchWork(ctx, root, threshold)
+	if err != nil {
+		return "", err
+	}
 	RememberWork(root, w)
 	return w, nil
 }
