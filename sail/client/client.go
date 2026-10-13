@@ -205,10 +205,14 @@ type manager struct {
 	// (drainCircuit). Shutdown closes them too, so none of them keeps
 	// alive, tops up or pays after the manager is gone.
 	draining map[*relay.Circuit]struct{}
-	stopped  bool         // Shutdown ran: servers started after it close at once, no circuit is built
-	mu2      sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
-	effCap   uint32       // the price cap the last path selection actually used
-	stage    atomic.Value // what the client is doing right now, for screens
+	// stopped: Shutdown ran; servers started after it close at once, no
+	// circuit is built, nothing is paid. Stored under m.mu (so checks made
+	// under m.mu keep their meaning) but atomic, so the top-up path and the
+	// DNS loop read it without waiting for a build that holds m.mu.
+	stopped atomic.Bool
+	mu2     sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
+	effCap  uint32       // the price cap the last path selection actually used
+	stage   atomic.Value // what the client is doing right now, for screens
 	// paused: the phone's screen is off. No circuit is built, kept alive,
 	// rotated or paid for; flows fail at once. The anchor tag is kept.
 	paused atomic.Bool
@@ -780,7 +784,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped { // a shut-down manager builds and pays for nothing
+	if m.stopped.Load() { // a shut-down manager builds and pays for nothing
 		return nil, errStopped
 	}
 	if m.paused.Load() { // paused while this caller waited for the lock
@@ -1029,11 +1033,10 @@ func (m *manager) drainCircuit(c *relay.Circuit) {
 	m.mu.Unlock()
 }
 
-// isStopped reports whether Shutdown has run.
+// isStopped reports whether Shutdown has run. Lock-free: circuit() holds
+// m.mu across a whole build, and a top-up must not wait for that.
 func (m *manager) isStopped() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.stopped
+	return m.stopped.Load()
 }
 
 func (m *manager) keepalive(c *relay.Circuit) {
@@ -1151,7 +1154,11 @@ func (m *manager) topUp(c *relay.Circuit) (int64, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if m.isStopped() { // checked again right before paying: Shutdown may have run meanwhile
+	// Checked again right before paying: Shutdown may have run meanwhile.
+	// A top-up already past this check may still complete once; that is
+	// accepted, since closing it would mean holding a lock across a
+	// network call.
+	if m.isStopped() {
 		return 0, errStopped
 	}
 	acct := &nano.Account{Key: m.key, Client: m.nc, State: chainState(m.key)}
@@ -1621,7 +1628,7 @@ func (m *manager) Shutdown() {
 	m.mu.Lock()
 	c := m.cur
 	m.cur = nil
-	m.stopped = true
+	m.stopped.Store(true) // under m.mu: see the field
 	pc, srv, ln := m.dnsPC, m.statusSrv, m.statusLn
 	m.dnsPC, m.statusSrv, m.statusLn = nil, nil, nil
 	var draining []*relay.Circuit

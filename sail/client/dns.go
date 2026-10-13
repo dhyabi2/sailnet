@@ -24,7 +24,7 @@ func (m *manager) serveDNS(addr, upstream string) {
 		return
 	}
 	m.mu.Lock()
-	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+	if m.stopped.Load() { // Shutdown ran while this was binding: close at once, own nothing
 		m.mu.Unlock()
 		pc.Close()
 		return

@@ -135,7 +135,7 @@ func (m *manager) ServeStatus(addr string) {
 			return
 		}
 		m.mu.Lock()
-		if m.stopped {
+		if m.stopped.Load() {
 			m.mu.Unlock()
 			http.Error(w, "stopped", http.StatusServiceUnavailable)
 			return
@@ -154,7 +154,7 @@ func (m *manager) ServeStatus(addr string) {
 		return
 	}
 	m.mu.Lock()
-	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+	if m.stopped.Load() { // Shutdown ran while this was binding: close at once, own nothing
 		m.mu.Unlock()
 		ln.Close()
 		return
