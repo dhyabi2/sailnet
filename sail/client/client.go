@@ -171,6 +171,7 @@ type manager struct {
 	censored      bool
 	skip          map[string]bool // hops that failed during the current build; not retried in the same build
 	lastFail      time.Time       // when the last build gave up; callers back off for a few seconds
+	drySkip       string          // a relay of a pool that ran dry (quotaKilled): kept out of the next build only
 	rotate        time.Duration
 	anchors       map[string][]time.Time // recent anchor payments per entry: an entry that keeps claiming "quota exhausted" is not paid again
 	anchorOffline bool                   // the wallet could not publish the anchor itself; the entry relay will
@@ -779,7 +780,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	if time.Since(m.lastFail) < 5*time.Second {
 		return nil, errors("circuit: retrying shortly")
 	}
-	m.skip = map[string]bool{}
+	m.skip = m.freshSkip()
 	for attempt := 0; attempt < 4; attempt++ {
 		path := m.retryPath
 		m.retryPath = nil
@@ -913,8 +914,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		log.Printf("circuit built in %s: %s%s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "), mode)
 		m.setStage("Connected")
 		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
-		c.OnQuota = func(q int64) { m.quotaLow(c, q) }
-		c.OnQuotaKilled = func(hop int) { m.quotaKilled(c, hop) }
+		c.SetQuotaHandlers(func(q int64) { m.quotaLow(c, q) }, func(hop int) { m.quotaKilled(c, hop) })
 		m.cur = c
 		m.rotate = 0 // fresh lifetime for the new circuit
 		m.live.Store(c)
@@ -930,17 +930,42 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 // pool it was prepaid from ran dry. The relay that reported it is telling the
 // truth about its payer: the money that should have been there is the payer's
 // responsibility, so the payer's score drops (and drifts back within
-// minutes), and the next build pays the same five-second fuse a failed build
-// does — otherwise a broken payer meets every new stream with a fresh circuit
-// that dies on its first byte, forever, and the app spends its time
-// connecting rather than connected.
+// minutes), the next build leaves that pool out of the path, and it pays the
+// same five-second fuse a failed build does — otherwise a broken payer meets
+// every new stream with a fresh circuit that dies on its first byte, forever,
+// and the app spends its time connecting rather than connected.
+//
+// Hop 0 is the entry saying our own anchor ran out, and an out-of-range hop
+// names nobody: neither is a relay's pool, so neither waits — the rebuild
+// pays again at once, as it always has.
 func (m *manager) quotaKilled(c *relay.Circuit, hop int) {
+	if hop <= 0 || hop >= len(c.Path) {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if hop > 0 && hop < len(c.Path) {
-		m.mark(c.Path[hop-1].Account, false)
+	payer := c.Path[hop-1].Account
+	m.mark(payer, false)
+	// The dry pool is payer → reporter. Route around the payer; when the
+	// payer is our entry, route around the reporter instead, since a new
+	// entry would mean a new anchor, paid for nothing.
+	if hop-1 == 0 {
+		m.drySkip = c.Path[hop].Account
+	} else {
+		m.drySkip = payer
 	}
 	m.lastFail = time.Now()
+}
+
+// freshSkip starts a build's skip set: empty, but for the relay of a pool
+// that just ran dry (quotaKilled), which this one build leaves out.
+func (m *manager) freshSkip() map[string]bool {
+	skip := map[string]bool{}
+	if m.drySkip != "" {
+		skip[m.drySkip] = true
+		m.drySkip = ""
+	}
+	return skip
 }
 
 // drainCircuit closes c once its streams are done (or after a long grace,

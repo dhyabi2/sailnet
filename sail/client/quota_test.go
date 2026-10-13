@@ -31,15 +31,36 @@ func TestQuotaExhaustionMarksThePayerAndBacksOff(t *testing.T) {
 	if _, err := m.circuit(); err == nil || !strings.Contains(err.Error(), "retrying shortly") {
 		t.Fatalf("want the backoff error, got %v", err)
 	}
-	// The entry reporting (hop 0) and out-of-range hops mark nobody: the
-	// entry's own failure handling lives where the build fails.
+	// The next build leaves the dry pool's payer out of the path, once.
+	if skip := m.freshSkip(); !skip["nano_real2"] || len(skip) != 1 {
+		t.Fatalf("the next build should skip the payer, got %v", skip)
+	}
+	if skip := m.freshSkip(); len(skip) != 0 {
+		t.Fatalf("the skip is for one build only, got %v", skip)
+	}
+	// When the payer is our entry, the reporter is routed around instead:
+	// a new entry would mean a new anchor.
+	m3 := mineManager(t, nil)
+	m3.quotaKilled(&relay.Circuit{Path: path}, 1)
+	if skip := m3.freshSkip(); !skip["nano_real2"] || skip["nano_real1"] {
+		t.Fatalf("an entry-paid pool should skip the reporting middle, got %v", skip)
+	}
+	// The entry reporting (hop 0: our own anchor ran out) and out-of-range
+	// hops mark nobody and set no backoff: the rebuild pays again at once.
 	m2 := mineManager(t, nil)
 	c2 := &relay.Circuit{Path: path}
 	m2.quotaKilled(c2, 0)
 	m2.quotaKilled(c2, 7)
+	m2.quotaKilled(c2, -1)
 	for i := 0; i < 3; i++ {
 		if s := m2.scoreOf(path[i].Account); s != 0.7 {
 			t.Fatalf("hop 0 and out-of-range reports mark nobody: %s score %v", path[i].Account, s)
 		}
+	}
+	if !m2.lastFail.IsZero() {
+		t.Fatal("hop 0 and out-of-range reports must not make the next build wait (the five-second fuse)")
+	}
+	if skip := m2.freshSkip(); len(skip) != 0 {
+		t.Fatalf("hop 0 and out-of-range reports skip nobody, got %v", skip)
 	}
 }

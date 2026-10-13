@@ -41,13 +41,25 @@ type Circuit struct {
 	relink   sync.Mutex // held while the entry link is being replaced
 	relinkC  *sync.Cond
 	linking  bool
-	OnQuota  func(int64) // called when the entry pushes a low-quota notice
-	// OnQuotaKilled is called when a hop reports the circuit's prepaid pool
-	// as exhausted — the payer of that hop owes the network a refill. The
-	// hop index is the relay that reported it; its payer is hop-1.
-	OnQuotaKilled func(hop int)
+	// onQuota is called when the entry pushes a low-quota notice;
+	// onQuotaKilled when a hop reports the circuit's prepaid pool as
+	// exhausted — the payer of that hop owes the network a refill (the hop
+	// index is the relay that reported it; its payer is hop-1). Both are set
+	// with SetQuotaHandlers and read under mu: the read loop is already
+	// running when the builder hands the circuit to its owner.
+	onQuota       func(int64)
+	onQuotaKilled func(hop int)
 	recv          atomic.Int64 // unix nanos of the last cell received
 	pingErr       atomic.Value
+}
+
+// SetQuotaHandlers sets what the circuit calls on a low-quota notice from
+// the entry and on a hop reporting its pool exhausted. Safe to call while
+// the read loop runs.
+func (c *Circuit) SetQuotaHandlers(low func(int64), killed func(hop int)) {
+	c.mu.Lock()
+	c.onQuota, c.onQuotaKilled = low, killed
+	c.mu.Unlock()
 }
 
 // BytesMoved is the number of bytes received on the circuit so far.
@@ -576,9 +588,10 @@ func (c *Circuit) readLoop() {
 				q := int64(binary.BigEndian.Uint64(data))
 				c.mu.Lock()
 				c.Quota = q
+				onQuota := c.onQuota
 				c.mu.Unlock()
-				if sid == wire.QuotaLowStream && hop == 0 && c.OnQuota != nil {
-					go c.OnQuota(q) // unsolicited: the entry says the quota is running low
+				if sid == wire.QuotaLowStream && hop == 0 && onQuota != nil {
+					go onQuota(q) // unsolicited: the entry says the quota is running low
 				}
 			}
 			select {
@@ -591,8 +604,11 @@ func (c *Circuit) readLoop() {
 				// manager rebuilds at once, instead of streams failing
 				// silently until the next keepalive notices.
 				log.Printf("circuit: hop %d reports %s; rebuilding", hop, data)
-				if c.OnQuotaKilled != nil {
-					c.OnQuotaKilled(hop)
+				c.mu.Lock()
+				onKilled := c.onQuotaKilled
+				c.mu.Unlock()
+				if onKilled != nil {
+					go onKilled(hop) // off the read loop: the handler may wait on a whole circuit build
 				}
 				go c.Close()
 			}
