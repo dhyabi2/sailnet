@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"testing"
+
+	"github.com/dhyabi2/sail/relay"
 	"time"
 )
 
@@ -167,4 +169,68 @@ func serversReady(m *manager) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.statusSrv != nil && m.dnsPC != nil
+}
+
+// Shutdown can run in the instant between ServeStatus publishing its server
+// and Serve taking the listener. Closing the server alone then misses the
+// listener, and the port stayed bound after Shutdown returned. Shutdown
+// closes the listener too, so the port is free every time.
+func TestShutdownFreesTheStatusPortEvenBeforeServeStarts(t *testing.T) {
+	port := freeTCPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	for i := 0; i < 200; i++ {
+		m := &manager{}
+		done := make(chan struct{})
+		go func() { m.ServeStatus(addr); close(done) }()
+		deadline := time.Now().Add(3 * time.Second)
+		for !statusReady(m) {
+			if time.Now().After(deadline) {
+				t.Fatalf("iteration %d: the status server was never published", i)
+			}
+			time.Sleep(50 * time.Microsecond)
+		}
+		m.Shutdown()
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("iteration %d: the status port is still bound after Shutdown: %v", i, err)
+		}
+		l.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("iteration %d: ServeStatus did not return after Shutdown", i)
+		}
+	}
+}
+
+// A stopped manager pays for nothing: the top-up path refuses before it
+// looks at the circuit, the price or the wallet.
+func TestTopUpRefusedAfterShutdown(t *testing.T) {
+	m := mineManager(t, nil)
+	m.Shutdown()
+	if _, err := m.topUp(&relay.Circuit{}); err != errStopped {
+		t.Fatalf("topUp after Shutdown returned %v, want errStopped", err)
+	}
+}
+
+// A circuit retired by a rotation keeps draining its streams, with its
+// keepalive still running (and able to top up). Shutdown closes it too.
+func TestShutdownClosesDrainingCircuits(t *testing.T) {
+	m := mineManager(t, nil)
+	d := &relay.Circuit{}
+	m.mu.Lock()
+	m.draining = map[*relay.Circuit]struct{}{d: {}}
+	m.mu.Unlock()
+	m.Shutdown()
+	if !d.Closed() {
+		t.Fatal("a draining circuit outlived Shutdown")
+	}
+	// drainCircuit forgets a circuit once it is closed.
+	m.drainCircuit(d)
+	m.mu.Lock()
+	n := len(m.draining)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("drainCircuit left %d circuits registered", n)
+	}
 }

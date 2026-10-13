@@ -160,10 +160,10 @@ func (m *manager) ServeStatus(addr string) {
 		return
 	}
 	srv := &http.Server{Handler: mux}
-	m.statusSrv = srv
+	m.statusSrv, m.statusLn = srv, ln
 	m.mu.Unlock()
 	log.Printf("status endpoint on http://%s/status", addr)
-	srv.Serve(ln) // closes ln itself if Shutdown closed srv first
+	srv.Serve(ln) // Shutdown closes both srv and ln, whichever this reached first
 }
 
 // SetExitCC changes the preferred exit country for the next circuit.

@@ -41,7 +41,13 @@ func (m *manager) serveDNS(addr, upstream string) {
 		if err != nil {
 			// One bad datagram (an oversized query is an error on Windows)
 			// must not kill the resolver.
+			// A persistent error must not spin a core or flood the log:
+			// back off a little, and stop with the manager.
 			log.Printf("dns: read: %v", err)
+			time.Sleep(50 * time.Millisecond)
+			if m.isStopped() {
+				return
+			}
 			continue
 		}
 		q := append([]byte(nil), buf[:n]...)
