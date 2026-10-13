@@ -597,6 +597,13 @@ func keepRegistered(nc *nano.Client, key *nano.Key, cc string, asn, rate uint32,
 			return
 		}
 		acct := &nano.Account{Key: key, Client: nc}
+		// Registration may burn CPU for its proof-of-work when no work
+		// service answers (everything else keeps the strict rule and
+		// retries): a relay that cannot register is invisible — it earns
+		// nothing and serves nobody — and on a box no work service
+		// reaches, an IPv6-only VPS being the case at hand, the retry
+		// alone would never end.
+		acct.AllowCPU = true
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		rep, _ := token.Encode(token.Op{Code: token.OpRegister, Aux: token.RegisterAux(cc, asn, rate, flags)})
 		h, err := acct.Send(ctx, client.Treasury, big.NewInt(1), &rep)
