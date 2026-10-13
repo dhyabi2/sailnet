@@ -189,17 +189,30 @@ type manager struct {
 	fundsWatch      func()    // stops the confirmation watch while waiting for funds
 	faucetAt        time.Time // last faucet claim (one per day)
 	polling         bool      // startFundsPoll is running
-	// dnsPC and statusLn are the servers this manager started (ServeDNS,
+	// dnsPC and statusSrv are the servers this manager started (ServeDNS,
 	// ServeStatus). Shutdown closes them: a disconnected app must leave no
 	// port behind, or the next connect collides with a dead manager's
 	// servers and its status endpoint keeps answering "running" for a
-	// tunnel that no longer exists.
-	dnsPC    net.PacketConn
-	statusLn net.Listener
-	stopped  bool         // Shutdown ran: servers started after it close at once
-	mu2      sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
-	effCap   uint32       // the price cap the last path selection actually used
-	stage    atomic.Value // what the client is doing right now, for screens
+	// tunnel that no longer exists. The status server is closed whole, not
+	// just its listener, so a kept-alive connection is cut too; its listener
+	// is kept and closed as well, because Serve may not have taken it yet
+	// when Shutdown runs, and then closing the server alone leaves the port
+	// bound.
+	dnsPC     net.PacketConn
+	statusSrv *http.Server
+	statusLn  net.Listener
+	// draining: retired circuits still serving their last streams
+	// (drainCircuit). Shutdown closes them too, so none of them keeps
+	// alive, tops up or pays after the manager is gone.
+	draining map[*relay.Circuit]struct{}
+	// stopped: Shutdown ran; servers started after it close at once, no
+	// circuit is built, nothing is paid. Stored under m.mu (so checks made
+	// under m.mu keep their meaning) but atomic, so the top-up path and the
+	// DNS loop read it without waiting for a build that holds m.mu.
+	stopped atomic.Bool
+	mu2     sync.Mutex   // guards effCap alone, so it can be read while m.mu is held
+	effCap  uint32       // the price cap the last path selection actually used
+	stage   atomic.Value // what the client is doing right now, for screens
 	// paused: the phone's screen is off. No circuit is built, kept alive,
 	// rotated or paid for; flows fail at once. The anchor tag is kept.
 	paused atomic.Bool
@@ -771,6 +784,9 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopped.Load() { // a shut-down manager builds and pays for nothing
+		return nil, errStopped
+	}
 	if m.paused.Load() { // paused while this caller waited for the lock
 		return nil, errPaused
 	}
@@ -786,6 +802,10 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		// Ask the old circuit what is left of its anchor, off the lock: this
 		// runs inside circuit(), which holds m.mu, and a quota query is a
 		// network round trip.
+		if m.draining == nil {
+			m.draining = map[*relay.Circuit]struct{}{}
+		}
+		m.draining[m.cur] = struct{}{} // under m.mu: Shutdown sees it or this build was refused
 		go func(c *relay.Circuit) {
 			m.sampleUsage(c, c.Tag)
 			m.drainCircuit(c)
@@ -1008,6 +1028,15 @@ func (m *manager) drainCircuit(c *relay.Circuit) {
 		time.Sleep(5 * time.Second)
 	}
 	c.Close()
+	m.mu.Lock()
+	delete(m.draining, c)
+	m.mu.Unlock()
+}
+
+// isStopped reports whether Shutdown has run. Lock-free: circuit() holds
+// m.mu across a whole build, and a top-up must not wait for that.
+func (m *manager) isStopped() bool {
+	return m.stopped.Load()
 }
 
 func (m *manager) keepalive(c *relay.Circuit) {
@@ -1084,6 +1113,9 @@ func (m *manager) quotaLow(c *relay.Circuit, q int64) {
 // about five minutes at the circuit's recent rate, never less than one
 // anchor, never more than the wallet can spare.
 func (m *manager) topUp(c *relay.Circuit) (int64, error) {
+	if m.isStopped() { // a shut-down manager pays for nothing
+		return 0, errStopped
+	}
 	if m.opts.freeTag != "" {
 		return 0, errors("free tag: nothing to top up")
 	}
@@ -1122,6 +1154,13 @@ func (m *manager) topUp(c *relay.Circuit) (int64, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	// Checked again right before paying: Shutdown may have run meanwhile.
+	// A top-up already past this check may still complete once; that is
+	// accepted, since closing it would mean holding a lock across a
+	// network call.
+	if m.isStopped() {
+		return 0, errStopped
+	}
 	acct := &nano.Account{Key: m.key, Client: m.nc, State: chainState(m.key)}
 	h, blk, err := acct.SendBlock(ctx, entry.Account, amount)
 	var pe *nano.PublishError
@@ -1589,26 +1628,40 @@ func (m *manager) Shutdown() {
 	m.mu.Lock()
 	c := m.cur
 	m.cur = nil
-	m.stopped = true
-	pc, ln := m.dnsPC, m.statusLn
-	m.dnsPC, m.statusLn = nil, nil
+	m.stopped.Store(true) // under m.mu: see the field
+	pc, srv, ln := m.dnsPC, m.statusSrv, m.statusLn
+	m.dnsPC, m.statusSrv, m.statusLn = nil, nil, nil
+	var draining []*relay.Circuit
+	for d := range m.draining {
+		draining = append(draining, d)
+	}
 	m.mu.Unlock()
-	if c != nil {
-		c.Close()
-	}
-	if live := m.live.Load(); live != nil {
-		live.Close()
-	}
+	// The servers go first: they are what the next connect needs free, and
+	// closing a circuit can take a while.
 	if pc != nil {
 		pc.Close() // the DNS resolver stops with the manager, not with the process
 	}
+	if srv != nil {
+		srv.Close() // so does the status endpoint, kept-alive connections included
+	}
 	if ln != nil {
-		ln.Close() // so does the status endpoint: after a disconnect it must not answer at all
+		ln.Close() // Serve may not have taken it yet: the port must be free when Shutdown returns
+	}
+	if c != nil {
+		c.Close()
+	}
+	for _, d := range draining {
+		d.Close() // a retired circuit's keepalive must not top up after Shutdown
+	}
+	if live := m.live.Load(); live != nil {
+		live.Close()
 	}
 	m.setStage("")
 }
 
 var errPaused = errors("paused")
+
+var errStopped = errors("stopped")
 
 // Pause closes the circuit and builds none until Resume: the screen is
 // off, so nothing is pinged, rotated, topped up or paid for, and flows

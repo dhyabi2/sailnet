@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/binary"
+	stdErrors "errors"
 	"io"
 	"log"
 	"net"
@@ -23,7 +24,7 @@ func (m *manager) serveDNS(addr, upstream string) {
 		return
 	}
 	m.mu.Lock()
-	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+	if m.stopped.Load() { // Shutdown ran while this was binding: close at once, own nothing
 		m.mu.Unlock()
 		pc.Close()
 		return
@@ -34,8 +35,20 @@ func (m *manager) serveDNS(addr, upstream string) {
 	buf := make([]byte, 4096)
 	for {
 		n, from, err := pc.ReadFrom(buf)
-		if err != nil {
+		if stdErrors.Is(err, net.ErrClosed) {
 			return // the socket closed (Shutdown): the resolver stops with the manager
+		}
+		if err != nil {
+			// One bad datagram (an oversized query is an error on Windows)
+			// must not kill the resolver.
+			// A persistent error must not spin a core or flood the log:
+			// back off a little, and stop with the manager.
+			log.Printf("dns: read: %v", err)
+			time.Sleep(50 * time.Millisecond)
+			if m.isStopped() {
+				return
+			}
+			continue
 		}
 		q := append([]byte(nil), buf[:n]...)
 		go func() {

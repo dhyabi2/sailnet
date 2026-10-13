@@ -1,9 +1,14 @@
 package client
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"testing"
+
+	"github.com/dhyabi2/sail/relay"
 	"time"
 )
 
@@ -70,7 +75,9 @@ func TestShutdownClosesTheDNSAndStatusServers(t *testing.T) {
 	m := mineManager(t, nil)
 	go m.serveDNS(fmt.Sprintf("127.0.0.1:%d", udp), "1.1.1.1:53")
 	go m.ServeStatus(fmt.Sprintf("127.0.0.1:%d", tcp))
-	waitUntil(t, "the servers bind their ports", func() bool { return tcpTaken(tcp) && udpTaken(udp) })
+	// Wait on the servers themselves, not by binding their ports: a probe
+	// that binds while a server is still binding takes the port from it.
+	waitUntil(t, "the servers bind their ports", func() bool { return serversReady(m) })
 
 	m.Shutdown()
 
@@ -85,17 +92,145 @@ func TestShutdownClosesTheDNSAndStatusServers(t *testing.T) {
 	m2 := mineManager(t, nil)
 	go m2.ServeStatus(fmt.Sprintf("127.0.0.1:%d", tcp))
 	go m2.serveDNS(fmt.Sprintf("127.0.0.1:%d", udp), "1.1.1.1:53")
-	waitUntil(t, "a fresh manager takes the freed ports", func() bool { return tcpTaken(tcp) && udpTaken(udp) })
+	waitUntil(t, "a fresh manager takes the freed ports", func() bool { return serversReady(m2) })
+	m2.Shutdown()
 }
 
 func TestServersStartedAfterShutdownOwnNothing(t *testing.T) {
 	tcp, udp := freeTCPPort(t), freeUDPPort(t)
 	m := mineManager(t, nil)
-	m.Shutdown() // first: the manager is already gone when the server goroutines run
-	go m.ServeStatus(fmt.Sprintf("127.0.0.1:%d", tcp))
-	go m.serveDNS(fmt.Sprintf("127.0.0.1:%d", udp), "1.1.1.1:53")
-	time.Sleep(200 * time.Millisecond)
+	m.Shutdown() // first: the manager is already gone when the servers start
+	// Both return at once on a stopped manager, so no goroutine and no sleep:
+	// the ports are probed only after the servers are done with them.
+	m.ServeStatus(fmt.Sprintf("127.0.0.1:%d", tcp))
+	m.serveDNS(fmt.Sprintf("127.0.0.1:%d", udp), "1.1.1.1:53")
 	if tcpTaken(tcp) || udpTaken(udp) {
 		t.Fatal("a server started after Shutdown must not hold its port")
+	}
+}
+
+// A browser extension holds its connection to the status endpoint open
+// (keep-alive). Closing the listener alone left that connection served by
+// the dead manager: GET /status still said running=true, and POST /rebuild
+// started a circuit build — and paid for it — on a manager nobody owned.
+func TestShutdownCutsKeepAliveStatusConnections(t *testing.T) {
+	m := mineManager(t, nil)
+	m.lastFail = time.Now() // were a build started, it stops before any network
+	addr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
+	go m.ServeStatus(addr)
+	waitUntil(t, "the status endpoint is ready", func() bool { return statusReady(m) })
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+	ask := func(method, path string) (*http.Response, error) {
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: x\r\nX-Sail: 1\r\nContent-Length: 0\r\n\r\n", method, path); err != nil {
+			return nil, err
+		}
+		resp, err := http.ReadResponse(br, nil)
+		if err == nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+		return resp, err
+	}
+	if resp, err := ask("GET", "/status"); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("before Shutdown the endpoint should answer: %v %v", resp, err)
+	}
+
+	m.Shutdown()
+
+	if resp, err := ask("POST", "/rebuild"); err == nil {
+		t.Fatalf("a kept-alive connection was still served after Shutdown: POST /rebuild → %s", resp.Status)
+	}
+}
+
+// A circuit is never built for a manager that has been shut down, whoever asks.
+func TestNoCircuitAfterShutdown(t *testing.T) {
+	m := mineManager(t, nil)
+	m.lastFail = time.Now() // without the stop check this returns "retrying shortly", offline
+	m.Shutdown()
+	if _, err := m.circuit(); err != errStopped {
+		t.Fatalf("circuit() after Shutdown returned %v, want errStopped", err)
+	}
+}
+
+func statusReady(m *manager) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.statusSrv != nil
+}
+
+func serversReady(m *manager) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.statusSrv != nil && m.dnsPC != nil
+}
+
+// Shutdown can run in the instant between ServeStatus publishing its server
+// and Serve taking the listener. Closing the server alone then misses the
+// listener, and the port stayed bound after Shutdown returned. Shutdown
+// closes the listener too, so the port is free every time.
+func TestShutdownFreesTheStatusPortEvenBeforeServeStarts(t *testing.T) {
+	port := freeTCPPort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	for i := 0; i < 200; i++ {
+		m := &manager{}
+		done := make(chan struct{})
+		go func() { m.ServeStatus(addr); close(done) }()
+		deadline := time.Now().Add(3 * time.Second)
+		for !statusReady(m) {
+			if time.Now().After(deadline) {
+				t.Fatalf("iteration %d: the status server was never published", i)
+			}
+			time.Sleep(50 * time.Microsecond)
+		}
+		m.Shutdown()
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("iteration %d: the status port is still bound after Shutdown: %v", i, err)
+		}
+		l.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("iteration %d: ServeStatus did not return after Shutdown", i)
+		}
+	}
+}
+
+// A stopped manager pays for nothing: the top-up path refuses before it
+// looks at the circuit, the price or the wallet.
+func TestTopUpRefusedAfterShutdown(t *testing.T) {
+	m := mineManager(t, nil)
+	m.Shutdown()
+	if _, err := m.topUp(&relay.Circuit{}); err != errStopped {
+		t.Fatalf("topUp after Shutdown returned %v, want errStopped", err)
+	}
+}
+
+// A circuit retired by a rotation keeps draining its streams, with its
+// keepalive still running (and able to top up). Shutdown closes it too.
+func TestShutdownClosesDrainingCircuits(t *testing.T) {
+	m := mineManager(t, nil)
+	d := &relay.Circuit{}
+	m.mu.Lock()
+	m.draining = map[*relay.Circuit]struct{}{d: {}}
+	m.mu.Unlock()
+	m.Shutdown()
+	if !d.Closed() {
+		t.Fatal("a draining circuit outlived Shutdown")
+	}
+	// drainCircuit forgets a circuit once it is closed.
+	m.drainCircuit(d)
+	m.mu.Lock()
+	n := len(m.draining)
+	m.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("drainCircuit left %d circuits registered", n)
 	}
 }
