@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sailnet Lite gate</title>
+<style>
+  :root { --bg:#f6f8f8; --card:#fff; --ink:#0b1f3a; --dim:#5b6b7c; --line:#d9e1e4; --accent:#0a4f4b; --bad:#a3262a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b1420; --card:#122033; --ink:#e8eef2; --dim:#93a3b3; --line:#22344a; --accent:#9fe8b3; --bad:#ff8a8a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 4px; } p.sub { color:var(--dim); margin:0 0 20px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--dim); margin-bottom:4px; }
+  input { font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:6px; padding:8px 10px; width:100%; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; } .row > div { flex:1 1 160px; }
+  button { font:inherit; border:1px solid var(--accent); background:var(--accent); color:var(--bg); border-radius:6px; padding:8px 14px; cursor:pointer; }
+  button.quiet { background:transparent; color:var(--accent); padding:4px 8px; font-size:13px; }
+  .scroll { overflow-x:auto; } table { border-collapse:collapse; width:100%; min-width:620px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); font-size:14px; white-space:nowrap; }
+  th { color:var(--dim); font-weight:500; font-size:13px; }
+  .off { color:var(--bad); } .new { font:600 22px ui-monospace, monospace; letter-spacing:1px; user-select:all; }
+  #msg { color:var(--bad); min-height:1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sailnet Lite gate</h1>
+  <p class="sub">Who may use the lite app, and until when.</p>
+
+  <section id="login">
+    <label for="secret">Admin secret</label>
+    <div class="row"><div><input id="secret" type="password" autocomplete="current-password"></div><button id="enter">Open</button></div>
+  </section>
+
+  <div id="panel" hidden>
+    <section>
+      <div class="row">
+        <div><label for="label">Who is it for</label><input id="label" maxlength="60" placeholder="a name or a note"></div>
+        <div style="flex:0 1 120px"><label for="days">Days</label><input id="days" type="number" min="1" max="366" value="7"></div>
+        <button id="create">New code</button>
+      </div>
+      <p id="fresh" hidden>Give this code to the user — it is shown only once: <span class="new" id="freshToken"></span></p>
+    </section>
+    <section class="scroll">
+      <table>
+        <thead><tr><th>For</th><th>Id</th><th>Expires</th><th>Phone</th><th>State</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </div>
+  <p id="msg"></p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let secret = '';
+try { secret = sessionStorage.getItem('gate') || ''; } catch {}
+
+async function api(method, payload) {
+  const r = await fetch('/api/admin', { method, headers: { 'Authorization': 'Bearer ' + secret, 'Content-Type': 'application/json' }, body: payload ? JSON.stringify(payload) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'request failed');
+  return j;
+}
+
+function cell(text, cls) { const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; return td; }
+function action(name, fn) { const b = document.createElement('button'); b.className = 'quiet'; b.textContent = name; b.onclick = () => run(fn); return b; }
+async function run(fn) { $('msg').textContent = ''; try { await fn(); await load(); } catch (e) { $('msg').textContent = e.message; } }
+
+async function load() {
+  const { tokens } = await api('GET');
+  const now = Date.now() / 1000;
+  const rows = $('rows'); rows.textContent = '';
+  for (const t of tokens) {
+    const tr = document.createElement('tr');
+    const expired = t.expires <= now;
+    tr.append(cell(t.label || '—'), cell(t.id), cell(new Date(t.expires * 1000).toLocaleString(), expired ? 'off' : ''),
+      cell(t.wallet ? t.wallet.slice(0, 12) + '…' : 'not used yet'),
+      cell(t.revoked ? 'switched off' : expired ? 'expired' : 'active', t.revoked || expired ? 'off' : ''));
+    const td = document.createElement('td');
+    td.append(t.revoked ? action('Switch on', () => api('POST', { action: 'restore', id: t.id })) : action('Switch off', () => api('POST', { action: 'revoke', id: t.id })));
+    td.append(action('+7 days', () => api('POST', { action: 'extend', id: t.id, days: Math.max(0, (t.expires - now) / 86400) + 7 })));
+    if (t.wallet) td.append(action('Free the phone', () => api('POST', { action: 'unbind', id: t.id })));
+    tr.append(td); rows.append(tr);
+  }
+  if (!tokens.length) { const tr = document.createElement('tr'); const td = cell('No codes yet. Make the first one above.'); td.colSpan = 6; tr.append(td); rows.append(tr); }
+  $('login').hidden = true; $('panel').hidden = false;
+  try { sessionStorage.setItem('gate', secret); } catch {}
+}
+
+$('enter').onclick = () => { secret = $('secret').value.trim(); run(async () => {}); };
+$('secret').onkeydown = (e) => { if (e.key === 'Enter') $('enter').click(); };
+$('create').onclick = () => run(async () => {
+  const t = await api('POST', { action: 'create', label: $('label').value, days: Number($('days').value) });
+  $('freshToken').textContent = t.token; $('fresh').hidden = false; $('label').value = '';
+});
+if (secret) run(async () => {});
+</script>
+</body>
+</html>

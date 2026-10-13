@@ -92,7 +92,7 @@ jobs:
             echo "::error::ANDROID_KEYSTORE_BASE64 / _PASSWORD / ANDROID_KEY_ALIAS / _PASSWORD secrets."
             exit 1
           fi
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew :app:assembleRelease :lite:assembleRelease --no-daemon
           mkdir -p out
           cp app/build/outputs/apk/*/app-universal-*.apk out/ 2>/dev/null || cp app/build/outputs/apk/*/*.apk out/
           cd out
@@ -101,6 +101,13 @@ jobs:
           # keeps working — the website and the README both link to it.
           mv *.apk Sailnet-Android.apk
           sha256sum Sailnet-Android.apk > Sailnet-Android.apk.sha256
+          cd ..
+          # Sailnet Lite rides the same tag: one APK, the same stable name
+          # (Sailnet-Lite-Android.apk) so its download link outlives releases.
+          cp lite/build/outputs/apk/*/lite-universal-*.apk out/ || { echo "::error::Lite APK missing"; ls -R lite/build/outputs/apk; exit 1; }
+          cd out
+          mv lite-universal-*.apk Sailnet-Lite-Android.apk
+          sha256sum Sailnet-Lite-Android.apk > Sailnet-Lite-Android.apk.sha256
           ls -la && cat *.sha256
 
       - name: Upload artifact

@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Sailnet"
 include(":app")
+include(":lite")
