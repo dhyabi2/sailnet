@@ -2185,7 +2185,13 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string, flow bool) {
 		if n > 0 {
 			s.Metrics.BytesExit.Add(int64(n))
 			s.replyChunks(c, sid, buf[:n])
-			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 {
+			// A pool refill needs a Nano block, and a circuit must not die
+			// waiting for it (overdraftOK, as in handleRelayBatch and the
+			// reply pump): this read path used to kill the circuit on any
+			// negative remainder, so a pool that was merely a little negative
+			// — its payer listed, its top-up in flight — took the circuit
+			// down on its first downloaded byte.
+			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 && !s.overdraftOK(c.tag, rem) {
 				s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
 				break
 			}

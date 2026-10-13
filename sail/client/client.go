@@ -235,6 +235,9 @@ func (m *manager) mark(a string, ok bool) {
 	if ok {
 		v = 1
 	}
+	if m.score == nil {
+		m.score = map[string]float64{}
+	}
 	m.score[a] = 0.9*m.scoreOf(a) + 0.1*v
 	if m.scoreAt == nil {
 		m.scoreAt = map[string]time.Time{}
@@ -911,6 +914,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		m.setStage("Connected")
 		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
 		c.OnQuota = func(q int64) { m.quotaLow(c, q) }
+		c.OnQuotaKilled = func(hop int) { m.quotaKilled(c, hop) }
 		m.cur = c
 		m.rotate = 0 // fresh lifetime for the new circuit
 		m.live.Store(c)
@@ -920,6 +924,23 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.lastFail = time.Now()
 	return nil, errors("could not build a circuit")
+}
+
+// quotaKilled reacts to a hop that stopped carrying the circuit because the
+// pool it was prepaid from ran dry. The relay that reported it is telling the
+// truth about its payer: the money that should have been there is the payer's
+// responsibility, so the payer's score drops (and drifts back within
+// minutes), and the next build pays the same five-second fuse a failed build
+// does — otherwise a broken payer meets every new stream with a fresh circuit
+// that dies on its first byte, forever, and the app spends its time
+// connecting rather than connected.
+func (m *manager) quotaKilled(c *relay.Circuit, hop int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if hop > 0 && hop < len(c.Path) {
+		m.mark(c.Path[hop-1].Account, false)
+	}
+	m.lastFail = time.Now()
 }
 
 // drainCircuit closes c once its streams are done (or after a long grace,

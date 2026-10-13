@@ -41,9 +41,13 @@ type Circuit struct {
 	relink   sync.Mutex // held while the entry link is being replaced
 	relinkC  *sync.Cond
 	linking  bool
-	OnQuota  func(int64)  // called when the entry pushes a low-quota notice
-	recv     atomic.Int64 // unix nanos of the last cell received
-	pingErr  atomic.Value
+	OnQuota  func(int64) // called when the entry pushes a low-quota notice
+	// OnQuotaKilled is called when a hop reports the circuit's prepaid pool
+	// as exhausted — the payer of that hop owes the network a refill. The
+	// hop index is the relay that reported it; its payer is hop-1.
+	OnQuotaKilled func(hop int)
+	recv          atomic.Int64 // unix nanos of the last cell received
+	pingErr       atomic.Value
 }
 
 // BytesMoved is the number of bytes received on the circuit so far.
@@ -587,6 +591,9 @@ func (c *Circuit) readLoop() {
 				// manager rebuilds at once, instead of streams failing
 				// silently until the next keepalive notices.
 				log.Printf("circuit: hop %d reports %s; rebuilding", hop, data)
+				if c.OnQuotaKilled != nil {
+					c.OnQuotaKilled(hop)
+				}
 				go c.Close()
 			}
 			select {
