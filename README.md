@@ -273,7 +273,13 @@ Upgrading is optional: a relay that never upgrades keeps working, keeps being
 chosen, and keeps earning.
 
 **Desktop (Windows, macOS).** Download and install over the top. The wallet
-lives in `~/.sail`, outside the app, so it survives.
+survives, but it is not in `~/.sail`: the app keeps it in the operating
+system's config directory — `~/Library/Application Support/Sailnet` on
+macOS, `%AppData%\Sailnet` on Windows, `~/.config/Sailnet` on Linux —
+together with its settings, where a reinstall cannot reach it. `~/.sail` is
+the command line's (`sailnode`, `sail`): a wallet funded there is not the
+one the app opens with, and `sail wallet export` does not see the app's
+wallet. Back that one up from Settings → Wallet → Back up wallet.
 
 **Android — one-time reinstall.** Every release before v0.2.53 was signed with
 a throwaway key that changed on each build, so Android refuses to install a
