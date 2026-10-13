@@ -2185,6 +2185,12 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string, flow bool) {
 		if n > 0 {
 			s.Metrics.BytesExit.Add(int64(n))
 			s.replyChunks(c, sid, buf[:n])
+			// No overdraft here, unlike the relay paths: at the exit a pool
+			// payment and a client's direct payment are the same thing — a
+			// send to us credited through creditFromLedger, signed by a
+			// wallet that may be listed — and the link carries no identity
+			// that would tell a relay's EXTEND from a one-hop client. The
+			// overdraft would let any listed wallet download past what it paid.
 			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 {
 				s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
 				break

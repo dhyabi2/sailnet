@@ -171,6 +171,8 @@ type manager struct {
 	censored      bool
 	skip          map[string]bool // hops that failed during the current build; not retried in the same build
 	lastFail      time.Time       // when the last build gave up; callers back off for a few seconds
+	drySkip       string          // a relay of a pool that ran dry (quotaKilled): kept out of the next build only
+	dryApplied    string          // the drySkip this build's skip set holds, if any
 	rotate        time.Duration
 	anchors       map[string][]time.Time // recent anchor payments per entry: an entry that keeps claiming "quota exhausted" is not paid again
 	anchorOffline bool                   // the wallet could not publish the anchor itself; the entry relay will
@@ -234,6 +236,9 @@ func (m *manager) mark(a string, ok bool) {
 	v := 0.0
 	if ok {
 		v = 1
+	}
+	if m.score == nil {
+		m.score = map[string]float64{}
 	}
 	m.score[a] = 0.9*m.scoreOf(a) + 0.1*v
 	if m.scoreAt == nil {
@@ -776,13 +781,13 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	if time.Since(m.lastFail) < 5*time.Second {
 		return nil, errors("circuit: retrying shortly")
 	}
-	m.skip = map[string]bool{}
+	m.skip = m.freshSkip()
 	for attempt := 0; attempt < 4; attempt++ {
 		path := m.retryPath
 		m.retryPath = nil
 		if path == nil {
 			var err error
-			if path, err = m.choosePath(); err != nil {
+			if path, err = m.choosePathAroundDry(); err != nil {
 				return nil, err
 			}
 		}
@@ -910,7 +915,7 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 		log.Printf("circuit built in %s: %s%s", time.Since(t0).Round(time.Millisecond), strings.Join(names, " → "), mode)
 		m.setStage("Connected")
 		c.Flow = path[len(path)-1].Flags&token.FlagFlow != 0 // windowed streams when the exit can
-		c.OnQuota = func(q int64) { m.quotaLow(c, q) }
+		c.SetQuotaHandlers(func(q int64) { m.quotaLow(c, q) }, func(hop int) { m.quotaKilled(c, hop) })
 		m.cur = c
 		m.rotate = 0 // fresh lifetime for the new circuit
 		m.live.Store(c)
@@ -920,6 +925,64 @@ func (m *manager) circuit() (*relay.Circuit, error) {
 	}
 	m.lastFail = time.Now()
 	return nil, errors("could not build a circuit")
+}
+
+// quotaKilled reacts to a hop that stopped carrying the circuit because the
+// pool it was prepaid from ran dry. The relay that reported it is telling the
+// truth about its payer: the money that should have been there is the payer's
+// responsibility, so the payer's score drops (and drifts back within
+// minutes), and the next build leaves that pool out of the path when the
+// network is large enough to (choosePathAroundDry) — otherwise a broken payer
+// meets every new stream with a fresh circuit on the same dead pool. Nothing
+// waits: the rebuild starts at once, as it always has.
+//
+// Hop 0 is the entry saying our own anchor ran out, and an out-of-range hop
+// names nobody: neither is a relay's pool, so neither marks anyone.
+func (m *manager) quotaKilled(c *relay.Circuit, hop int) {
+	if hop <= 0 || hop >= len(c.Path) {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cur != nil && m.cur != c {
+		return // a late report from a circuit already replaced: not about the next build
+	}
+	payer := c.Path[hop-1].Account
+	m.mark(payer, false)
+	// The dry pool is payer → reporter. Route around the payer; when the
+	// payer is our entry, route around the reporter instead, since a new
+	// entry would mean a new anchor, paid for nothing.
+	if hop-1 == 0 {
+		m.drySkip = c.Path[hop].Account
+	} else {
+		m.drySkip = payer
+	}
+}
+
+// freshSkip starts a build's skip set: empty, but for the relay of a pool
+// that just ran dry (quotaKilled), which this one build leaves out.
+func (m *manager) freshSkip() map[string]bool {
+	skip := map[string]bool{}
+	m.dryApplied = m.drySkip
+	if m.drySkip != "" {
+		skip[m.drySkip] = true
+		m.drySkip = ""
+	}
+	return skip
+}
+
+// choosePathAroundDry is choosePath, but a network too small to route around
+// the dry pool's relay builds through it rather than failing: on three relays
+// for three hops there is no other path, and a failed choice would only add a
+// wait before the same one.
+func (m *manager) choosePathAroundDry() ([]*relay.RelayInfo, error) {
+	path, err := m.choosePath()
+	if err != nil && m.dryApplied != "" && m.skip[m.dryApplied] {
+		delete(m.skip, m.dryApplied)
+		m.dryApplied = ""
+		path, err = m.choosePath()
+	}
+	return path, err
 }
 
 // drainCircuit closes c once its streams are done (or after a long grace,
