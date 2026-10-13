@@ -995,7 +995,16 @@ func runHome(key *nano.Key, nc *nano.Client, rate string, exit bool, harbourAcct
 func runPair(args []string) {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
 	until := fs.Int64("until", 0, "Unix time at which the paired wallet stops riding this relay free (0: never)")
+	walletAddr := fs.String("wallet", "", "nano_ address: the only wallet this code pairs (default: any)")
 	fs.Parse(args)
+	var wallet [32]byte
+	if *walletAddr != "" {
+		pub, err := nano.AddressToPubkey(*walletAddr)
+		if err != nil {
+			log.Fatalf("pair: --wallet: %v", err)
+		}
+		wallet = pub
+	}
 	var end time.Time
 	if *until != 0 {
 		end = time.Unix(*until, 0)
@@ -1005,7 +1014,7 @@ func runPair(args []string) {
 	}
 	useServiceHome() // the installed service's data directory, not the shell user's
 	os.MkdirAll(client.DataDir(), 0o700)
-	code, exp, err := relay.NewPairingCodeUntil(filepath.Join(client.DataDir(), "pairing.json"), end)
+	code, exp, err := relay.NewPairingCodeFor(filepath.Join(client.DataDir(), "pairing.json"), end, wallet)
 	if err != nil {
 		log.Fatalf("pair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
 	}

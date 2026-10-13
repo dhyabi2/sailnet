@@ -34,6 +34,12 @@ import (
 // until then, and the relay itself stops honouring its owner tag after it,
 // whatever the app does. `sailnode unpair` ends it sooner. Owners written
 // without an end time, as every relay before this wrote them, stay owners.
+//
+// A code can also be bound to one wallet (`sailnode pair --wallet`, which the
+// gate sets to the wallet its token is bound to): it then pairs that wallet
+// and no other, so six digits passed to another phone are worth nothing.
+// The relay knows which wallet sent a code from the signed circuit it came
+// on, so no further proof is needed.
 
 const (
 	PairingTTL      = 5 * time.Minute
@@ -48,6 +54,8 @@ type pairingFile struct {
 	// OwnerExpires is when the free access this code grants ends (Unix
 	// seconds); 0 means never.
 	OwnerExpires int64 `json:"owner_expires,omitempty"`
+	// Wallet, when set, is the only wallet (hex public key) this code pairs.
+	Wallet string `json:"wallet,omitempty"`
 }
 
 func pairingHash(salt []byte, code string) string {
@@ -66,6 +74,12 @@ func NewPairingCode(path string) (string, time.Time, error) {
 // NewPairingCodeUntil mints a code whose wallet is an owner only until until
 // (the zero time: for good).
 func NewPairingCodeUntil(path string, until time.Time) (string, time.Time, error) {
+	return NewPairingCodeFor(path, until, [32]byte{})
+}
+
+// NewPairingCodeFor mints a code that pairs only wallet (zero: any wallet),
+// free until until (zero: for good).
+func NewPairingCodeFor(path string, until time.Time, wallet [32]byte) (string, time.Time, error) {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", time.Time{}, err
@@ -80,6 +94,9 @@ func NewPairingCodeUntil(path string, until time.Time) (string, time.Time, error
 	pf := pairingFile{Salt: hex.EncodeToString(salt), Hash: pairingHash(salt, code), Expires: exp.Unix()}
 	if !until.IsZero() {
 		pf.OwnerExpires = until.Unix()
+	}
+	if wallet != ([32]byte{}) {
+		pf.Wallet = hex.EncodeToString(wallet[:])
 	}
 	data, _ := json.Marshal(pf)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -139,6 +156,9 @@ func (s *Server) pairingCreate(tag string, tagB, clientPub [32]byte, sig, extra 
 	if json.Unmarshal(raw, &pf) != nil || time.Now().Unix() >= pf.Expires || pf.Attempts >= pairingAttempts {
 		return false
 	}
+	if pf.Wallet != "" && !strings.EqualFold(pf.Wallet, hex.EncodeToString(wallet[:])) {
+		return false // the active code is for another wallet
+	}
 	if !s.Quota.Known(tag) {
 		s.Quota.Credit(tag, PairingBytes, hex.EncodeToString(wallet[:]))
 		log.Printf("pairing: a wallet opened a circuit to send its code")
@@ -163,6 +183,9 @@ func (s *Server) tryPair(ownerHex, code string) error {
 	if pf.Attempts >= pairingAttempts {
 		os.Remove(s.PairingFile)
 		return errors.New("too many wrong codes: run `sailnode pair` on the relay for a new one")
+	}
+	if pf.Wallet != "" && !strings.EqualFold(pf.Wallet, ownerHex) {
+		return errors.New("this pairing code was issued to another wallet")
 	}
 	salt, _ := hex.DecodeString(pf.Salt)
 	if subtle.ConstantTimeCompare([]byte(pairingHash(salt, code)), []byte(pf.Hash)) != 1 {

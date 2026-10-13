@@ -192,3 +192,37 @@ func TestUnpairedOrExpiredOwnerLosesOpenCircuits(t *testing.T) {
 		t.Fatalf("owners.json should hold only the permanent owner left: %v %v", m, err)
 	}
 }
+
+// A code minted for one wallet (`sailnode pair --wallet`, as the Lite gate
+// mints them for the wallet its token is bound to) pairs that wallet and no
+// other: handing the six digits to another phone gets that phone nothing,
+// and does not use the code up.
+func TestPairingCodeBoundToAWalletPairsOnlyThatWallet(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone, stranger := testKey(t, 1), testKey(t, 2), testKey(t, 3)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+	code, _, err := NewPairingCode(s.PairingFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(s.PairingFile)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	m["wallet"] = hex.EncodeToString(phone.Public[:])
+	raw, _ = json.Marshal(m)
+	os.WriteFile(s.PairingFile, raw, 0o600)
+
+	if err := s.tryPair(hex.EncodeToString(stranger.Public[:]), code); err == nil {
+		t.Fatal("a code minted for one wallet must not pair another")
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, stranger.Public)); ok {
+		t.Fatal("the other wallet must not be an owner")
+	}
+	if err := s.tryPair(hex.EncodeToString(phone.Public[:]), code); err != nil {
+		t.Fatalf("the wallet the code was minted for pairs: %v", err)
+	}
+	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, phone.Public)); !ok {
+		t.Fatal("the bound wallet should now be an owner")
+	}
+}
