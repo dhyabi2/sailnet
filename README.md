@@ -1,3 +1,5 @@
+简体中文: [README.zh-CN.md](README.zh-CN.md)
+
 # Sailnet
 
 **Website and downloads: [www.sailnet.space](https://www.sailnet.space)**

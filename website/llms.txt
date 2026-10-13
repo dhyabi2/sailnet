@@ -1,0 +1,39 @@
+# Sailnet
+
+> A rewarded privacy network paid in XNO: relays carry onion-routed circuits over ordinary-looking HTTPS and are paid per megabyte, directly, on the Nano ledger.
+
+No token, no accounts, no company in the middle. All text below is taken from the project README, which is the authoritative source.
+
+## What Sailnet is
+
+- [README](https://github.com/dhyabi2/sailnet/blob/main/README.md): Run a relay on any VPS or home PC and earn XNO to a wallet you control. Use the network from the Android app, the desktop apps (SOCKS5 proxy and DNS for any browser), or the Chrome and Firefox extensions. Censorship resistance: bridges, WebSocket-shaped tunnels, measured traffic shaping.
+- [README (简体中文)](https://github.com/dhyabi2/sailnet/blob/main/README.zh-CN.md): Simplified Chinese translation of the README; the English README is authoritative.
+- [How it works](https://github.com/dhyabi2/sailnet/blob/main/README.md#how-it-works): A client builds a telescoping multi-hop circuit (two to four relays, three by default). The entry sees the client, the exit sees the destination, nobody sees both.
+
+## Run a relay and be paid in XNO
+
+- [Run a relay in one command](https://github.com/dhyabi2/sailnet/blob/main/README.md#run-a-relay-in-one-command): `--payout nano_…` is the address your earnings are sent to, and it is the one decision you should make before you start the relay rather than after. With `--payout` set, everything above a small operating float is swept out every 15 minutes to a wallet you already control.
+- [Run a relay, ride it free](https://github.com/dhyabi2/sailnet/blob/main/README.md#run-a-relay-ride-it-free): If you run a relay, your own app uses it without paying.
+- [Upgrading](https://github.com/dhyabi2/sailnet/blob/main/README.md#upgrading): Upgrading is optional. A relay that never upgrades keeps working, keeps being chosen for circuits, and keeps earning.
+- [Releases](https://github.com/dhyabi2/sailnet/releases): `sailnode` and `sail` for Linux (x86-64 and arm64), the desktop apps for macOS and Windows, the Android APK and the Chrome and Firefox extensions, each with a `.sha256` beside it. Docker images are on GitHub Container Registry as `ghcr.io/dhyabi2/sailnet`.
+
+## Use the network
+
+- [Use the network](https://github.com/dhyabi2/sailnet/blob/main/README.md#use-the-network): The client makes a wallet on first run and claims a free trial grant for it, so the first circuit costs nothing. Android: install the APK from Releases; the app funds itself the same way and shows where to get XNO.
+- [Desktop apps](https://github.com/dhyabi2/sailnet/blob/main/README.md#desktop-apps): The macOS, Windows and Linux client serves a SOCKS5 proxy on 127.0.0.1:1080 and DNS on 127.0.0.1:5300 for browsers and the extension.
+- [Browser extensions](https://github.com/dhyabi2/sailnet/blob/main/README.md#browser-extensions): A proxy toggle that points the browser at the local client's SOCKS5 port with remote DNS, a WebRTC leak guard, and the live circuit status.
+
+## Warnings
+
+- [Your wallet, and backing it up](https://github.com/dhyabi2/sailnet/blob/main/README.md#your-wallet-and-backing-it-up): A relay's earnings and a client's balance live in one secret: a 32-byte seed in `wallet.json`. Nobody else has a copy. There is no account to recover and no support address that can give it back. So write it down.
+- [Without --payout](https://github.com/dhyabi2/sailnet/blob/main/README.md#run-a-relay-in-one-command): Destroy the VPS, lose the disk, or rebuild the box without exporting that seed, and the money is gone, permanently, and nobody can give it back.
+- [Privacy limits, stated plainly](https://github.com/dhyabi2/sailnet/blob/main/README.md#how-it-works): Sailnet cannot hide the device's MAC address or hostname on the local network, or the funding graph of a wallet on the public ledger; fund relay and client wallets from an exchange if they must not be linkable to you.
+- [Built to be hard to censor](https://github.com/dhyabi2/sailnet/blob/main/README.md#built-to-be-hard-to-censor): Nothing here has been measured from inside a censored network yet.
+- [Upgrading the app](https://github.com/dhyabi2/sailnet/blob/main/README.md#upgrading-the-app): Android, one-time reinstall: moving to v0.2.53 needs an uninstall and a fresh install, once. Back up your seed first if the wallet holds anything you want to keep; uninstalling deletes it.
+
+## Links
+
+- [Website and downloads](https://www.sailnet.space)
+- [GitHub repository](https://github.com/dhyabi2/sailnet)
+- [README](https://github.com/dhyabi2/sailnet/blob/main/README.md)
+- [README.zh-CN.md](https://github.com/dhyabi2/sailnet/blob/main/README.zh-CN.md)
