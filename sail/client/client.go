@@ -100,7 +100,14 @@ func chainState(k *nano.Key) *nano.ChainState {
 // otherwise fail on "no such host".
 var bootstrapResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 	d := net.Dialer{Timeout: 8 * time.Second, Control: relay.DialControl}
-	return d.DialContext(ctx, "udp", "1.1.1.1:53")
+	if c, err := d.DialContext(ctx, "udp", "1.1.1.1:53"); err == nil {
+		return c, nil
+	}
+	// An IPv6-only box cannot reach 1.1.1.1 at all, and its first ledger call
+	// died on "network is unreachable" before anything else happened. The same
+	// resolver answers on IPv6 (Cloudflare 2606:4700:4700::1111); an IPv4 box
+	// never gets here.
+	return d.DialContext(ctx, "udp", "[2606:4700:4700::1111]:53")
 }}
 
 func newNano() *nano.Client {
