@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -109,7 +110,8 @@ func (a *Account) frontier(ctx context.Context) ([32]byte, *big.Int, [32]byte, b
 	if err != nil {
 		return [32]byte{}, nil, [32]byte{}, false, err
 	}
-	a.State.Set(prev, bal, rep, true)
+	n, _ := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64)
+	a.State.SetFromLedger(prev, bal, rep, true, n)
 	return prev, bal, rep, true, nil
 }
 
@@ -147,6 +149,17 @@ func (a *Account) Lock() func() {
 	m, _ := acctLocks.LoadOrStore(a.Key.Address, &sync.Mutex{})
 	m.(*sync.Mutex).Lock()
 	return m.(*sync.Mutex).Unlock
+}
+
+// TryLock takes the account's publishing lock only if no one holds it. It
+// reports whether it did, and returns the unlock func when it did; a caller
+// that cannot wait for a whole send (a balance poll) uses it to step aside.
+func (a *Account) TryLock() (func(), bool) {
+	m, _ := acctLocks.LoadOrStore(a.Key.Address, &sync.Mutex{})
+	if !m.(*sync.Mutex).TryLock() {
+		return nil, false
+	}
+	return m.(*sync.Mutex).Unlock, true
 }
 
 // signAndPublish fills work + signature and processes the block.

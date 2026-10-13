@@ -258,3 +258,21 @@ If the answer is no, the change does not ship, whatever it improves.
   another. Measured through a 420 ms relay: a lookup 2–3 s → 0.6–0.7 s, a
   30-lookup burst 2.7 s → 1.5 s. Client-side only; exits and resolvers see
   ordinary TCP DNS.
+- **2026-10-12, the chain-state file learns its height and age.** The
+  cached `chain-*.json` gains two optional fields, `height` (blocks in the
+  account chain at the cached frontier) and `at` (when it was written), so a
+  ledger read can tell a stale cache from a block still travelling. The
+  `representative` key is unchanged. An older build ignores the new fields
+  and reads the file as before; a file it wrote, with neither, is aged by its
+  modification time. The file is written by code the relay shares, so the
+  relay's and faucet's chain files (`cmd/sailnode`, `sailnode`) gain the two
+  fields as well; only the client's ledger read decides anything by them,
+  so relays and faucets behave exactly as before.
+  A cache whose height is known and is ahead of the ledger (a block not yet
+  seen there) is kept until a send or receive re-reads the account, as
+  before. The new build can also hold a cache with no height, after an open
+  block or a node answer without `block_count`; such a cache follows the
+  10-minute rule (kept while younger than ten minutes, replaced by the
+  ledger's state after that) until a ledger read agreeing with its frontier
+  records the height. A read agreeing with the cached frontier only ever raises the
+  recorded height, never lowers it.

@@ -1619,13 +1619,34 @@ func (m *manager) pocket() {
 	}
 	if info, ok, err := m.nc.AccountInfo(ctx, m.key.Address); err == nil && ok {
 		m.directBootstrap = false // chain state is cached now: no more direct ledger calls
-		if cacheAccountInfo(chainState(m.key), info) {
+		if wrote, _ := cacheLedgerState(m.key, info); wrote {
 			log.Printf("wallet state read from the ledger")
 		}
 		if _, bal, _, _, cached := chainState(m.key).Get(); cached {
 			log.Printf("wallet balance %s XNO", token.FormatXNO(bal))
 		}
 	}
+}
+
+// cacheLedgerState caches what the ledger reports about key's wallet. It
+// holds the account's publishing lock from reading the cached state to
+// writing it: a send running beside it (a circuit build paying its entry
+// while the wallet is refreshed) records its block under that same lock,
+// and an unlocked read-compare-write could put the older ledger state back
+// over that block, so the next payment would fork.
+//
+// A send holds that lock from its own ledger read through proof-of-work to
+// publishing, which can take minutes; a balance poll must not wait that
+// long, so when the lock is taken it writes nothing and reports busy. The
+// send refreshes the cache from the ledger itself. The caller must not
+// already hold the lock.
+func cacheLedgerState(key *nano.Key, info nano.AccountInfo) (wrote, busy bool) {
+	unlock, ok := (&nano.Account{Key: key}).TryLock()
+	if !ok {
+		return false, true
+	}
+	defer unlock()
+	return cacheAccountInfo(chainState(key), info), false
 }
 
 // cacheAccountInfo copies what the ledger reports about a wallet into its
@@ -1637,15 +1658,23 @@ func (m *manager) pocket() {
 // its money was received long ago — so nothing could tell the client it had
 // any, and it waited forever for a payment that had already arrived.
 //
-// It writes only into an empty cache. A local state can legitimately be
-// ahead of what the ledger reports, when a block was sent moments ago and is
-// not yet confirmed; overwriting that with an older frontier would build the
-// next block on a stale one.
+// A local state can also legitimately be ahead of what the ledger reports,
+// when a block was sent moments ago and is not yet confirmed; overwriting
+// that with an older frontier would build the next block on a stale one.
+// The ledger's block count says which side is ahead: a chain that grew
+// past what we cached is the ledger's to describe, and one that has not
+// caught up to a block we just published is left alone, however old the
+// cache is: a node lagging behind a confirmed block must not roll the
+// wallet back onto a frontier it already spent from, or the next block
+// forks. Such a cache is kept until a send or receive re-reads the account.
+// A cache that predates heights being recorded (an older build wrote it)
+// cannot be compared that way, so it is trusted only while it is fresh — a
+// stale one is exactly the bug this fixes.
+//
+// st must have been loaded under the account's lock, still held; see
+// cacheLedgerState.
 func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if st == nil {
-		return false
-	}
-	if _, _, _, _, cached := st.Get(); cached {
 		return false
 	}
 	front, err := hex.DecodeString(strings.TrimSpace(info.Frontier))
@@ -1660,10 +1689,56 @@ func cacheAccountInfo(st *nano.ChainState, info nano.AccountInfo) bool {
 	if err != nil {
 		return false
 	}
+	ledgerHeight, heightErr := strconv.ParseUint(strings.TrimSpace(info.BlockCount), 10, 64)
+	heightKnown := heightErr == nil
 	var f [32]byte
 	copy(f[:], front)
-	st.Set(f, bal, rep, true)
+	if prev, _, _, _, cached := st.Get(); cached {
+		if prev == f {
+			// The ledger agrees with what we have. A cache that never
+			// learned its height (an open block, a node that gave none)
+			// learns it here, so later reads can refuse a node behind it.
+			// The height is only ever raised: a lower count for the same
+			// frontier is a node answering wrongly, and recording it would
+			// let a node lagging behind this frontier roll the cache back.
+			if heightKnown && ledgerHeight > st.Height() {
+				st.SetHeight(ledgerHeight)
+			}
+			return false
+		}
+		if h := st.Height(); h > 0 {
+			// A chain longer than ours is the ledger's to describe; one
+			// shorter has not caught up to the block we just published (or
+			// comes from a node lagging behind it), and is refused however
+			// old the cache is.
+			if !heightKnown || ledgerHeight < h {
+				return false
+			}
+		} else if at := st.WrittenAt(); at == 0 {
+			return false // no height and no time: nothing says it is stale
+		} else if freshChainState(at) {
+			// No height was ever recorded: a state written moments ago may
+			// be a block still travelling to the ledger, so it is kept.
+			return false
+		}
+	}
+	if !heightKnown {
+		ledgerHeight = 0
+	}
+	st.SetFromLedger(f, bal, rep, true, ledgerHeight)
 	return true
+}
+
+// freshChainState reports whether a chain state recorded at the Unix time
+// at was written recently enough that a block it holds may still be
+// travelling to the ledger. A time in the future is a clock that cannot be
+// trusted, and an unknown time (0) is never fresh.
+func freshChainState(at int64) bool {
+	if at == 0 {
+		return false
+	}
+	age := time.Since(time.Unix(at, 0))
+	return age < 10*time.Minute && age > -time.Minute
 }
 
 // cliBridges holds --bridge lines until the registry exists.
