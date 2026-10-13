@@ -944,6 +944,9 @@ func (m *manager) quotaKilled(c *relay.Circuit, hop int) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cur != nil && m.cur != c {
+		return // a late report from a circuit already replaced: not about the next build
+	}
 	payer := c.Path[hop-1].Account
 	m.mark(payer, false)
 	// The dry pool is payer → reporter. Route around the payer; when the

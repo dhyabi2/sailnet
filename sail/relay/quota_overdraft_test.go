@@ -16,13 +16,13 @@ import (
 	"github.com/dhyabi2/sail/wire"
 )
 
-// The exit's read path meters every chunk it forwards against the pool its
-// payer prepaid. A pool can be a little negative while its top-up block is in
-// flight — overdraftOK exists for exactly that, and the forward and backward
-// paths already ride it out. These tests pin the download path to the same
-// behaviour: a listed payer's pool in overdraft must carry the stream; a pool
-// whose payer is not on the ledger must still kill the circuit, or the
-// overdraft would be free money.
+// A relay's pool at the next hop can be a little negative while its top-up
+// block is in flight — overdraftOK exists for exactly that, and the relay
+// paths (forward batches, the reply pump) ride it out. The exit's download
+// path does not: there a relay's pool payment and a client's direct payment
+// are indistinguishable (both are a send to the exit, credited through the
+// ledger, signed by a wallet that may be listed), so an overdraft at the
+// exit would let any listed wallet download past what it paid.
 
 func overdraftTarget(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
@@ -44,7 +44,7 @@ func overdraftClient(c *Circuit) *http.Client {
 		}}}
 }
 
-func TestExitRidesPoolOverdraftWhileRefillIsInFlight(t *testing.T) {
+func TestMiddleRidesPoolOverdraftWhileRefillIsInFlight(t *testing.T) {
 	reg := &Registry{}
 	var servers []*Server
 	var infos []*RelayInfo
@@ -53,15 +53,26 @@ func TestExitRidesPoolOverdraftWhileRefillIsInFlight(t *testing.T) {
 		servers = append(servers, s)
 		infos = append(infos, ri)
 	}
+	// The entry pays the middle as in production: the pool tag is the hash
+	// of its payment block, not the static test tag.
+	var poolHash [32]byte
+	copy(poolHash[:], "entry-to-middle-pool-block-hash!")
+	poolTag := strings.ToUpper(hex.EncodeToString(poolHash[:]))
+	servers[0].pools = map[string]*pool{infos[1].Account: {tag: poolTag}}
+	// The entry's listed address is not the one it connects from (a home
+	// node behind a harbour, NAT, IPv6 egress): that must not matter.
+	moved := *infos[0]
+	moved.Desc.IP = net.ParseIP("198.51.100.1")
+	reg.Add(&moved)
+
 	var tag [32]byte
 	copy(tag[:], "overdraft-ride-payment-placeholder")
 	servers[0].Quota.Credit(hex.EncodeToString(tag[:]), 50<<20, "")
-	servers[1].Quota.Credit(PoolTag(infos[0].Account, infos[1].Account), 50<<20, "")
-	// The exit's pool, prepaid by a listed relay, is already a little
+	// The middle's pool, prepaid by the listed entry, is already a little
 	// negative: its top-up needs a Nano block and has not landed yet.
-	exitTag := PoolTag(infos[1].Account, infos[2].Account)
-	servers[2].Quota.Credit(exitTag, 1<<20, hex.EncodeToString(infos[1].Pub[:]))
-	servers[2].Quota.Consume(exitTag, (1<<20)+2048)
+	servers[1].Quota.Credit(poolTag, 1<<20, hex.EncodeToString(infos[0].Pub[:]))
+	servers[1].Quota.Consume(poolTag, (1<<20)+2048)
+	servers[2].Quota.Credit(PoolTag(infos[1].Account, infos[2].Account), 50<<20, "")
 
 	target, want := overdraftTarget(t)
 	defer target.Close()
@@ -77,10 +88,45 @@ func TestExitRidesPoolOverdraftWhileRefillIsInFlight(t *testing.T) {
 	}
 	got, _ := io.ReadAll(resp.Body)
 	if string(got) != want {
-		t.Fatalf("body corrupted through overdrafting exit: got %d bytes, want %d", len(got), len(want))
+		t.Fatalf("body corrupted through an overdrafting middle: got %d bytes, want %d", len(got), len(want))
 	}
 	if c.Closed() {
 		t.Fatal("the circuit must survive a pool whose refill is in flight")
+	}
+	if rem := servers[1].Quota.Remaining(poolTag); rem >= -2048 {
+		t.Fatalf("the middle should have carried the stream on the overdraft, remaining %d", rem)
+	}
+}
+
+func TestExitDownloadGetsNoOverdraftEvenForAListedPayer(t *testing.T) {
+	reg := &Registry{}
+	var servers []*Server
+	var infos []*RelayInfo
+	for i := 0; i < 3; i++ {
+		s, ri, _ := startRelay(t, reg, i, i == 2)
+		servers = append(servers, s)
+		infos = append(infos, ri)
+	}
+	var tag [32]byte
+	copy(tag[:], "exit-no-overdraft-payment-holder")
+	servers[0].Quota.Credit(hex.EncodeToString(tag[:]), 50<<20, "")
+	servers[1].Quota.Credit(PoolTag(infos[0].Account, infos[1].Account), 50<<20, "")
+	exitTag := PoolTag(infos[1].Account, infos[2].Account)
+	servers[2].Quota.Credit(exitTag, 8<<10, hex.EncodeToString(infos[1].Pub[:]))
+
+	target, want := overdraftTarget(t)
+	defer target.Close()
+	c, err := Build(infos, tag, 10*time.Second, nil, nil)
+	if err != nil {
+		t.Fatalf("build failed at hop %d: %v", c.Failed, err)
+	}
+	defer c.Close()
+	resp, err := overdraftClient(c).Get(target.URL)
+	if err == nil {
+		got, _ := io.ReadAll(resp.Body)
+		if len(got) == len(want) {
+			t.Fatal("the exit's download path must not ride an overdraft")
+		}
 	}
 }
 
@@ -164,25 +210,13 @@ func TestClientPaidOneHopTagGetsNoOverdraftEvenWhenItsWalletIsListed(t *testing.
 	seed := make([]byte, 32)
 	seed[0] = 77
 	client, _ := nano.DeriveKey(seed, 0)
-	// The client listed its wallet, but it is not a relay extending to us:
-	// its circuit arrives from its own address, not the listed one.
-	got, want := oneHopOverdraft(t, client, "203.0.113.7", nil)
+	// The client listed its wallet on the ledger with the very address it
+	// connects from: to the exit it looks exactly like a relay.
+	got, want := oneHopOverdraft(t, client, "127.0.0.1", nil)
 	// The exit meters each read after forwarding it, so one read (up to
 	// 32 cells of data) can land past the boundary, plus one in flight.
 	if limit := 16<<10 + 2*32*wire.MaxData; got >= want || got > limit {
 		t.Fatalf("a client-paid tag rode the relay overdraft: %d of %d bytes downloaded on 16 KiB paid", got, want)
-	}
-}
-
-func TestListedRelayPoolPaidByLedgerBlockRidesTheOverdraft(t *testing.T) {
-	// The production pool: a block hash, prepaid by a listed relay, arriving
-	// on a connection from that relay's listed address.
-	seed := make([]byte, 32)
-	seed[0] = 78
-	payer, _ := nano.DeriveKey(seed, 0)
-	got, want := oneHopOverdraft(t, payer, "127.0.0.1", nil)
-	if got != want {
-		t.Fatalf("a listed relay's pool died in overdraft: got %d of %d bytes", got, want)
 	}
 }
 

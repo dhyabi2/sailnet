@@ -63,4 +63,12 @@ func TestQuotaExhaustionMarksThePayerAndBacksOff(t *testing.T) {
 	if skip := m2.freshSkip(); len(skip) != 0 {
 		t.Fatalf("hop 0 and out-of-range reports skip nobody, got %v", skip)
 	}
+	// A late report from a circuit that has already been replaced says
+	// nothing about the next build.
+	m4 := mineManager(t, nil)
+	m4.cur = &relay.Circuit{Path: path}
+	m4.quotaKilled(&relay.Circuit{Path: path}, 2)
+	if !m4.lastFail.IsZero() || len(m4.freshSkip()) != 0 || m4.scoreOf("nano_real2") != 0.7 {
+		t.Fatal("a stale circuit's quota kill must not touch the current manager state")
+	}
 }

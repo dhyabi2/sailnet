@@ -49,8 +49,13 @@ type Circuit struct {
 	// running when the builder hands the circuit to its owner.
 	onQuota       func(int64)
 	onQuotaKilled func(hop int)
-	recv          atomic.Int64 // unix nanos of the last cell received
-	pingErr       atomic.Value
+	// OnQuota is the low-quota callback as a field, kept for importers.
+	//
+	// Deprecated: use SetQuotaHandlers. Assigning this after Build races
+	// with the read loop; it is still honoured when no handler was set.
+	OnQuota func(int64)
+	recv    atomic.Int64 // unix nanos of the last cell received
+	pingErr atomic.Value
 }
 
 // SetQuotaHandlers sets what the circuit calls on a low-quota notice from
@@ -589,6 +594,9 @@ func (c *Circuit) readLoop() {
 				c.mu.Lock()
 				c.Quota = q
 				onQuota := c.onQuota
+				if onQuota == nil {
+					onQuota = c.OnQuota
+				}
 				c.mu.Unlock()
 				if sid == wire.QuotaLowStream && hop == 0 && onQuota != nil {
 					go onQuota(q) // unsolicited: the entry says the quota is running low

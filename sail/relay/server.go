@@ -210,7 +210,6 @@ type homeLink struct {
 type circuit struct {
 	id       uint32 // circID on the inbound connection
 	tag      string
-	poolPaid bool // tag is a listed relay's pool (poolPayer): it may ride the overdraft
 	keys     *wire.HopKeys
 	in       *connWriter
 	next     *connWriter // toward the next hop (nil if we are last)
@@ -763,8 +762,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 		}
 	}
 	s.Metrics.Circuits.Add(1)
-	poolPaid := s.poolPayer(tag, in)
-	if rem := s.Quota.Remaining(tag); rem <= 0 && !s.overdraftOK(poolPaid, rem) {
+	if rem := s.Quota.Remaining(tag); rem <= 0 && !s.overdraftOK(tag, rem) {
 		return nil, fmt.Errorf("prepaid quota for %s… is exhausted", tag[:8])
 	}
 	priv, pub, err := wire.GenX25519()
@@ -775,7 +773,7 @@ func (s *Server) handleCreate(cell *wire.Cell, in *connWriter) (*circuit, error)
 	if err != nil {
 		return nil, err
 	}
-	c := &circuit{id: cell.CircID, tag: tag, poolPaid: poolPaid, keys: keys, in: in, streams: map[uint16]*exitStream{}, resume: wire.ResumeKey(keys)}
+	c := &circuit{id: cell.CircID, tag: tag, keys: keys, in: in, streams: map[uint16]*exitStream{}, resume: wire.ResumeKey(keys)}
 	certHash := s.leafHash()
 	reply := append(pub[:], SignAck(s.Key, clientPub, pub, certHash)...)
 	reply = append(reply, certHash[:]...)
@@ -1198,7 +1196,7 @@ func (s *Server) handleRelayBatch(c *circuit, cells []*wire.Cell) {
 	}
 	s.Metrics.BytesRelayed.Add(n)
 	rem := s.Quota.Consume(c.tag, n)
-	if rem < 0 && !s.overdraftOK(c.poolPaid, rem) {
+	if rem < 0 && !s.overdraftOK(c.tag, rem) {
 		s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
 		c.destroy()
 		return
@@ -1445,8 +1443,8 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			if len(out) == 0 {
 				continue
 			}
-			s.Metrics.BytesRelayed.Add(int64(len(out)) * wire.CellSize)                                                   // downloads count too: without this a relay that carries only replies looks idle
-			if rem := s.Quota.Consume(c.tag, int64(len(out))*wire.CellSize); rem < 0 && !s.overdraftOK(c.poolPaid, rem) { // downloads are paid for, not just uploads
+			s.Metrics.BytesRelayed.Add(int64(len(out)) * wire.CellSize)                                              // downloads count too: without this a relay that carries only replies looks idle
+			if rem := s.Quota.Consume(c.tag, int64(len(out))*wire.CellSize); rem < 0 && !s.overdraftOK(c.tag, rem) { // downloads are paid for, not just uploads
 				c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
 				return
 			}
@@ -1528,50 +1526,22 @@ func (s *Server) Drain(grace time.Duration) {
 // overdraftOK lets a listed relay's pool run a little negative while its
 // top-up is in flight: a pool refill needs a Nano block and proof-of-work,
 // and a circuit must not die waiting for it. Clients get no overdraft; they
-// top up in place before the boundary (CmdTopUp). poolPaid is decided once,
-// when the circuit is created (poolPayer).
-func (s *Server) overdraftOK(poolPaid bool, rem int64) bool {
+// top up in place before the boundary (CmdTopUp).
+func (s *Server) overdraftOK(tag string, rem int64) bool {
 	const overdraft = 128 << 20 // about 15 s at 8 MB/s: the refill starts 60 s ahead, this covers a slow block
-	return poolPaid && rem >= -overdraft
-}
-
-// poolPayer reports whether tag, presented on the connection in, is a relay
-// pool: prepaid by a relay registered on the ledger, for the circuits that
-// relay extends to us. A listed owner alone is not enough — a client can list
-// its own wallet (a self-signed gossip record costs nothing, a registration
-// little), pay us directly for a one-hop circuit, and would then ride the
-// overdraft past what it paid. So the payer must be ledger-listed (not known
-// only from gossip or a bridge line), and the tag must either be the static
-// pool tag for that payer and us — the hash of two account names, which no
-// payment block can hash to — or have arrived on a connection from the
-// payer's own listed address, as an EXTEND from that relay does.
-func (s *Server) poolPayer(tag string, in *connWriter) bool {
-	if s.Registry == nil {
+	if rem < -overdraft || s.Registry == nil {
 		return false
 	}
-	ob, err := hex.DecodeString(s.Quota.Owner(tag))
-	if err != nil || len(ob) != 32 {
+	owner := s.Quota.Owner(tag)
+	if owner == "" {
 		return false
 	}
-	var pub [32]byte
-	copy(pub[:], ob)
-	acct := nano.PubkeyToAddress(pub)
-	if !s.Registry.Listed(acct) {
-		return false
+	for _, r := range s.Registry.All() {
+		if hex.EncodeToString(r.Pub[:]) == owner {
+			return true
+		}
 	}
-	if strings.EqualFold(tag, PoolTag(acct, s.Key.Address)) {
-		return true
-	}
-	ri := s.Registry.Get(acct)
-	if ri == nil || ri.Desc.IP == nil || in == nil || in.c == nil {
-		return false
-	}
-	host, _, err := net.SplitHostPort(in.c.RemoteAddr().String())
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.Equal(ri.Desc.IP)
+	return false
 }
 
 // handleTopUp adds a client's signed send block to its circuit's quota.
@@ -2215,13 +2185,13 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string, flow bool) {
 		if n > 0 {
 			s.Metrics.BytesExit.Add(int64(n))
 			s.replyChunks(c, sid, buf[:n])
-			// A pool refill needs a Nano block, and a circuit must not die
-			// waiting for it (overdraftOK, as in handleRelayBatch and the
-			// reply pump): this read path used to kill the circuit on any
-			// negative remainder, so a pool that was merely a little negative
-			// — its payer listed, its top-up in flight — took the circuit
-			// down on its first downloaded byte.
-			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 && !s.overdraftOK(c.poolPaid, rem) {
+			// No overdraft here, unlike the relay paths: at the exit a pool
+			// payment and a client's direct payment are the same thing — a
+			// send to us credited through creditFromLedger, signed by a
+			// wallet that may be listed — and the link carries no identity
+			// that would tell a relay's EXTEND from a one-hop client. The
+			// overdraft would let any listed wallet download past what it paid.
+			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 {
 				s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
 				break
 			}
