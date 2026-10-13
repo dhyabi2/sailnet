@@ -20,7 +20,7 @@ func cpuTime(t *testing.T) time.Duration {
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
-// A live relay may reach CPU work from several sends at once (REGISTER and
+// A live relay (AllowCPUWork off) may reach CPU work from several sends at once (REGISTER and
 // DESCRIPTOR, a repricing that outlived the next one). Each used to take
 // every core; together they must still take about one: over a window of
 // wall time the process may spend little more than that window in CPU.
@@ -28,6 +28,7 @@ func TestCPUWorkTakesOneCoreProcessWide(t *testing.T) {
 	if runtime.NumCPU() < 2 {
 		t.Skip("one core: nothing to tell apart")
 	}
+	setAllowCPUWork(t, false) // a relay; registration's account opts in with AllowCPU
 	freshWorkCache(t)
 	a := cpuOnlyAccount(t)
 

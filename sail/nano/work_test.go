@@ -2,9 +2,12 @@ package nano
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,10 +30,22 @@ func freshWorkCache(t *testing.T) {
 	workCache.loaded = false
 	workCache.m = map[string]string{}
 	workCache.Unlock()
+	workProgress.Lock()
+	workProgress.m = map[workProgressKey]uint64{}
+	workProgress.Unlock()
+}
+
+// setAllowCPUWork sets the process-wide CPU work mode for one test: true is a
+// client, false a relay.
+func setAllowCPUWork(t *testing.T, v bool) {
+	t.Helper()
+	saved := AllowCPUWork
+	AllowCPUWork = v
+	t.Cleanup(func() { AllowCPUWork = saved })
 }
 
 // cpuOnlyAccount returns an account allowed to fall back to CPU work whose
-// work service answers with a value valid for no root of the tests.
+// work service answers (with a rate budget of its own, not DefaultBudget) with a value valid for no root of the tests.
 func cpuOnlyAccount(t *testing.T) *Account {
 	t.Helper()
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +56,7 @@ func cpuOnlyAccount(t *testing.T) *Account {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nc := &Client{URLs: []string{stub.URL}, HTTP: &http.Client{Timeout: 2 * time.Second}}
+	nc := &Client{URLs: []string{stub.URL}, HTTP: &http.Client{Timeout: 2 * time.Second}, Budget: NewBudget(1000, 1000)}
 	return &Account{Key: key, Client: nc, AllowCPU: true}
 }
 
@@ -65,7 +80,7 @@ func TestRegistrationAccountMayFallBackToCPUWork(t *testing.T) {
 	AllowCPUWork = false
 	defer func() { AllowCPUWork = savedCPU }()
 
-	nc := &Client{URLs: []string{stub.URL}, HTTP: &http.Client{Timeout: 2 * time.Second}}
+	nc := &Client{URLs: []string{stub.URL}, HTTP: &http.Client{Timeout: 2 * time.Second}, Budget: NewBudget(1000, 1000)}
 	key, err := DeriveKey(make([]byte, 32), 0)
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +117,15 @@ func TestRegistrationAccountMayFallBackToCPUWork(t *testing.T) {
 // it. A context already over starts no search, and one that ends mid-search
 // stops it — either way with the context's error, never with work.
 func TestCPUWorkEndsWithItsContext(t *testing.T) {
+	for _, client := range []bool{false, true} {
+		t.Run(map[bool]string{false: "relay", true: "client"}[client], func(t *testing.T) {
+			setAllowCPUWork(t, client)
+			testCPUWorkEndsWithItsContext(t)
+		})
+	}
+}
+
+func testCPUWorkEndsWithItsContext(t *testing.T) {
 	freshWorkCache(t)
 	a := cpuOnlyAccount(t)
 	var root [32]byte
@@ -141,5 +165,111 @@ func TestCPUWorkEndsWithItsContext(t *testing.T) {
 			t.Errorf("%s: CPU work still running 5 s after its context ended", c.name)
 		}
 		cancel()
+	}
+}
+
+func progressOf(root [32]byte, threshold uint64) uint64 {
+	return loadWorkProgress(workProgressKey{root, threshold})
+}
+
+// A search cut off by its context is not wasted: the next call for the same
+// root and threshold starts where it stopped, so a root whose solution lies
+// further than one deadline's worth of hashing is still found by retrying.
+func TestCPUWorkResumesAfterItsDeadline(t *testing.T) {
+	for _, client := range []bool{false, true} {
+		t.Run(map[bool]string{false: "relay", true: "client"}[client], func(t *testing.T) {
+			setAllowCPUWork(t, client)
+			freshWorkCache(t)
+			a := cpuOnlyAccount(t)
+			var root [32]byte
+			root[0] = 0xcc
+
+			call := func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+				if _, err := a.work(ctx, root, neverThreshold); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("want the deadline, got %v", err)
+				}
+			}
+			call()
+			first := progressOf(root, neverThreshold)
+			if first <= workStart {
+				t.Fatalf("first search recorded no progress (%#x)", first)
+			}
+			call()
+			second := progressOf(root, neverThreshold)
+			// Had the second call rescanned from the start, it would have
+			// stopped about where the first did; resuming, it got about as
+			// far again.
+			if second <= first+(first-workStart)/4 {
+				t.Fatalf("second search did not resume: progress %#x after the first, %#x after the second", first, second)
+			}
+			if p := progressOf(root, testThreshold); p != workStart {
+				t.Fatalf("progress leaked to another threshold: %#x", p)
+			}
+		})
+	}
+}
+
+// A resumed search starts at the recorded position (not at the beginning),
+// and finding work drops the position and caches the work.
+func TestCPUWorkStartsAtTheRecordedPosition(t *testing.T) {
+	setAllowCPUWork(t, false)
+	freshWorkCache(t)
+	a := cpuOnlyAccount(t)
+	var root [32]byte
+	root[0] = 0xdd
+
+	// The first solution from the start, which a rescan would return.
+	w0, err := GenerateWorkCPU(context.Background(), root, testThreshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := hex.DecodeString(w0)
+	first := binary.BigEndian.Uint64(b)
+	saveWorkProgress(workProgressKey{root, testThreshold}, first+1)
+
+	w, err := a.work(context.Background(), root, testThreshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = hex.DecodeString(w)
+	if n := binary.BigEndian.Uint64(b); n <= first || !ValidWork(root, w, testThreshold) {
+		t.Fatalf("got nonce %#x (valid %v); want valid work past the recorded position %#x", n, ValidWork(root, w, testThreshold), first+1)
+	}
+	if p := progressOf(root, testThreshold); p != workStart {
+		t.Fatalf("position not dropped once work was found: %#x", p)
+	}
+	if got, ok := CachedWork(root, testThreshold); !ok || got != w {
+		t.Fatal("found work was not remembered in the cache")
+	}
+}
+
+// Clients keep main's speed: their CPU work uses every core and does not wait
+// for the relay's one-search slot.
+func TestClientCPUWorkIsNotSerialised(t *testing.T) {
+	setAllowCPUWork(t, true)
+	freshWorkCache(t)
+	a := cpuOnlyAccount(t)
+	if got := cpuWorkers(); got != runtime.NumCPU() {
+		t.Fatalf("client CPU work uses %d workers, want %d", got, runtime.NumCPU())
+	}
+
+	cpuWorkSlot <- struct{}{} // a relay-mode search holds the slot
+	defer func() { <-cpuWorkSlot }()
+	var root [32]byte
+	root[0] = 0xee
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w, err := a.work(ctx, root, testThreshold)
+	if err != nil || !ValidWork(root, w, testThreshold) {
+		t.Fatalf("client CPU work queued behind the relay slot: work %q, err %v", w, err)
+	}
+}
+
+func TestRelayCPUWorkUsesOneWorker(t *testing.T) {
+	setAllowCPUWork(t, false)
+	if got := cpuWorkers(); got != 1 {
+		t.Fatalf("relay CPU work uses %d workers, want 1", got)
 	}
 }
