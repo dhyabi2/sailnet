@@ -276,3 +276,54 @@ If the answer is no, the change does not ship, whatever it improves.
   ledger's state after that) until a ledger read agreeing with its frontier
   records the height. A read agreeing with the cached frontier only ever raises the
   recorded height, never lowers it.
+- **2026-10-13, paired owners can end: `pair --until --wallet`, `unpair`.**
+  A pairing code can carry an end time and be bound to one wallet; the relay
+  stops carrying that wallet free at the end time (the Lite gate sets it to
+  the token's expiry), and `sailnode unpair nano_…` ends it sooner. Open
+  circuits on an ended owner tag stop within a minute (the relay sweeps its
+  owners once a minute).
+  - *Files.* `owners.json` gains an optional `expires` map, `{hex: unix}`, next
+    to the `owners` list; an owner missing from it rides free for good, which
+    is what every file an older relay wrote means. `pairing.json` gains
+    optional `owner_expires` (unix) and `wallet` (hex public key). Both files
+    are now replaced atomically (temporary file and rename), and every
+    read-modify-write of them, by the relay or by `sailnode pair` / `unpair`,
+    holds an exclusive lock on `owners.json.lock` / `pairing.json.lock` next
+    to them, so `unpair` is never written back by a pairing or a sweep. The
+    lock files are harmless to an older build.
+  - *CLI.* `sailnode pair --until <unix> --wallet nano_…` (both optional;
+    without them a code pairs any wallet for good, as before) also prints a
+    fixed line, `Pairing bound: wallet=<nano_…|any> until=<unix|0>`.
+    `sailnode unpair nano_…` is new.
+  - *Old relay, new gate.* An old `sailnode pair` ignores the flags and would
+    mint a code that pairs any wallet for good; it prints no `Pairing bound:`
+    line, so the gate refuses it ("relay too old") and hands out no code.
+    Lite joins that need a code fail until the relay is upgraded; phones
+    already paired keep riding. An old relay has no `unpair` either, so
+    switching a token off in lite-admin reports that the relay did not end
+    the phone's access. **Upgrade the relay before the gate and the admin
+    app.** lite-admin now needs the same `RELAY_SSH_*` variables as the gate.
+  - *New relay, old gate.* The old gate runs `sailnode pair` with no flags and
+    gets what it always got: a code that pairs any wallet for good.
+  - *Gate token records* gain `relayUntil`, the end time the relay was last
+    given for the token's wallet. When it differs from the token's `expires`
+    (the operator extended the token, or switched it off and on again; a
+    record from before this has none), the next join mints a code even for a
+    paired phone, and the Lite app pairs again with it, so the relay learns
+    the new end time. A Lite app from before this ignores a code it did not
+    ask for, so after an extension the relay keeps the old end time for it
+    and drops it then; ship the app update with the gate. The app does not
+    yet notice the relay refusing its owner circuit by itself: a join that
+    finds the end times out of step is what makes it pair again. Switching a
+    token off, or freeing its phone, runs `sailnode unpair` for its wallet.
+  - *Wallets paired before this* have no end time and stay owners for good.
+    They are not migrated. For each existing Lite wallet, the operator runs
+    `sailnode unpair nano_…` on the relay (the app pairs again, with an end
+    time, on its next connect), or lets the phone re-pair.
+  - *Rollback.* An older relay reads `owners.json` as a plain list and ignores
+    `expires`: every end-timed owner becomes a permanent one. It also ignores
+    the wallet binding of an active code. After downgrading, unpair Lite
+    wallets by editing `owners.json` by hand.
+  - *Known limit.* `pairing.json` holds one code. Two joins needing a code
+    within its five minutes overwrite each other's; the first phone's code
+    then fails and it asks again on its next connect.

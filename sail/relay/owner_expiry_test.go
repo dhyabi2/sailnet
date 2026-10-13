@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/dhyabi2/sail/nano"
 )
 
 // setPairingUntil stamps the active pairing code with the time the access it
@@ -224,5 +229,167 @@ func TestPairingCodeBoundToAWalletPairsOnlyThatWallet(t *testing.T) {
 	}
 	if _, ok := s.ownerFor(OwnerTag(relayKey.Public, phone.Public)); !ok {
 		t.Fatal("the bound wallet should now be an owner")
+	}
+}
+
+// `sailnode unpair` edits owners.json from another process. A pairing
+// (addOwner) or a sweep that follows must not write the removed wallet
+// back, and the wallet's owner grant ends even when a pairing, not the
+// sweep, is the first to notice it is gone.
+func TestUnpairIsNotUndoneByALaterPairingOrSweep(t *testing.T) {
+	dir := t.TempDir()
+	relayKey := testKey(t, 1)
+	a, b, c := testKey(t, 80), testKey(t, 81), testKey(t, 82)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile = filepath.Join(dir, "owners.json")
+	for _, k := range []*nano.Key{a, b} {
+		if err := s.addOwner(k.Public, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tagA := OwnerTag(relayKey.Public, a.Public)
+	clientPub, sig, tagHexA := createFrom(a, tagA)
+	if !s.ownerCreate(tagHexA, tagA, clientPub, sig) {
+		t.Fatal("a paired wallet rides free")
+	}
+
+	if ok, err := RemoveOwner(s.OwnersFile, a.Public); !ok || err != nil { // the CLI, between two sweeps
+		t.Fatalf("RemoveOwner: %v %v", ok, err)
+	}
+	if err := s.addOwner(c.Public, time.Now().Unix()+3600); err != nil {
+		t.Fatal(err)
+	}
+	s.SweepOwners()
+	m, err := readOwners(s.OwnersFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m[a.Public]; ok || len(m) != 2 {
+		t.Fatalf("the unpaired wallet came back: %v", m)
+	}
+	if _, ok := s.ownerFor(tagA); ok {
+		t.Fatal("the unpaired wallet must not be an owner")
+	}
+	if s.Quota.Remaining(tagHexA) > 0 {
+		t.Fatal("the unpaired wallet's owner grant must be emptied")
+	}
+	if s.ownerCreate(tagHexA, tagA, clientPub, sig) {
+		t.Fatal("the unpaired wallet's owner tag must be refused")
+	}
+}
+
+// The same, with the CLI, pairings and sweeps all at once: every wallet
+// unpaired stays unpaired, every wallet paired stays paired.
+func TestConcurrentUnpairPairAndSweepKeepEveryChange(t *testing.T) {
+	dir := t.TempDir()
+	relayKey := testKey(t, 1)
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile = filepath.Join(dir, "owners.json")
+	var old, fresh [][32]byte
+	for i := 0; i < 20; i++ {
+		old = append(old, testKey(t, byte(100+i)).Public)
+		fresh = append(fresh, testKey(t, byte(140+i)).Public)
+	}
+	for _, p := range old {
+		if err := s.addOwner(p, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for i := range old {
+		wg.Add(3)
+		go func(p [32]byte) {
+			defer wg.Done()
+			if ok, err := RemoveOwner(s.OwnersFile, p); !ok || err != nil {
+				t.Errorf("RemoveOwner: %v %v", ok, err)
+			}
+		}(old[i])
+		go func(p [32]byte) {
+			defer wg.Done()
+			if err := s.addOwner(p, 0); err != nil {
+				t.Errorf("addOwner: %v", err)
+			}
+		}(fresh[i])
+		go func() { defer wg.Done(); s.SweepOwners() }()
+	}
+	wg.Wait()
+	s.SweepOwners()
+	m, err := readOwners(s.OwnersFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range old {
+		if _, ok := m[p]; ok {
+			t.Fatal("an unpaired wallet was written back")
+		}
+	}
+	for _, p := range fresh {
+		if _, ok := m[p]; !ok {
+			t.Fatal("a paired wallet was lost")
+		}
+	}
+	if len(s.Owners) != len(fresh) {
+		t.Fatalf("the relay holds %d owners, want %d", len(s.Owners), len(fresh))
+	}
+}
+
+// A code is one use: a wrong guess racing the right one must not write the
+// redeemed code back (it would then pair a second time), and one arriving
+// after it finds no code at all.
+func TestRedeemedCodeDoesNotComeBackAfterAWrongGuess(t *testing.T) {
+	dir := t.TempDir()
+	relayKey, phone := testKey(t, 1), testKey(t, 2)
+	phoneHex := hex.EncodeToString(phone.Public[:])
+	s := ownerServer(t, relayKey, [32]byte{})
+	s.OwnersFile, s.PairingFile = filepath.Join(dir, "owners.json"), filepath.Join(dir, "pairing.json")
+
+	code, _, err := NewPairingCode(s.PairingFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := "000000"
+	if code == wrong {
+		wrong = "111111"
+	}
+	if err := s.tryPair(phoneHex, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tryPair(phoneHex, wrong); err == nil || !strings.Contains(err.Error(), "no pairing code") {
+		t.Fatalf("a guess after the code was used: %v", err)
+	}
+	if _, err := os.Stat(s.PairingFile); !os.IsNotExist(err) {
+		t.Fatal("a wrong guess must not bring a redeemed code back")
+	}
+
+	for round := 0; round < 20; round++ {
+		code, _, err := NewPairingCode(s.PairingFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrong := "000000"
+		if code == wrong {
+			wrong = "111111"
+		}
+		var wg sync.WaitGroup
+		var paired atomic.Int32
+		for i := 0; i < 3; i++ {
+			wg.Add(1)
+			go func(c string) {
+				defer wg.Done()
+				if s.tryPair(phoneHex, c) == nil {
+					paired.Add(1)
+				}
+			}(map[bool]string{true: code, false: wrong}[i == 0])
+		}
+		wg.Wait()
+		if paired.Load() != 1 {
+			t.Fatalf("round %d: the right code paired %d times", round, paired.Load())
+		}
+		if _, err := os.Stat(s.PairingFile); !os.IsNotExist(err) {
+			t.Fatalf("round %d: the redeemed code is back on disk", round)
+		}
+		if err := s.tryPair(phoneHex, code); err == nil {
+			t.Fatalf("round %d: the redeemed code paired again", round)
+		}
 	}
 }

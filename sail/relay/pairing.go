@@ -13,6 +13,7 @@ import (
 	"github.com/dhyabi2/sail/wire"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -99,10 +100,44 @@ func NewPairingCodeFor(path string, until time.Time, wallet [32]byte) (string, t
 		pf.Wallet = hex.EncodeToString(wallet[:])
 	}
 	data, _ := json.Marshal(pf)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	unlock, err := lockFile(path)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	defer unlock()
+	if err := writeFileAtomic(path, data); err != nil {
 		return "", time.Time{}, err
 	}
 	return code, exp, nil
+}
+
+// writeFileAtomic replaces path with data (mode 0600) through a temporary
+// file and a rename, so a reader sees the old file or the new one, never a
+// half-written one.
+func writeFileAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	keepOwner(f, path)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // tryPair checks a code against the pairing file and, on success, makes
@@ -171,6 +206,16 @@ func (s *Server) tryPair(ownerHex, code string) error {
 		return errors.New("pairing is not set up on this relay")
 	}
 	code = strings.ReplaceAll(strings.TrimSpace(code), " ", "")
+	// One guess at a time, and none while `sailnode pair` writes a new code:
+	// a wrong guess read before a right one was redeemed must not write the
+	// redeemed code back, nor an old code over a fresh one.
+	s.pairingMu.Lock()
+	defer s.pairingMu.Unlock()
+	unlock, err := lockFile(s.PairingFile)
+	if err != nil {
+		return errors.New("pairing is not available on this relay right now")
+	}
+	defer unlock()
 	raw, err := os.ReadFile(s.PairingFile)
 	if err != nil {
 		return errors.New("no pairing code is active: run `sailnode pair` on the relay")
@@ -191,7 +236,7 @@ func (s *Server) tryPair(ownerHex, code string) error {
 	if subtle.ConstantTimeCompare([]byte(pairingHash(salt, code)), []byte(pf.Hash)) != 1 {
 		pf.Attempts++
 		if data, err := json.Marshal(pf); err == nil {
-			os.WriteFile(s.PairingFile, data, 0o600)
+			writeFileAtomic(s.PairingFile, data) // under the lock: the file read above is still the one there
 		}
 		return fmt.Errorf("wrong code (%d of %d tries)", pf.Attempts, pairingAttempts)
 	}
@@ -205,7 +250,10 @@ func (s *Server) tryPair(ownerHex, code string) error {
 	}
 	var p [32]byte
 	copy(p[:], pub)
-	s.addOwner(p, pf.OwnerExpires)
+	if err := s.addOwner(p, pf.OwnerExpires); err != nil {
+		log.Printf("pairing: could not record the owner: %v", err)
+		return errors.New("the relay could not record the pairing: run `sailnode pair` on the relay for a new code")
+	}
 	if pf.OwnerExpires != 0 {
 		log.Printf("paired: a new owner rides this relay free until %s (%s…)", time.Unix(pf.OwnerExpires, 0).UTC().Format(time.RFC3339), ownerHex[:8])
 	} else {
@@ -257,14 +305,29 @@ func writeOwners(path string, m map[[32]byte]int64) error {
 		}
 	}
 	data, _ := json.Marshal(f)
-	return os.WriteFile(path, data, 0o600)
+	return writeFileAtomic(path, data)
+}
+
+// readOwnersOrEmpty is readOwners with a missing file read as no owners.
+func readOwnersOrEmpty(path string) (map[[32]byte]int64, error) {
+	m, err := readOwners(path)
+	if os.IsNotExist(err) {
+		return map[[32]byte]int64{}, nil
+	}
+	return m, err
 }
 
 // RemoveOwner takes a paired wallet out of owners.json (`sailnode unpair`).
 // A running relay notices within a minute (RunOwners) and ends the wallet's
 // free access, open circuits included. It reports whether the wallet was
-// there.
+// there. The relay takes the same lock for its own edits, so neither undoes
+// the other's.
 func RemoveOwner(path string, pub [32]byte) (bool, error) {
+	unlock, err := lockFile(path)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	m, err := readOwners(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -280,27 +343,39 @@ func RemoveOwner(path string, pub [32]byte) (bool, error) {
 }
 
 // addOwner records an owner, free until until (0: for good), and persists
-// the list. The file is read first, so a wallet `sailnode unpair` removed
-// since the last sweep is not written back.
-func (s *Server) addOwner(pub [32]byte, until int64) {
+// the list. The file is read first, under its lock, so a wallet `sailnode
+// unpair` removed since the last sweep is not written back; if it cannot be
+// read, nothing is written.
+func (s *Server) addOwner(pub [32]byte, until int64) error {
 	s.ownersMu.Lock()
 	defer s.ownersMu.Unlock()
-	if s.OwnersFile != "" {
-		if m, err := readOwners(s.OwnersFile); err == nil {
-			s.Owners = m
+	if s.OwnersFile == "" {
+		if s.Owners == nil {
+			s.Owners = map[[32]byte]int64{}
+		}
+		s.Owners[pub] = until
+		return nil
+	}
+	unlock, err := lockFile(s.OwnersFile)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m, err := readOwnersOrEmpty(s.OwnersFile)
+	if err != nil {
+		return err
+	}
+	m[pub] = until
+	if err := writeOwners(s.OwnersFile, m); err != nil {
+		return err
+	}
+	for p := range s.Owners {
+		if _, ok := m[p]; !ok {
+			s.endOwnerGrant(p) // unpaired since the last sweep: the sweep will not see it go now
 		}
 	}
-	if s.Owners == nil {
-		s.Owners = map[[32]byte]int64{}
-	}
-	s.Owners[pub] = until
-	if s.OwnersFile == "" {
-		return
-	}
-	writeOwners(s.OwnersFile, s.Owners)
-	if st, err := os.Stat(s.OwnersFile); err == nil {
-		s.ownersMod = st.ModTime()
-	}
+	s.Owners = m
+	return nil
 }
 
 // LoadOwners reads owners.json, if any, into s.Owners.
@@ -320,9 +395,6 @@ func (s *Server) LoadOwners() int {
 	for p, until := range m {
 		s.Owners[p] = until
 	}
-	if st, err := os.Stat(s.OwnersFile); err == nil {
-		s.ownersMod = st.ModTime()
-	}
 	return len(s.Owners)
 }
 
@@ -335,9 +407,15 @@ func (s *Server) ownerFor(tagB [32]byte) ([32]byte, bool) {
 	if s.Owner != ([32]byte{}) && tagB == OwnerTag(s.Key.Public, s.Owner) {
 		return s.Owner, true
 	}
-	now := time.Now().Unix()
 	s.ownersMu.Lock()
 	defer s.ownersMu.Unlock()
+	return s.pairedOwnerLocked(tagB)
+}
+
+// pairedOwnerLocked is ownerFor's lookup among paired wallets; the caller
+// holds ownersMu.
+func (s *Server) pairedOwnerLocked(tagB [32]byte) ([32]byte, bool) {
+	now := time.Now().Unix()
 	for o, until := range s.Owners {
 		if tagB == OwnerTag(s.Key.Public, o) {
 			if until != 0 && now >= until {
@@ -365,21 +443,30 @@ func (s *Server) endOwnerGrant(pub [32]byte) {
 
 // SweepOwners ends the free access of owners whose end time has passed and
 // of those removed from owners.json since it was last read (`sailnode
-// unpair`). Expired owners are dropped from the file.
+// unpair`). Expired owners are dropped from the file. The file is re-read
+// under its lock each time, so an unpair is never written back. A missing
+// owners.json means no paired owners, as it does when the relay starts.
 func (s *Server) SweepOwners() {
 	var gone [][32]byte
 	now := time.Now().Unix()
 	s.ownersMu.Lock()
+	locked := false // owners.json is locked and was read: memory and file agree
+	unlock := func() {}
 	if s.OwnersFile != "" {
-		if st, err := os.Stat(s.OwnersFile); err == nil && !st.ModTime().Equal(s.ownersMod) {
-			if m, err := readOwners(s.OwnersFile); err == nil {
+		if u, err := lockFile(s.OwnersFile); err != nil {
+			log.Printf("owners: %v", err)
+		} else {
+			unlock = u
+			if m, err := readOwnersOrEmpty(s.OwnersFile); err != nil {
+				log.Printf("owners: %v", err)
+			} else {
 				for p := range s.Owners {
 					if _, ok := m[p]; !ok {
 						gone = append(gone, p)
 					}
 				}
 				s.Owners = m
-				s.ownersMod = st.ModTime()
+				locked = true
 			}
 		}
 	}
@@ -391,12 +478,14 @@ func (s *Server) SweepOwners() {
 			expired = true
 		}
 	}
-	if expired && s.OwnersFile != "" {
-		writeOwners(s.OwnersFile, s.Owners)
-		if st, err := os.Stat(s.OwnersFile); err == nil {
-			s.ownersMod = st.ModTime()
+	// Written back only when the file was read under the lock just now;
+	// otherwise memory alone ends them and the file is left as it is.
+	if expired && locked {
+		if err := writeOwners(s.OwnersFile, s.Owners); err != nil {
+			log.Printf("owners: %v", err)
 		}
 	}
+	unlock()
 	s.ownersMu.Unlock()
 	for _, p := range gone {
 		s.endOwnerGrant(p)

@@ -1019,6 +1019,16 @@ func runPair(args []string) {
 		log.Fatalf("pair: %v (run this on the relay, as the user that owns %s)", err, client.DataDir())
 	}
 	fmt.Printf("Pairing code:  %s %s\n", code[:3], code[3:])
+	// A fixed, parseable line: the Lite gate checks it to be sure this relay
+	// honoured --wallet and --until (a relay too old for them prints none).
+	bound, untilUnix := "any", int64(0)
+	if wallet != ([32]byte{}) {
+		bound = nano.PubkeyToAddress(wallet)
+	}
+	if !end.IsZero() {
+		untilUnix = end.Unix()
+	}
+	fmt.Printf("Pairing bound: wallet=%s until=%d\n", bound, untilUnix)
 	fmt.Printf("Valid until %s, one use. In the Sailnet app: Settings → My relays → Add relay, pick this relay, enter the code.\n", exp.Format("15:04"))
 	if end.IsZero() {
 		fmt.Println("Once paired, that phone rides this relay free (Direct: 1 hop, nothing paid).")

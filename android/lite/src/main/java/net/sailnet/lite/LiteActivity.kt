@@ -108,7 +108,9 @@ class LiteActivity : AppCompatActivity() {
             main.post {
                 asking = false
                 if (!r.ok) { note = r.error; return@post }
-                if (needCode) Gate.setPaired(this, false)
+                // The gate also hands a paired phone a code when the relay's end
+                // time for it is out of date (the token was extended): pair again.
+                if (needCode || r.json.optString("code").isNotEmpty()) Gate.setPaired(this, false)
                 Gate.remember(this, token, r.json.optString("account"), r.json.optLong("expires"))
                 LiteVpnService.pendingCode = r.json.optString("code")
                 val ask = VpnService.prepare(this)

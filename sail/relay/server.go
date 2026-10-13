@@ -63,7 +63,7 @@ type Server struct {
 	OwnersFile  string
 	PairingFile string
 	ownersMu    sync.Mutex
-	ownersMod   time.Time // owners.json as last read, so an edit is noticed (SweepOwners)
+	pairingMu   sync.Mutex // one tryPair at a time (pairing.go)
 	// RepFriends and RepBonus: more bytes per XNO for payers whose account
 	// votes for one of these Nano representatives (repbonus.go). Off when
 	// either is empty.

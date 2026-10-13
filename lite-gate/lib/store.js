@@ -1,11 +1,15 @@
 // Tokens live in a private Vercel Blob store, one small JSON file each, named
 // by the SHA-256 of the token: the gate never keeps a token it could leak.
 //
-//   { id, label, created, expires, wallet, revoked }
+//   { id, label, created, expires, wallet, revoked, relayUntil }
 //
 // id is the first 12 hex of the hash (what the admin page shows), expires a
 // Unix time, wallet the Nano address of the one phone the token is bound to
-// (set the first time it is used).
+// (set the first time it is used). relayUntil is the end time the relay was
+// last given for that wallet (the --until of the last pairing code minted);
+// when it differs from expires (the operator extended the token, or switched
+// it off and on), the next join mints a fresh code so the relay learns the
+// new end time. 0 or missing: the relay has none from this token.
 //
 // The same file sits in lite-gate/ (the phones) and lite-admin/ (the operator):
 // two Vercel apps over one store. Change both.
@@ -86,6 +90,16 @@ async function admit(token, wallet) {
   return { rec };
 }
 
+// setRelayUntil records the end time a pairing code was just minted with,
+// re-reading the record so a change the admin page made meanwhile is kept.
+async function setRelayUntil(token, until) {
+  const h = hash(token);
+  const rec = await readPath(path(h));
+  if (!rec) return;
+  rec.relayUntil = until;
+  await write(h, rec);
+}
+
 // update changes one token found by its id (admin page).
 async function update(id, change) {
   for (const rec of await all()) {
@@ -98,4 +112,4 @@ async function update(id, change) {
   return null;
 }
 
-module.exports = { create, all, admit, update };
+module.exports = { create, all, admit, update, setRelayUntil };
