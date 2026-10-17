@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
@@ -17,6 +18,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.preference.PreferenceManager
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import net.sailnet.mobile.Mobile
@@ -34,6 +36,13 @@ class MainActivity : AppCompatActivity() {
     }
     private lateinit var status: TextView
     private lateinit var statusDetail: TextView
+    private lateinit var statusDot: View
+    private lateinit var modeBadge: TextView
+    private lateinit var headerSub: TextView
+    private lateinit var optModeVal: TextView
+    private lateinit var optExcludeVal: TextView
+    private lateinit var optShareVal: TextView
+    private lateinit var optBridgesVal: TextView
     private lateinit var address: TextView
     private lateinit var balance: TextView
     private lateinit var path: TextView
@@ -48,9 +57,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        if (!prefs.getBoolean("intro_seen_v2", false)) {
+            startActivity(Intent(this, IntroActivity::class.java))
+        }
+
         status = findViewById(R.id.status)
         statusDetail = findViewById(R.id.statusDetail)
-        supportActionBar?.subtitle = "v" + BuildConfig.VERSION_NAME
+        statusDot = findViewById(R.id.statusDot)
+        modeBadge = findViewById(R.id.modeBadge)
+        headerSub = findViewById(R.id.headerSub)
+        optModeVal = findViewById(R.id.optModeVal)
+        optExcludeVal = findViewById(R.id.optExcludeVal)
+        optShareVal = findViewById(R.id.optShareVal)
+        optBridgesVal = findViewById(R.id.optBridgesVal)
+
         address = findViewById(R.id.address)
         balance = findViewById(R.id.balance)
         path = findViewById(R.id.path)
@@ -60,6 +82,7 @@ class MainActivity : AppCompatActivity() {
         fundCard = findViewById(R.id.fundCard)
         updateCard = findViewById(R.id.updateCard)
         updateText = findViewById(R.id.updateText)
+
         findViewById<Button>(R.id.update).setOnClickListener {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(APK_URL)))
         }
@@ -67,8 +90,23 @@ class MainActivity : AppCompatActivity() {
 
         val addr = Mobile.address(filesDir.absolutePath)
         address.text = addr
-        if (Prefs.nick(this).isNotEmpty()) title = "Sailnet · " + Prefs.nick(this)
         qr.setImageBitmap(qrBitmap("nano:$addr", 512))
+
+        findViewById<Button>(R.id.introBtn).setOnClickListener {
+            startActivity(Intent(this, IntroActivity::class.java))
+        }
+        findViewById<View>(R.id.optModeCard).setOnClickListener {
+            startActivity(Intent(this, IntroActivity::class.java).putExtra("page", 1))
+        }
+        findViewById<View>(R.id.optExcludeCard).setOnClickListener {
+            startActivity(Intent(this, IntroActivity::class.java).putExtra("page", 2))
+        }
+        findViewById<View>(R.id.optShareCard).setOnClickListener {
+            startActivity(Intent(this, IntroActivity::class.java).putExtra("page", 3))
+        }
+        findViewById<View>(R.id.optBridgesCard).setOnClickListener {
+            startActivity(Intent(this, IntroActivity::class.java).putExtra("page", 2))
+        }
 
         findViewById<Button>(R.id.copy).setOnClickListener {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("nano address", addr))
@@ -113,11 +151,41 @@ class MainActivity : AppCompatActivity() {
                 else -> prepareAndStart()
             }
         }
-        title = "Sailnet · " + Prefs.nick(this)
+        refreshOptionCards()
         checkFunds(andConnect = true)
     }
 
+    private fun refreshOptionCards() {
+        val p = PreferenceManager.getDefaultSharedPreferences(this)
+        val nick = Prefs.nick(this)
+        headerSub.text = "v${BuildConfig.VERSION_NAME} · $nick"
 
+        val mode = p.getString("mode", "mine") ?: "mine"
+        val paired = (p.getString("mine", "") ?: "").lines().map { it.trim() }.count { it.startsWith("nano_") }
+        modeBadge.text = when (mode) {
+            "direct" -> "DIRECT · 1 HOP"
+            "open" -> "OPEN · 3 HOPS"
+            else -> "MY RELAY · 3 HOPS"
+        }
+        optModeVal.text = when (mode) {
+            "direct" -> if (paired > 0) "Direct · $paired paired" else "Direct · 1 hop"
+            "open" -> "Open · 3 hops"
+            else -> if (paired > 0) "My relays · $paired paired" else "My relays · 3 hops"
+        }
+
+        val ex = p.getStringSet("exclude_cc", emptySet()) ?: emptySet()
+        optExcludeVal.text = if (ex.isEmpty()) "All countries allowed" else "Excluded: " + ex.sorted().joinToString(", ")
+
+        optShareVal.text = when (Share.mode(this)) {
+            "sailnet" -> "Sailnet Wi-Fi hotspot"
+            "mine" -> "My Android hotspot"
+            else -> "Off"
+        }
+
+        val extraBridges = (p.getString("bridges", "") ?: "").lines().map { it.trim() }.count { it.startsWith("sail-bridge:") }
+        val idle = if (p.getBoolean("pause_hidden", true)) "Idle pause on" else "Always on"
+        optBridgesVal.text = "${3 + extraBridges} bridges · $idle"
+    }
 
     // The screen is drawn only while it can be seen: a status poll every
     // 1.5 s behind a closed app was heat for nothing.
@@ -138,6 +206,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        refreshOptionCards()
         if (!funded && !checkingFunds && !SailVpnService.running) checkFunds(andConnect = connectWhenFunded)
     }
 
@@ -151,6 +220,13 @@ class MainActivity : AppCompatActivity() {
             // If it fails the service flags still drive the texts.
             val s = try { JSONObject(Mobile.status()) } catch (_: Exception) { JSONObject() }
             ui.post { draw(s) }
+        }
+    }
+
+    private fun setDotColor(hex: String) {
+        statusDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(hex))
         }
     }
 
@@ -172,8 +248,14 @@ class MainActivity : AppCompatActivity() {
                     SailVpnService.lastError.isNotEmpty() -> "Failed"
                     else -> "Disconnected"
                 }
+                when {
+                    running && p.isNotEmpty() -> setDotColor("#10B981")
+                    starting || running || (checkingFunds && !funded) -> setDotColor("#F59E0B")
+                    SailVpnService.lastError.isNotEmpty() -> setDotColor("#EF4444")
+                    else -> setDotColor("#64748B")
+                }
                 statusDetail.text = when {
-                    running && p.isNotEmpty() -> "Exit is the last hop. All apps go through it."
+                    running && p.isNotEmpty() -> "Exit is the last hop. All apps and DNS queries go through it."
                     checkingFunds && !funded -> "Reading your balance and claiming your free trial. Connect unlocks as soon as the wallet can pay."
                     needsFunds -> if (fundNote.isNotEmpty()) fundNote + " Send XNO to the address below; Sailnet connects by itself when it arrives."
                         else "Your wallet has no XNO yet. Send XNO to the address below; Sailnet connects by itself when it arrives."
@@ -184,7 +266,7 @@ class MainActivity : AppCompatActivity() {
                 path.text = p.ifEmpty { "—" }
                 if (bal.isNotEmpty()) lastBalance = bal
                 val shown = if (bal.isNotEmpty()) bal else lastBalance
-                balance.text = if (shown.isEmpty()) "Balance unknown until first connection" else "$shown XNO"
+                balance.text = if (shown.isEmpty()) "Balance unknown" else "$shown XNO"
                 val up = s.optLong("bytesUp"); val down = s.optLong("bytesDown")
                 traffic.text = "↑ ${human(up)}   ↓ ${human(down)}   ${s.optInt("relays")} relays"
                 s.optJSONObject("costs")?.let { c ->
@@ -332,13 +414,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // An update notice is a convenience, never a dependency: one small GET to
-    // the release list at most every six hours, and any failure — no network,
-    // a rate limit, an odd answer — shows nothing and changes nothing. It says
-    // a newer build exists and opens the download in the browser; installing
-    // stays the user's own decision. Every build from v0.2.53 on carries the
-    // same signing key, so the download installs over this one and the wallet
-    // stays where it is.
     private fun checkForUpdate() {
         val p = getSharedPreferences("update", MODE_PRIVATE)
         val now = System.currentTimeMillis()
@@ -373,8 +448,6 @@ class MainActivity : AppCompatActivity() {
         updateCard.visibility = View.VISIBLE
     }
 
-    // "v0.3.19" is newer than "0.3.18-2-gabc1234": the leading v and anything
-    // past a dash (a build between tags) are ignored, the rest compared as numbers.
     private fun isNewer(tag: String, have: String): Boolean {
         fun parts(s: String) = s.removePrefix("v").substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
         val a = parts(tag)

@@ -23,9 +23,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".SettingsActivity" android:exported="false" android:label="Settings" />
-        <activity android:name=".RelaysActivity" android:exported="false" android:label="Relays" />
-        <activity android:name=".LogActivity" android:exported="false" android:label="Log" />
+        <activity android:name=".IntroActivity" android:exported="false" android:label="Guide &amp; Options" />
+        <activity android:name=".SettingsActivity" android:exported="false" android:label="Settings" android:theme="@style/Theme.Sailnet.Bar" />
+        <activity android:name=".RelaysActivity" android:exported="false" android:label="Relays" android:theme="@style/Theme.Sailnet.Bar" />
+        <activity android:name=".LogActivity" android:exported="false" android:label="Log" android:theme="@style/Theme.Sailnet.Bar" />
         <service
             android:name=".SailVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"

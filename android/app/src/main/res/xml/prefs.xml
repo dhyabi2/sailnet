@@ -2,6 +2,13 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
+    <PreferenceCategory android:title="Guide">
+        <Preference
+            android:key="intro_tour"
+            android:title="Interactive Guide &amp; Options Tour"
+            android:summary="Walk through every Sailnet mode, bridge, hotspot and wallet option." />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Identity">
         <EditTextPreference
             android:key="nick"
