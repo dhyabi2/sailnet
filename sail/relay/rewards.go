@@ -521,23 +521,31 @@ func SweepTo(ctx context.Context, nc *nano.Client, key *nano.Key, to string, kee
 // the bar our own earnings had to clear before an operator saw any of them.
 // Repricing is for what we charge; it should not decide when we get paid.
 //
-// The registry is the only place the peers' prices live, so an empty one
-// (a cold start, a node that has not replayed the ledger yet) falls back to
-// the --pool floor, which is what a top-up costs when no price is known.
+// The median is taken over peers proven to be alive (a recent gossip record
+// or TCP reachability), the same way WarmPools and client path selection do:
+// a pile of retired, cheap ledger records must not drag the float down below
+// what prepaying a single live peer actually costs.
 func (s *Server) Float(pools int64) *big.Int {
 	if s.PoolRaw == nil || pools <= 0 {
 		return big.NewInt(0)
 	}
-	var costs []*big.Int
+	var allCosts, liveCosts []*big.Int
 	if s.Registry != nil {
 		for _, rel := range s.Registry.All() {
 			if s.Key != nil && rel.Account == s.Key.Address {
 				continue // we never prepay ourselves
 			}
 			if c := s.poolRaw(rel); c != nil {
-				costs = append(costs, c)
+				allCosts = append(allCosts, c)
+				if time.Since(s.Registry.LastSeen(rel.Account)) < 3*time.Hour || s.reachedWithin(rel.Account, 3*time.Hour) {
+					liveCosts = append(liveCosts, c)
+				}
 			}
 		}
+	}
+	costs := liveCosts
+	if len(costs) < 4 {
+		costs = allCosts
 	}
 	if len(costs) == 0 {
 		return new(big.Int).Mul(s.PoolRaw, big.NewInt(pools))

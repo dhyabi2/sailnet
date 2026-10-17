@@ -1,8 +1,10 @@
 package relay
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/dhyabi2/sail/token"
 )
@@ -75,5 +77,23 @@ func TestFloatFallsBackToThePoolFloorWithNoRegistry(t *testing.T) {
 	want := new(big.Int).Mul(mustXNO(t, "0.001"), big.NewInt(8))
 	if got := s.Float(8); got.Cmp(want) != 0 {
 		t.Fatalf("cold start float = %s, want %s", formatXNO(got), formatXNO(want))
+	}
+}
+
+func TestFloatIgnoresDeadCheapRegistrations(t *testing.T) {
+	s := floatServer(t)
+	s.reached = map[string]time.Time{}
+	for i := 0; i < 5; i++ {
+		acct := fmt.Sprintf("nano_live%d", i)
+		s.Registry.relays[acct] = &RelayInfo{Account: acct, MinRate: rate(t, "0.0005")}
+		s.reached[acct] = time.Now()
+	}
+	for i := 0; i < 40; i++ {
+		acct := fmt.Sprintf("nano_dead%d", i)
+		s.Registry.relays[acct] = &RelayInfo{Account: acct, MinRate: rate(t, "0.000005")}
+	}
+	want := new(big.Int).Mul(RawFor(32<<20, token.RateToRaw(rate(t, "0.0005"))), big.NewInt(8))
+	if got := s.Float(8); got.Cmp(want) != 0 {
+		t.Fatalf("dead cheap records dragged the float down: got %s XNO, want %s XNO", formatXNO(got), formatXNO(want))
 	}
 }
