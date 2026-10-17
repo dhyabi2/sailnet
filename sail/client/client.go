@@ -1022,6 +1022,12 @@ func (m *manager) keepalive(c *relay.Circuit) {
 			m.sampleUsage(c, c.Tag) // a few minutes apart: the cost ledger follows the meter
 		}
 		if bad := c.Ping(8 * time.Second); bad >= 0 {
+			if c.Closed() {
+				// Closed while Ping waited (another goroutine rebuilt or
+				// paused): the circuit's own closure is why no pong came
+				// back, so hop `bad` is not at fault.
+				return
+			}
 			if time.Since(c.LastRecv()) < 10*time.Second {
 				// The pong is queued behind a busy download; the circuit is
 				// plainly alive, so a late pong is not a dead hop.
@@ -1029,7 +1035,9 @@ func (m *manager) keepalive(c *relay.Circuit) {
 			}
 			log.Printf("keepalive: hop %d (%s) failed (%s; last cell %s ago); rebuilding", bad, c.Path[bad].Account, c.PingErr(), time.Since(c.LastRecv()).Round(time.Millisecond))
 			m.mu.Lock()
-			m.mark(c.Path[bad].Account, false)
+			if !c.Closed() {
+				m.mark(c.Path[bad].Account, false)
+			}
 			m.mu.Unlock()
 			c.Close()
 			return

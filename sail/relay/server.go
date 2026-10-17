@@ -223,11 +223,12 @@ type circuit struct {
 	sealMu   sync.Mutex // seal + ring push, so ring order is sequence order
 	parkCond *sync.Cond // wakes deliver() when the client link is back (or the circuit is destroyed)
 	ring     []ringCell // last backward cells sent, for retransmission after a reattach
-	rateAt   time.Time  // rate window start (for the low-quota threshold)
-	rateN    int64      // bytes relayed in the window
-	rate     int64      // bytes per second over the last window
-	mu       sync.Mutex
-	closed   bool
+	rateAt    time.Time  // rate window start (for the low-quota threshold)
+	rateN     int64      // bytes relayed in the window
+	rate      int64      // bytes per second over the last window
+	exhausted bool       // "quota exhausted" already sent on this circuit
+	mu        sync.Mutex
+	closed    bool
 }
 
 // exitStream is one stream at the exit. A windowed stream (BEGIN2) keeps the
@@ -1196,11 +1197,26 @@ func (s *Server) handleRelayBatch(c *circuit, cells []*wire.Cell) {
 	}
 	s.Metrics.BytesRelayed.Add(n)
 	rem := s.Quota.Consume(c.tag, n)
+	c.mu.Lock()
+	var exhausted bool
 	if rem < 0 && !s.overdraftOK(c.tag, rem) {
-		s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+		if !c.exhausted {
+			c.exhausted = true
+			exhausted = true
+		}
+		in := c.in
+		id := c.id
+		c.mu.Unlock()
+		if exhausted {
+			s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+			if in != nil {
+				in.write(&wire.Cell{CircID: id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
+			}
+		}
 		c.destroy()
 		return
 	}
+	c.mu.Unlock()
 	s.lowQuotaCheck(c, rem, n)
 	if len(fwd) > 0 {
 		c.mu.Lock()
@@ -1431,6 +1447,21 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			s.meterPool(c.poolAcct, int64(len(batch))*wire.CellSize)
 			out := make([]*wire.Cell, 0, len(batch))
 			for _, cell := range batch {
+				if cell.Cmd == wire.CmdError {
+					// The next hop ended our circuit there. If it says our
+					// pool is exhausted, our local p.credited estimate is
+					// ahead of what the peer actually has left (e.g. an older
+					// build allowed overdraft, or the peer counted exit bytes):
+					// reset the estimate and top up now so the next circuit
+					// does not keep sending the same spent pool tag.
+					if c.poolAcct != "" && strings.Contains(strings.ToLower(string(cell.Payload)), "exhausted") {
+						if !s.recentTopUp(rel) {
+							log.Printf("downstream %s reports pool exhausted; topping up", short(rel.Account))
+							s.poolExhausted(rel)
+						}
+					}
+					continue
+				}
 				if cell.Cmd != wire.CmdData {
 					continue
 				}
@@ -1445,7 +1476,19 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			}
 			s.Metrics.BytesRelayed.Add(int64(len(out)) * wire.CellSize)                                              // downloads count too: without this a relay that carries only replies looks idle
 			if rem := s.Quota.Consume(c.tag, int64(len(out))*wire.CellSize); rem < 0 && !s.overdraftOK(c.tag, rem) { // downloads are paid for, not just uploads
-				c.deliver(&wire.Cell{CircID: c.id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
+				c.mu.Lock()
+				first := !c.exhausted
+				c.exhausted = true
+				in := c.in
+				id := c.id
+				c.mu.Unlock()
+				if first {
+					s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+					if in != nil {
+						in.write(&wire.Cell{CircID: id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
+					}
+				}
+				c.destroy()
 				return
 			}
 			c.deliver(out...)
@@ -1939,7 +1982,12 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 	}
 	s.mu.Lock()
 	p.tag = strings.ToUpper(h)
-	p.credited += BytesFor(amount, rateRaw)
+	p.lastTop = time.Now()
+	// A new payment replaces the old pool tag, so the quota at the peer is
+	// what this send just bought (not the leftover estimate of a previous tag
+	// whose overdraft or exit bytes may have already spent it).
+	p.used = 0
+	p.credited = BytesFor(amount, rateRaw)
 	s.savePoolsLocked()
 	s.mu.Unlock()
 	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(amount), h[:8])
@@ -2192,7 +2240,22 @@ func (s *Server) handleBegin(c *circuit, sid uint16, target string, flow bool) {
 			// that would tell a relay's EXTEND from a one-hop client. The
 			// overdraft would let any listed wallet download past what it paid.
 			if rem := s.Quota.Consume(c.tag, int64(n)); rem < 0 {
-				s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+				c.mu.Lock()
+				first := !c.exhausted
+				c.exhausted = true
+				in := c.in
+				id := c.id
+				c.mu.Unlock()
+				if first {
+					s.reply(c, wire.CmdError, 0, []byte("quota exhausted"))
+					if in != nil {
+						// Tell our immediate upstream hop too (plaintext on its
+						// link), so if it is a relay whose pool tag ran out here
+						// it resets its pool estimate and tops up immediately.
+						in.write(&wire.Cell{CircID: id, Cmd: wire.CmdError, Payload: []byte("quota exhausted")})
+					}
+				}
+				c.destroy()
 				break
 			}
 		}

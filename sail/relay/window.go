@@ -70,17 +70,31 @@ func (c *cellQueue) pop() (d []byte, credit uint32) {
 	return d, credit
 }
 
-func (c *cellQueue) tryPop() []byte {
+func (c *cellQueue) tryPop() ([]byte, uint32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.q) == 0 {
-		return nil
+		return nil, 0
 	}
 	d := c.q[0]
 	c.q[0] = nil
 	c.q = c.q[1:]
 	c.consumed++
-	return d
+	var credit uint32
+	if c.consumed >= c.window/4 {
+		grow := 0
+		if c.drained && c.window < wire.MaxStreamWindow {
+			grow = c.window
+			if c.window+grow > wire.MaxStreamWindow {
+				grow = wire.MaxStreamWindow - c.window
+			}
+		}
+		credit = uint32(c.consumed + grow)
+		c.window += grow
+		c.consumed = 0
+		c.drained = false
+	}
+	return d, credit
 }
 
 func (c *cellQueue) len() int {
