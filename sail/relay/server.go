@@ -194,7 +194,9 @@ type pool struct {
 	topping  bool // a top-up is in flight (one at a time per peer)
 	rateAt   time.Time
 	rateN    int64
-	rate     int64 // bytes per second through this pool, recent window
+	rate     int64     // bytes per second through this pool, recent window
+	claims   int       // peer's "exhausted" claims we paid for against our own metering
+	claimAt  time.Time // when we last paid for one
 }
 
 // homeLink is a home node's outbound tunnel that we accept circuits into.
@@ -1456,7 +1458,7 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 					// does not keep sending the same spent pool tag.
 					if c.poolAcct != "" && strings.Contains(strings.ToLower(string(cell.Payload)), "exhausted") {
 						if !s.recentTopUp(rel) {
-							log.Printf("downstream %s reports pool exhausted; topping up", short(rel.Account))
+							log.Printf("downstream %s reports pool exhausted", short(rel.Account))
 							s.poolExhausted(rel)
 						}
 					}
@@ -2003,11 +2005,42 @@ func (s *Server) recentTopUp(rel *RelayInfo) bool {
 	return p != nil && time.Since(p.lastTop) < time.Minute
 }
 
-// poolExhausted forgets our estimate for a peer's pool (the peer just told
-// us it is empty) and starts a top-up right away.
+// claimBackoff is how long after a payment, and after the last claim we paid
+// for, a peer's "exhausted" that our own metering does not back is ignored:
+// ten minutes, doubling with each one we pay for, at most a day.
+func claimBackoff(n int) time.Duration {
+	if n >= 7 {
+		return 24 * time.Hour
+	}
+	return 10 * time.Minute << n
+}
+
+// poolExhausted handles a peer telling us our pool there is empty. That is a
+// plaintext, unauthenticated error cell, so it is believed outright only when
+// our own metering says the pool is nearly spent (the same quarter that
+// triggers a refill in meterPool). Otherwise it can still mean our estimate
+// drifted ahead of the peer's count, so it is paid for, but never soon after
+// a payment and with a per-peer backoff: a peer cannot make us prepay it a
+// new pool every minute by saying so.
 func (s *Server) poolExhausted(rel *RelayInfo) {
 	s.mu.Lock()
-	if p := s.pools[rel.Account]; p != nil {
+	p := s.pools[rel.Account]
+	if p != nil && s.PoolRaw != nil {
+		if p.credited-p.used >= s.poolSize(rel)/4 {
+			wait := claimBackoff(p.claims)
+			if time.Since(p.lastTop) < wait || time.Since(p.claimAt) < wait {
+				left := p.credited - p.used
+				s.mu.Unlock()
+				log.Printf("%s claims its pool is exhausted; our metering says %d bytes left: not paying again yet", short(rel.Account), left)
+				return
+			}
+			p.claims++
+			p.claimAt = time.Now()
+		} else {
+			p.claims = 0 // our metering agrees: the peer's claims are honest again
+		}
+	}
+	if p != nil {
 		p.credited = p.used
 		p.lastTop = time.Time{}
 		s.savePoolsLocked()
