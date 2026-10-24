@@ -166,3 +166,64 @@ func TestExhaustedClaimBackoffIsSaved(t *testing.T) {
 		t.Fatalf("restored pool %+v; want claims=3 claimAt=%v wiped", p, at)
 	}
 }
+
+// A claim timed into the window where our own metering is honestly under a
+// quarter (a meterPool refill in flight, or a count the peer pushed down
+// with cells of its own) is paid, but must not reset the backoff: that let
+// a peer force a new pool ten minutes after every payment.
+func TestExhaustedClaimInTheRefillWindowKeepsTheBackoff(t *testing.T) {
+	s := &Server{PoolRaw: mustXNO(t, "0.001"), PoolBytes: 32 << 20}
+	rel := &RelayInfo{Account: "nano_peer", MinRate: 50000000}
+	size := s.poolSize(rel)
+	// Three unbacked claims already paid for: the next waits 80 minutes.
+	s.pools = map[string]*pool{rel.Account: {
+		tag: "T", credited: size, used: size - size/8,
+		lastTop: time.Now().Add(-5 * time.Minute), claims: 3, claimAt: time.Now().Add(-5 * time.Minute),
+		topping: true,
+	}}
+	s.poolExhausted(rel, "T")
+	s.mu.Lock()
+	p := s.pools[rel.Account]
+	if p.claims != 3 {
+		t.Errorf("a claim in the refill window changed the paid-claim count from 3 to %d", p.claims)
+	}
+	// The refill lands 11 minutes ago, as topUpPool records it.
+	p.tag, p.credited, p.used, p.topping, p.wiped = "T2", size, 1<<20, false, false
+	p.lastTop = time.Now().Add(-11 * time.Minute)
+	p.claimAt = time.Now().Add(-16 * time.Minute)
+	s.mu.Unlock()
+	if claimTopUp2(t, s, rel, "T2") {
+		t.Fatal("an unbacked claim 11 minutes after a payment was paid although three had been paid before (backoff 80 minutes)")
+	}
+}
+
+// The backoff is forgotten only after a week without a paid claim.
+func TestExhaustedClaimBackoffDecaysAfterAQuietWeek(t *testing.T) {
+	s := &Server{PoolRaw: mustXNO(t, "0.001"), PoolBytes: 32 << 20}
+	rel := &RelayInfo{Account: "nano_peer", MinRate: 50000000}
+	size := s.poolSize(rel)
+	s.pools = map[string]*pool{rel.Account: {
+		tag: "T", credited: size, used: 1 << 20, claims: 7,
+		lastTop: time.Now().Add(-8 * 24 * time.Hour), claimAt: time.Now().Add(-8 * 24 * time.Hour),
+	}}
+	s.poolExhausted(rel, "T")
+	s.mu.Lock()
+	claims := s.pools[rel.Account].claims
+	s.mu.Unlock()
+	if claims != 1 {
+		t.Fatalf("after a quiet week a paid claim left claims=%d; want the backoff started over at 1", claims)
+	}
+}
+
+// claimTopUp2 is claimTopUp with the pool tag the claim was made against.
+func claimTopUp2(t *testing.T, s *Server, rel *RelayInfo, tag string) bool {
+	t.Helper()
+	if s.recentTopUp(rel) {
+		return false
+	}
+	s.poolExhausted(rel, tag)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pools[rel.Account]
+	return p.topping || p.credited == p.used
+}

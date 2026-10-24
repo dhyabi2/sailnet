@@ -1838,7 +1838,7 @@ type poolFile struct {
 	Credited int64     `json:"credited"`
 	Used     int64     `json:"used"`
 	Claims   int       `json:"claims,omitempty"`
-	ClaimAt  time.Time `json:"claim_at,omitempty"`
+	ClaimAt  time.Time `json:"claim_at,omitzero"`
 	Wiped    bool      `json:"wiped,omitempty"`
 }
 
@@ -2023,6 +2023,11 @@ func claimBackoff(n int) time.Duration {
 	return 10 * time.Minute << n
 }
 
+// claimForget is how long without a claim we paid for before a peer's
+// backoff starts over. It is well past the longest backoff, so a peer at
+// the cap gains nothing by waiting it out.
+const claimForget = 7 * 24 * time.Hour
+
 // poolExhausted handles a peer telling us our pool there is empty. That is a
 // plaintext, unauthenticated error cell, so it is believed outright only when
 // our own metering says the pool is nearly spent (the same quarter that
@@ -2044,6 +2049,9 @@ func (s *Server) poolExhausted(rel *RelayInfo, tag string) {
 		return
 	}
 	if p != nil && s.PoolRaw != nil {
+		if p.claims > 0 && time.Since(p.claimAt) > claimForget {
+			p.claims = 0 // a week without a claim we paid for: start the backoff over
+		}
 		if p.credited-p.used >= s.poolSize(rel)/4 {
 			wait := claimBackoff(p.claims)
 			if time.Since(p.lastTop) < wait || time.Since(p.claimAt) < wait {
@@ -2060,9 +2068,11 @@ func (s *Server) poolExhausted(rel *RelayInfo, tag string) {
 			}
 			p.claims++
 			p.claimAt = time.Now()
-		} else {
-			p.claims = 0 // our own metering agrees: the peer's claims are honest again
 		}
+		// When our metering agrees the pool is spent the claim is paid at
+		// once, but it does not reset the backoff: a peer can push our
+		// count under a quarter (or wait for a refill in flight) and time a
+		// claim into that window.
 	}
 	if p != nil {
 		p.credited = p.used
