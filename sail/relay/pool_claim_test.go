@@ -175,7 +175,7 @@ func TestExhaustedClaimInTheRefillWindowKeepsTheBackoff(t *testing.T) {
 	s := &Server{PoolRaw: mustXNO(t, "0.001"), PoolBytes: 32 << 20}
 	rel := &RelayInfo{Account: "nano_peer", MinRate: 50000000}
 	size := s.poolSize(rel)
-	// Three unbacked claims already paid for: the next waits 80 minutes.
+	// Three unbacked claims already paid for: the next waits an hour.
 	s.pools = map[string]*pool{rel.Account: {
 		tag: "T", credited: size, used: size - size/8,
 		lastTop: time.Now().Add(-5 * time.Minute), claims: 3, claimAt: time.Now().Add(-5 * time.Minute),
@@ -193,7 +193,7 @@ func TestExhaustedClaimInTheRefillWindowKeepsTheBackoff(t *testing.T) {
 	p.claimAt = time.Now().Add(-16 * time.Minute)
 	s.mu.Unlock()
 	if claimTopUp2(t, s, rel, "T2") {
-		t.Fatal("an unbacked claim 11 minutes after a payment was paid although three had been paid before (backoff 80 minutes)")
+		t.Fatal("an unbacked claim 11 minutes after a payment was paid although three had been paid before (backoff an hour)")
 	}
 }
 
@@ -226,4 +226,32 @@ func claimTopUp2(t *testing.T, s *Server, rel *RelayInfo, tag string) bool {
 	defer s.mu.Unlock()
 	p := s.pools[rel.Account]
 	return p.topping || p.credited == p.used
+}
+
+// An honest peer whose real "exhausted" our metering does not back (our
+// count ran ahead of its own, say after a restart lost the unsaved part)
+// must not be left unpaid for many hours: the link to it is down until the
+// claim is paid. However many claims we paid before, one an hour after the
+// last payment is paid again.
+func TestExhaustedClaimBackoffIsAtMostAnHour(t *testing.T) {
+	s := &Server{PoolRaw: mustXNO(t, "0.001"), PoolBytes: 32 << 20}
+	rel := &RelayInfo{Account: "nano_peer", MinRate: 50000000}
+	size := s.poolSize(rel)
+	s.pools = map[string]*pool{rel.Account: {
+		tag: "T", credited: size, used: 1 << 20, claims: 7,
+		lastTop: time.Now().Add(-61 * time.Minute), claimAt: time.Now().Add(-61 * time.Minute),
+	}}
+	if !claimTopUp(t, s, rel) {
+		t.Fatal("a claim 61 minutes after the last paid one was ignored; the backoff must stop at an hour")
+	}
+	// It still never pays sooner than that, however long it has been capped.
+	s.mu.Lock()
+	p := s.pools[rel.Account]
+	p.credited, p.used, p.topping, p.wiped = size, 1<<20, false, false
+	p.lastTop = time.Now().Add(-59 * time.Minute)
+	p.claimAt = time.Now().Add(-59 * time.Minute)
+	s.mu.Unlock()
+	if claimTopUp(t, s, rel) {
+		t.Fatal("a claim 59 minutes after the last paid one was paid; the capped backoff is an hour")
+	}
 }

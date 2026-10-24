@@ -2015,10 +2015,14 @@ func (s *Server) recentTopUp(rel *RelayInfo) bool {
 
 // claimBackoff is how long after a payment, and after the last claim we paid
 // for, a peer's "exhausted" that our own metering does not back is ignored:
-// ten minutes, doubling with each one we pay for, at most a day.
+// ten minutes, doubling with each one we pay for, at most an hour. The cap
+// is short on purpose: our metering can honestly run ahead of the peer's
+// (a restart loses up to 8 MiB of unsaved count), and while a real claim
+// waits out the backoff the link is down. An hour bounds both that outage
+// and what a lying peer can make us pay.
 func claimBackoff(n int) time.Duration {
-	if n >= 7 {
-		return 24 * time.Hour
+	if n >= 3 {
+		return time.Hour
 	}
 	return 10 * time.Minute << n
 }
