@@ -197,6 +197,8 @@ type pool struct {
 	rate     int64     // bytes per second through this pool, recent window
 	claims   int       // peer's "exhausted" claims we paid for against our own metering
 	claimAt  time.Time // when we last paid for one
+	wiped    bool      // a claim reset our estimate and the top-up it owes is not yet paid
+	claimLog time.Time // when we last logged an ignored claim (once a minute at most)
 }
 
 // homeLink is a home node's outbound tunnel that we accept circuits into.
@@ -1418,7 +1420,7 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 				if s.recentTopUp(rel) {
 					msg = "next hop: pool is warming up; retry shortly"
 				} else {
-					s.poolExhausted(rel)
+					s.poolExhausted(rel, tag)
 					msg = "next hop: pool is warming up; retry shortly"
 				}
 			case strings.Contains(p, "warming up") || strings.Contains(p, "not yet confirmed") || strings.Contains(p, "try again"):
@@ -1448,6 +1450,7 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 			batch := readMore(conn, []*wire.Cell{first}, 64)
 			s.meterPool(c.poolAcct, int64(len(batch))*wire.CellSize)
 			out := make([]*wire.Cell, 0, len(batch))
+			claimed := false // one "exhausted" claim per batch, however many cells say it
 			for _, cell := range batch {
 				if cell.Cmd == wire.CmdError {
 					// The next hop ended our circuit there. If it says our
@@ -1456,10 +1459,10 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 					// build allowed overdraft, or the peer counted exit bytes):
 					// reset the estimate and top up now so the next circuit
 					// does not keep sending the same spent pool tag.
-					if c.poolAcct != "" && strings.Contains(strings.ToLower(string(cell.Payload)), "exhausted") {
+					if !claimed && c.poolAcct != "" && strings.Contains(strings.ToLower(string(cell.Payload)), "exhausted") {
+						claimed = true
 						if !s.recentTopUp(rel) {
-							log.Printf("downstream %s reports pool exhausted", short(rel.Account))
-							s.poolExhausted(rel)
+							s.poolExhausted(rel, tag)
 						}
 					}
 					continue
@@ -1834,6 +1837,9 @@ type poolFile struct {
 	LastTop  time.Time `json:"last_top"`
 	Credited int64     `json:"credited"`
 	Used     int64     `json:"used"`
+	Claims   int       `json:"claims,omitempty"`
+	ClaimAt  time.Time `json:"claim_at,omitempty"`
+	Wiped    bool      `json:"wiped,omitempty"`
 }
 
 // savePoolsLocked writes the pool table to PoolsFile (caller holds s.mu).
@@ -1843,7 +1849,7 @@ func (s *Server) savePoolsLocked() {
 	}
 	m := map[string]poolFile{}
 	for acct, p := range s.pools {
-		m[acct] = poolFile{p.tag, p.lastTop, p.credited, p.used}
+		m[acct] = poolFile{p.tag, p.lastTop, p.credited, p.used, p.claims, p.claimAt, p.wiped}
 	}
 	data, _ := json.MarshalIndent(m, "", "  ")
 	os.WriteFile(s.PoolsFile, data, 0o600)
@@ -1867,7 +1873,8 @@ func (s *Server) LoadPools() {
 		s.pools = map[string]*pool{}
 	}
 	for acct, p := range m {
-		s.pools[acct] = &pool{tag: p.Tag, lastTop: p.LastTop, credited: p.Credited, used: p.Used}
+		s.pools[acct] = &pool{tag: p.Tag, lastTop: p.LastTop, credited: p.Credited, used: p.Used,
+			claims: p.Claims, claimAt: p.ClaimAt, wiped: p.Wiped}
 	}
 	s.mu.Unlock()
 	log.Printf("%d prepaid pools restored", len(m))
@@ -1990,6 +1997,7 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 	// whose overdraft or exit bytes may have already spent it).
 	p.used = 0
 	p.credited = BytesFor(amount, rateRaw)
+	p.wiped = false
 	s.savePoolsLocked()
 	s.mu.Unlock()
 	log.Printf("pool top-up to %s: %s XNO (%s)", short(rel.Account), formatXNO(amount), h[:8])
@@ -2022,30 +2030,48 @@ func claimBackoff(n int) time.Duration {
 // drifted ahead of the peer's count, so it is paid for, but never soon after
 // a payment and with a per-peer backoff: a peer cannot make us prepay it a
 // new pool every minute by saying so.
-func (s *Server) poolExhausted(rel *RelayInfo) {
+//
+// tag is the pool tag the claim was made against: a claim about a tag we
+// have since replaced with a new payment says nothing about the new pool.
+// While a claim's reset is waiting for its top-up, further claims (more
+// cells of the same batch, other circuits) add nothing: our metering then
+// agrees only because we wiped it, which must not reset the backoff.
+func (s *Server) poolExhausted(rel *RelayInfo, tag string) {
 	s.mu.Lock()
 	p := s.pools[rel.Account]
+	if p != nil && (p.wiped || (tag != "" && !strings.EqualFold(tag, p.tag))) {
+		s.mu.Unlock()
+		return
+	}
 	if p != nil && s.PoolRaw != nil {
 		if p.credited-p.used >= s.poolSize(rel)/4 {
 			wait := claimBackoff(p.claims)
 			if time.Since(p.lastTop) < wait || time.Since(p.claimAt) < wait {
 				left := p.credited - p.used
+				quiet := time.Since(p.claimLog) < time.Minute
+				if !quiet {
+					p.claimLog = time.Now()
+				}
 				s.mu.Unlock()
-				log.Printf("%s claims its pool is exhausted; our metering says %d bytes left: not paying again yet", short(rel.Account), left)
+				if !quiet {
+					log.Printf("%s claims its pool is exhausted; our metering says %d bytes left: not paying again yet", short(rel.Account), left)
+				}
 				return
 			}
 			p.claims++
 			p.claimAt = time.Now()
 		} else {
-			p.claims = 0 // our metering agrees: the peer's claims are honest again
+			p.claims = 0 // our own metering agrees: the peer's claims are honest again
 		}
 	}
 	if p != nil {
 		p.credited = p.used
 		p.lastTop = time.Time{}
+		p.wiped = s.PoolRaw != nil // a top-up is owed (none is ever paid without a pool size)
 		s.savePoolsLocked()
 	}
 	s.mu.Unlock()
+	log.Printf("downstream %s reports pool exhausted; topping up", short(rel.Account))
 	go s.ensurePool(rel)
 }
 
