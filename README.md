@@ -652,4 +652,4 @@ image and the APK, and attaches them to a release with a `.sha256` each.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The vendored Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/`) is Apache-2.0, as its headers state.
