@@ -95,6 +95,9 @@ type Server struct {
 	// is what tied the network to one price level: a peer that charged more
 	// than the pool was sized for was simply never prepaid, and so never used.
 	PoolBytes int64
+	// MaxNextRate is the highest price (REGISTER rate units per MiB) this
+	// relay prepays a next hop at; 0 = five times the live median (pricecap.go).
+	MaxNextRate uint32
 	// MinCredit is the smallest quota a payment may open, in bytes. A payment
 	// that buys less is credited this much anyway, once per paying wallet per
 	// day. It costs the relay a few megabytes and it is what lets an app built
@@ -1359,6 +1362,13 @@ func (s *Server) handleExtend(c *circuit, sid uint16, data []byte) {
 	}
 	var tag string
 	if clientTag == nil {
+		// We pay this hop from our own wallet, at its price: refuse one that
+		// asks far more than the market (a client paying the hop itself, with
+		// a client tag, decides its own price and risks only its own money).
+		if over, capRate := s.overPriced(rel); over {
+			s.reply(c, wire.CmdError, sid, []byte("next hop asks "+rateXNO(rel.MinRate)+" XNO/MiB, over this relay's cap of "+rateXNO(capRate)))
+			return
+		}
 		var ready bool
 		tag, ready = s.poolTag(rel)
 		if !ready {
@@ -1934,6 +1944,16 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 		// panic here would take the whole relay down, not one peer's pool.
 		return "", errors.New("no ledger or no pool size: pools cannot be prepaid")
 	}
+	if over, capRate := s.overPriced(rel); over {
+		// Every prepayment goes through here (extend, refill, WarmPools), so
+		// this is the one place a high price cannot get past.
+		s.mu.Lock()
+		if p := s.pools[rel.Account]; p != nil {
+			p.topping = false
+		}
+		s.mu.Unlock()
+		return "", fmt.Errorf("not prepaid: asks %s XNO/MiB, over this relay's cap of %s", rateXNO(rel.MinRate), rateXNO(capRate))
+	}
 	s.mu.Lock()
 	p := s.pools[rel.Account]
 	s.mu.Unlock()
@@ -1977,7 +1997,9 @@ func (s *Server) topUpPool(rel *RelayInfo) (string, error) {
 			// change may make another operator earn less for the same work).
 			reserve := new(big.Int).Exp(big.NewInt(10), big.NewInt(25), nil) // 0.00001 XNO for the next block itself
 			avail := new(big.Int).Sub(bal, reserve)
-			if avail.Cmp(amount) < 0 {
+			if avail.Sign() > 0 {
+				amount = capTopUp(amount, base, avail)
+			} else {
 				amount = avail
 			}
 			if amount.Sign() <= 0 {
