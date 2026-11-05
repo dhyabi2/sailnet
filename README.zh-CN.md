@@ -641,3 +641,7 @@ ls app/build/outputs/apk/debug/        # app-universal-debug.apk 以及按 ABI �
   `shape/` 流量整形及其测量装置，`cmd/` 二进制程序
 - `android/`、`extension/` 各应用
 - `docker/` 镜像与 compose 文件
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。随仓库附带的 Gradle wrapper（`android/gradlew`、`android/gradlew.bat`、`android/gradle/wrapper/*`）属于 Gradle，按 Apache-2.0 许可证分发。

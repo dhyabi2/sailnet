@@ -650,3 +650,6 @@ image and the APK, and attaches them to a release with a `.sha256` each.
 - `android/`, `extension/` the apps
 - `docker/` image and compose files
 
+## License
+
+MIT, see [LICENSE](LICENSE). The vendored Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/*`) is Gradle's and is distributed under Apache-2.0.
