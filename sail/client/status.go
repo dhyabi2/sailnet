@@ -135,6 +135,11 @@ func (m *manager) ServeStatus(addr string) {
 			return
 		}
 		m.mu.Lock()
+		if m.stopped.Load() {
+			m.mu.Unlock()
+			http.Error(w, "stopped", http.StatusServiceUnavailable)
+			return
+		}
 		if m.cur != nil {
 			m.cur.Close()
 			m.cur = nil
@@ -149,15 +154,16 @@ func (m *manager) ServeStatus(addr string) {
 		return
 	}
 	m.mu.Lock()
-	if m.stopped { // Shutdown ran while this was binding: close at once, own nothing
+	if m.stopped.Load() { // Shutdown ran while this was binding: close at once, own nothing
 		m.mu.Unlock()
 		ln.Close()
 		return
 	}
-	m.statusLn = ln
+	srv := &http.Server{Handler: mux}
+	m.statusSrv, m.statusLn = srv, ln
 	m.mu.Unlock()
 	log.Printf("status endpoint on http://%s/status", addr)
-	http.Serve(ln, mux)
+	srv.Serve(ln) // Shutdown closes both srv and ln, whichever this reached first
 }
 
 // SetExitCC changes the preferred exit country for the next circuit.
