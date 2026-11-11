@@ -609,7 +609,7 @@ type registrar struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
-	listed atomic.Bool // the ledger has carried this relay at some price
+	listed atomic.Bool // the last ledger read showed this exact record at some price
 }
 
 var registration registrar
@@ -647,9 +647,16 @@ func keepRegistered(parent context.Context, listed *atomic.Bool, nc *nano.Client
 		}
 	}()
 	for parent.Err() == nil {
-		exact, onLedger := registered(nc, key, cc, asn, rate, flags, desc)
-		if onLedger {
-			listed.Store(true)
+		exact, sameButPrice, err := registered(parent, nc, key, cc, asn, rate, flags, desc)
+		if parent.Err() != nil {
+			return // a newer price replaced this registration
+		}
+		if err == nil {
+			// Listed means the ledger carries this very record at some
+			// price. A REGISTER without its DESCRIPTOR, or a record from
+			// an earlier run with another descriptor, country, ASN or
+			// flags, is not: the relay is not reachable as it is now.
+			listed.Store(sameButPrice)
 		}
 		if exact {
 			return
@@ -657,21 +664,21 @@ func keepRegistered(parent context.Context, listed *atomic.Bool, nc *nano.Client
 		acct := &nano.Account{Key: key, Client: nc}
 		// Registration may burn CPU for its proof-of-work when no work
 		// service answers, but only while the relay is not yet on the
-		// ledger: a relay that cannot register is invisible — it earns
-		// nothing and serves nobody — and on a box no work service
+		// ledger as it is now: a relay that cannot register is invisible —
+		// it earns nothing and serves nobody — and on a box no work service
 		// reaches, an IPv6-only VPS being the case at hand, the retry
 		// alone would never end. A listed relay changing its price keeps
 		// the strict rule and retries, like every other send.
 		acct.AllowCPU = cpuWorkForRegistration(listed.Load())
 		ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
 		rep, _ := token.Encode(token.Op{Code: token.OpRegister, Aux: token.RegisterAux(cc, asn, rate, flags)})
-		h, err := acct.Send(ctx, client.Treasury, big.NewInt(1), &rep)
+		h, err := sendOp(ctx, acct, &rep)
 		if err == nil {
 			log.Println("REGISTER published", h)
 			op := token.Op{Code: token.OpDescriptor}
 			op.Aux = desc.Encode()
 			rep, _ = token.Encode(op)
-			if h, err = acct.Send(ctx, client.Treasury, big.NewInt(1), &rep); err == nil {
+			if h, err = sendOp(ctx, acct, &rep); err == nil {
 				log.Println("DESCRIPTOR published", h)
 			}
 		}
@@ -686,29 +693,42 @@ func keepRegistered(parent context.Context, listed *atomic.Bool, nc *nano.Client
 		select {
 		case <-parent.Done():
 			return
-		case <-time.After(10 * time.Minute):
+		case <-time.After(registerRetry):
 		}
 	}
 }
+
+// Seams for tests: the ledger read, the registry send and the retry backoff.
+var (
+	ledgerRelay = func(ctx context.Context, nc *nano.Client, addr string) (*token.Relay, error) {
+		st, err := token.NewIndexer(nc, client.Treasury).Run(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return st.Relays[addr], nil
+	}
+	sendOp = func(ctx context.Context, acct *nano.Account, rep *[32]byte) (string, error) {
+		return acct.Send(ctx, client.Treasury, big.NewInt(1), rep)
+	}
+	registerRetry = 10 * time.Minute
+)
 
 // cpuWorkForRegistration: CPU proof-of-work only to get on the ledger the
 // first time, never to change the price of a relay already listed.
 func cpuWorkForRegistration(listed bool) bool { return !listed }
 
 // registered reports whether the ledger carries exactly this record, and
-// whether it carries this relay at all.
-func registered(nc *nano.Client, key *nano.Key, cc string, asn, rate uint32, flags uint16, desc relay.Descriptor) (exact, listed bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+// whether it carries it apart from the price (MinRate); err is set when the
+// ledger could not be read.
+func registered(parent context.Context, nc *nano.Client, key *nano.Key, cc string, asn, rate uint32, flags uint16, desc relay.Descriptor) (exact, sameButPrice bool, err error) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
-	st, err := token.NewIndexer(nc, client.Treasury).Run(ctx)
-	if err != nil {
-		return false, false
+	r, err := ledgerRelay(ctx, nc, key.Address)
+	if err != nil || r == nil {
+		return false, false, err
 	}
-	r := st.Relays[key.Address]
-	if r == nil {
-		return false, false
-	}
-	return r.Country == cc && r.ASN == asn && r.MinRate == rate && r.Flags == flags && r.Descriptor == desc.Encode(), true
+	sameButPrice = r.Country == cc && r.ASN == asn && r.Flags == flags && r.Descriptor == desc.Encode()
+	return sameButPrice && r.MinRate == rate, sameButPrice, nil
 }
 
 // decoyHost derives a stable, ordinary-looking hostname from the relay key.

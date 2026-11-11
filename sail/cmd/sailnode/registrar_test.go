@@ -56,7 +56,12 @@ func TestRegistrarSkipsReplacedBeforeStart(t *testing.T) {
 	var g registrar
 	release := make(chan struct{})
 	var ran atomic.Int32
-	g.start(func(ctx context.Context) { <-ctx.Done(); <-release })
+	firstRunning := make(chan struct{})
+	g.start(func(ctx context.Context) { close(firstRunning); <-ctx.Done(); <-release })
+	// The first must be running before it is replaced: a registration
+	// cancelled before it began returns at once, and the middle one could
+	// then begin before the third start cancels it.
+	<-firstRunning
 	g.start(func(ctx context.Context) { ran.Add(1) })
 	last := make(chan struct{})
 	g.start(func(ctx context.Context) { close(last) })
