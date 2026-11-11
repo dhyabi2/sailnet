@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Sailnet" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <style name="Theme.Sailnet" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#0D9488</item>
+        <item name="colorPrimaryVariant">#0A4F4B</item>
+        <item name="colorSecondary">#14B8A6</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#06080A</item>
+        <item name="android:navigationBarColor">#06080A</item>
+    </style>
+    <style name="Theme.Sailnet.Bar" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
         <item name="colorPrimary">#000000</item>
         <item name="colorPrimaryVariant">#0A4F4B</item>
-        <item name="colorSecondary">#FFFFFF</item>
+        <item name="colorSecondary">#14B8A6</item>
         <item name="colorOnPrimary">#FFFFFF</item>
     </style>
 </resources>

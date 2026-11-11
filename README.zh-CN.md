@@ -157,8 +157,9 @@ Pairing code:  483 920      (valid five minutes, one use)
 
 代码可以加限制：`sailnode pair --until <unix 时间> --wallet nano_…`
 只配对该钱包，并且只到那个时间为止——到时 relay 不再免费承载它，
-已开启的线路也一样（Lite 网关就是这样生成代码的）。
+已开启的线路也一样。
 `sailnode unpair nano_…` 在一分钟内结束一个已配对钱包的免费使用。
+（使用这些功能的 Lite 网关和应用代码位于私有仓库 sailnet-lite 中。）
 
 然后选择如何使用你的 relay——设置 → **Network**：
 
@@ -646,3 +647,7 @@ ls app/build/outputs/apk/debug/        # app-universal-debug.apk 以及按 ABI �
   `shape/` 流量整形及其测量装置，`cmd/` 二进制程序
 - `android/`、`extension/` 各应用
 - `docker/` 镜像与 compose 文件
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。随仓库附带的 Gradle wrapper（`android/gradlew`、`android/gradlew.bat`、`android/gradle/wrapper/*`）属于 Gradle，按 Apache-2.0 许可证分发。

@@ -68,6 +68,12 @@ type Account struct {
 	Key    *Key
 	Client *Client
 	State  *ChainState // optional cache: lets the account sign blocks while no node is reachable
+	// AllowCPU lets this account alone brute-force proof-of-work on the
+	// local CPU when no work service answers, even where the process-wide
+	// AllowCPUWork is off (a relay). Used by registration: a relay that
+	// cannot register is invisible, and on a box no work service reaches
+	// (an IPv6-only VPS) nothing else will ever list it.
+	AllowCPU bool
 }
 
 // PublishError reports a block that was signed (and its hash and content are
@@ -126,7 +132,7 @@ func (a *Account) work(ctx context.Context, root [32]byte, threshold uint64) (st
 		RememberWork(root, w)
 		return w, nil
 	}
-	if !AllowCPUWork {
+	if !AllowCPUWork && !a.AllowCPU {
 		return "", errors.New("proof-of-work service unavailable; retry later")
 	}
 	w := GenerateWorkCPU(root, threshold)

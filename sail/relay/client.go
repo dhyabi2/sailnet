@@ -635,15 +635,30 @@ func (c *Circuit) Ping(timeout time.Duration) int {
 			c.pingErr.Store("send: " + err.Error())
 			return i
 		}
-		m, err := c.waitCtl(wire.CmdPong, timeout)
-		if err != nil {
-			c.pingErr.Store("wait: " + err.Error())
-			return i
+		t := time.NewTimer(timeout)
+		ok := false
+		for !ok {
+			select {
+			case m := <-c.ctl:
+				if m.cmd == wire.CmdPong {
+					if m.hop == i {
+						ok = true
+					}
+					// A late pong from an earlier hop (or an earlier Ping round)
+					// is dropped so we still wait for hop i's own answer.
+					continue
+				}
+				if m.cmd == wire.CmdError {
+					t.Stop()
+					c.pingErr.Store(fmt.Sprintf("hop %d: %s", m.hop, m.data))
+					return i
+				}
+			case <-t.C:
+				c.pingErr.Store("wait: timeout")
+				return i
+			}
 		}
-		if m.hop != i {
-			c.pingErr.Store(fmt.Sprintf("pong from hop %d, wanted %d", m.hop, i))
-			return i
-		}
+		t.Stop()
 	}
 	return -1
 }
@@ -714,6 +729,8 @@ func (c *Circuit) Open(target string, timeout time.Duration) (*Stream, error) {
 			return nil, err
 		}
 		return st, nil
+	case <-st.done:
+		return nil, errors.New("circuit closed")
 	case <-time.After(timeout):
 		c.send(wire.CmdEnd, id, nil)
 		return nil, errors.New("connect timeout through exit")
@@ -743,29 +760,32 @@ func (s *Stream) Read(p []byte) (int, error) {
 	if !s.flow {
 		return s.pr.Read(p)
 	}
+	var totalCredit uint32
 	if len(s.rbuf) == 0 {
 		d, credit := s.rx.pop() // blocks; nil once the stream ended and the queue is empty
 		if d == nil {
 			return 0, io.EOF
 		}
 		s.rbuf = d
-		if credit > 0 {
-			var b [4]byte
-			binary.BigEndian.PutUint32(b[:], credit)
-			s.c.send(wire.CmdCredit, s.id, b[:])
-		}
+		totalCredit += credit
 	}
 	n := copy(p, s.rbuf)
 	s.rbuf = s.rbuf[n:]
 	// Fill the rest of p from cells already queued: fewer, larger reads.
 	for len(s.rbuf) == 0 && n < len(p) {
-		d := s.rx.tryPop()
+		d, credit := s.rx.tryPop()
+		totalCredit += credit
 		if d == nil {
 			break
 		}
 		k := copy(p[n:], d)
 		s.rbuf = d[k:]
 		n += k
+	}
+	if totalCredit > 0 {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], totalCredit)
+		s.c.send(wire.CmdCredit, s.id, b[:])
 	}
 	return n, nil
 }

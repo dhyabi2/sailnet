@@ -22,6 +22,10 @@ class SettingsActivity : AppCompatActivity() {
     class Fragment : PreferenceFragmentCompat() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.prefs, rootKey)
+            findPreference<androidx.preference.Preference>("intro_tour")?.setOnPreferenceClickListener {
+                startActivity(android.content.Intent(requireContext(), IntroActivity::class.java))
+                true
+            }
             // Exit exclusion: the choices are the countries of the relays this
             // client knows, so the user picks from real options, never types.
             findPreference<androidx.preference.Preference>("wallet_backup")?.setOnPreferenceClickListener { showBackup(); true }
