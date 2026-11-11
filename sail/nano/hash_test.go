@@ -36,7 +36,10 @@ func TestBlockHashMatchesNode(t *testing.T) {
 	}
 	t.Log("hash ok", v.Hash)
 	// work check: receive-difficulty CPU work must validate locally
-	w := GenerateWorkCPU(h, ReceiveThreshold)
+	w, err := GenerateWorkCPU(context.Background(), h, ReceiveThreshold)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ValidWork(h, w, ReceiveThreshold) {
 		t.Fatal("cpu work invalid")
 	}

@@ -75,6 +75,7 @@ func RememberWork(root [32]byte, work string) {
 		workCache.m = map[string]string{} // simple garbage collection, as NanChat does
 	}
 	workCache.m[hexUpper(root[:])] = work
+	dropWorkProgress(root)
 	if b, err := json.Marshal(workCache.m); err == nil {
 		os.WriteFile(workCachePath(), b, 0o600)
 	}
