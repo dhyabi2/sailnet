@@ -17,12 +17,14 @@ import (
 // lookups shares it. The resolver or the exit closing the idle connection
 // only means the next lookup opens a new one.
 type dnsPipe struct {
-	mu      sync.Mutex // conn, waiters, nextID
-	wmu     sync.Mutex // one query on the wire at a time; never held with mu, so an answer can always be dispatched
-	open    func() (io.ReadWriteCloser, error)
-	conn    io.ReadWriteCloser
-	waiters map[uint16]chan []byte
-	nextID  uint16
+	mu       sync.Mutex // conn, opening, openCond, waiters, nextID
+	wmu      sync.Mutex // one query on the wire at a time; never held with mu, so an answer can always be dispatched
+	open     func() (io.ReadWriteCloser, error)
+	conn     io.ReadWriteCloser
+	opening  bool
+	openCond *sync.Cond
+	waiters  map[uint16]chan []byte
+	nextID   uint16
 }
 
 func newDNSPipe(open func() (io.ReadWriteCloser, error)) *dnsPipe {
@@ -37,14 +39,35 @@ func (p *dnsPipe) resolve(q []byte, timeout time.Duration) ([]byte, error) {
 		return nil, errors("dns: short query")
 	}
 	p.mu.Lock()
-	if p.conn == nil {
+	for {
+		if p.conn != nil {
+			break
+		}
+		if p.opening {
+			if p.openCond == nil {
+				p.openCond = sync.NewCond(&p.mu)
+			}
+			p.openCond.Wait()
+			continue
+		}
+		p.opening = true
+		p.mu.Unlock()
 		c, err := p.open()
+		p.mu.Lock()
+		p.opening = false
 		if err != nil {
+			if p.openCond != nil {
+				p.openCond.Broadcast()
+			}
 			p.mu.Unlock()
 			return nil, err
 		}
 		p.conn = c
+		if p.openCond != nil {
+			p.openCond.Broadcast()
+		}
 		go p.read(c)
+		break
 	}
 	conn := p.conn
 	p.nextID++
@@ -79,6 +102,7 @@ func (p *dnsPipe) resolve(q []byte, timeout time.Duration) ([]byte, error) {
 	case <-time.After(timeout):
 		p.mu.Lock()
 		delete(p.waiters, id)
+		p.drop(conn) // a connection that stops answering is replaced on the next lookup
 		p.mu.Unlock()
 		return nil, errors("dns: timeout through the circuit")
 	}

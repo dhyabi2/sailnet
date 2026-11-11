@@ -121,7 +121,8 @@ earnings. `sailnode relay -h` lists every flag; the useful ones:
 | `--payout-keep 0.5` | XNO kept on the node as float for prepaying the next hop; everything above it is forwarded. Left unset it sizes itself: what eight pool top-ups cost at the peers' published prices. It follows what prepaying actually costs, and raising your own `--rate` does not move it — what you charge should not decide when you get paid |
 | `--rate 0.0005` | starting price in XNO per MiB (about $0.20 per GB); `--reprice` adjusts it to demand every 10 days: down 10% when usage falls, up 3% when it grows, never above four times the start. Changing this flag overrides whatever demand had done to the price |
 | `--min-rate 0.0002` | the price floor `--reprice` may never go under (default: a quarter of `--rate`). Set it to what serving a MiB actually costs you and the price looks after itself from then on |
-| `--pool-mib 32` | MiB of service each prepayment to the next hop buys, at that relay's own published price. Sized in service rather than in XNO, so a relay that charges more is still prepaid rather than quietly skipped |
+| `--pool-mib 32` | MiB of service each prepayment to the next hop buys, at that relay's own published price. Sized in service rather than in XNO, so a relay that charges more is still prepaid rather than quietly skipped, up to `--max-next-rate`. One prepayment never takes more than half of the node's spendable balance (but always at least one pool) |
+| `--max-next-rate` | Highest XNO per MiB this relay prepays a next hop at. Default: five times the live median price, the same cap clients use. A hop asking more is neither extended to nor prepaid, so a relay registered at an absurd price cannot empty your wallet |
 | `--min-credit-mib 10` | the smallest quota one payment may open, granted once per paying wallet per day. It keeps an app built against an older, cheaper price usable on your relay instead of leaving it to re-anchor in a loop; `0` turns it off |
 | `--host relay.example.org --acme` | a real domain and an automatic Let's Encrypt certificate |
 | `--listen :443,:8443` | extra ports, printed as bridge lines |
@@ -155,6 +156,12 @@ a circuit to it and sends the code inside; the relay records the wallet that
 paid as an owner. A relay that has no owner yet prints a code by itself when
 it starts (`docker logs sailnet` shows it). On the command line the same is
 `sailnode pair-relay nano_<relay> 483920`, then `--mine nano_<relay>`.
+
+A code can be limited: `sailnode pair --until <unix time> --wallet nano_…`
+pairs only that wallet, and only until then — the relay stops carrying it
+free at that time, open circuits included. `sailnode unpair nano_…` ends a
+paired wallet's free access within a minute. (The Lite gate and app wiring
+that uses this lives in the private sailnet-lite repository.)
 
 Then choose how your relays are used — Settings → **Network**:
 
@@ -649,3 +656,6 @@ image and the APK, and attaches them to a release with a `.sha256` each.
 - `android/`, `extension/` the apps
 - `docker/` image and compose files
 
+## License
+
+MIT, see [LICENSE](LICENSE). The vendored Gradle wrapper (`android/gradlew`, `android/gradlew.bat`, `android/gradle/wrapper/*`) is Gradle's and is distributed under Apache-2.0.

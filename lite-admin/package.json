@@ -1,9 +1,0 @@
-{
-  "name": "sailnet-lite-admin",
-  "private": true,
-  "version": "0.1.0",
-  "engines": { "node": "22.x" },
-  "dependencies": {
-    "@vercel/blob": "^2.0.0"
-  }
-}

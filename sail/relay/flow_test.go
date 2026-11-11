@@ -106,3 +106,53 @@ func TestWindowedStreams(t *testing.T) {
 	}
 	stA.Close()
 }
+
+func TestTryPopReturnsCreditOnLargeReads(t *testing.T) {
+	q := newCellQueue()
+	for i := 0; i < wire.StreamWindow; i++ {
+		if !q.push([]byte("x")) {
+			t.Fatalf("push %d failed", i)
+		}
+	}
+	// One blocking pop followed by tryPop for the rest of the window must
+	// grant credit at the quarter-window threshold, not swallow it.
+	_, c0 := q.pop()
+	total := c0
+	for {
+		d, c := q.tryPop()
+		total += c
+		if d == nil {
+			break
+		}
+	}
+	if total < uint32(wire.StreamWindow) {
+		t.Fatalf("draining a full window via tryPop returned %d credit, want at least %d", total, wire.StreamWindow)
+	}
+}
+
+func TestPingSkipsStalePongFromEarlierHop(t *testing.T) {
+	reg := &Registry{}
+	var infos []*RelayInfo
+	for i := 0; i < 2; i++ {
+		s, ri, _ := startRelay(t, reg, i+40, i == 1)
+		s.Quota.Credit("50494E475354414C45544553545041594D454E54484153483030303030303030", 50<<20, "")
+		if i == 1 {
+			s.Quota.Credit(PoolTag(infos[0].Account, ri.Account), 50<<20, "")
+		}
+		infos = append(infos, ri)
+	}
+	var tag [32]byte
+	hex.Decode(tag[:], []byte("50494E475354414C45544553545041594D454E54484153483030303030303030"))
+	c, err := Build(infos, tag, 10*time.Second, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// Leave a stale pong from hop 1 in ctl before Ping starts: hop 0's ping
+	// must skip it and wait for hop 0's own pong instead of failing with
+	// "pong from hop 1, wanted 0".
+	c.ctl <- ctlMsg{hop: 1, cmd: wire.CmdPong}
+	if bad := c.Ping(5 * time.Second); bad != -1 {
+		t.Fatalf("Ping failed at hop %d (%s) because of a stale pong", bad, c.PingErr())
+	}
+}

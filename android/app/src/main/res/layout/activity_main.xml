@@ -1,205 +1,683 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#06080A"
     android:fillViewport="true">
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="18dp">
 
+        <!-- Top Header Bar -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:gravity="center_vertical">
-            <TextView
+            android:paddingBottom="6dp">
+
+            <ImageView
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:contentDescription="@string/app_name"
+                android:src="@drawable/ic_sail" />
+
+            <LinearLayout
                 android:layout_width="0dp"
-                android:layout_weight="1"
                 android:layout_height="wrap_content"
-                android:text="@string/app_name"
-                android:textSize="26sp"
-                android:textStyle="bold" />
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/headerTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.14"
+                    android:text="SAILNET"
+                    android:textColor="#FFFFFF"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/headerSub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Onion VPN · Paid in XNO"
+                    android:textColor="#14B8A6"
+                    android:textSize="11.5sp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/introBtn"
+                style="?attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="38dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:text="Guide"
+                android:textAllCaps="false"
+                android:textColor="#5EEAD4"
+                android:textSize="13sp" />
+
             <Button
                 android:id="@+id/settings"
                 style="?attr/borderlessButtonStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Settings" />
+                android:layout_height="38dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="6dp"
+                android:text="Settings"
+                android:textAllCaps="false"
+                android:textColor="#CBD5E1"
+                android:textSize="13sp" />
         </LinearLayout>
 
+        <!-- Hero Connection & Circuit Card -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardCornerRadius="12dp"
-            xmlns:app="http://schemas.android.com/apk/res-auto">
+            android:layout_marginTop="8dp"
+            app:cardBackgroundColor="#0F172A"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#1E293B"
+            app:strokeWidth="1dp">
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:padding="20dp">
-                <TextView
-                    android:id="@+id/status"
-                    android:layout_width="wrap_content"
+
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Disconnected"
-                    android:textSize="24sp"
-                    android:textStyle="bold" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:id="@+id/statusDot"
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:background="#64748B" />
+
+                    <TextView
+                        android:id="@+id/status"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:text="Disconnected"
+                        android:textColor="#FFFFFF"
+                        android:textSize="23sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/modeBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="#132A2E"
+                        android:paddingStart="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="10dp"
+                        android:paddingBottom="4dp"
+                        android:text="3 HOPS"
+                        android:textColor="#5EEAD4"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
                 <TextView
                     android:id="@+id/statusDetail"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="6dp"
+                    android:lineSpacingMultiplier="1.2"
                     android:text="Tap Connect to route this device through Sailnet."
-                    android:textSize="14sp" />
+                    android:textColor="#94A3B8"
+                    android:textSize="13.5sp" />
+
                 <Button
                     android:id="@+id/toggle"
                     android:layout_width="match_parent"
                     android:layout_height="56dp"
                     android:layout_marginTop="16dp"
+                    android:backgroundTint="#0D9488"
                     android:text="Connect"
-                    android:textSize="16sp" />
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:text="Circuit"
-                    android:textAllCaps="true"
-                    android:textSize="11sp" />
-                <TextView
-                    android:id="@+id/path"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:text="—"
-                    android:textSize="13sp" />
-                <TextView
-                    android:id="@+id/traffic"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:fontFamily="monospace"
-                    android:text="↑ 0 B   ↓ 0 B"
-                    android:textSize="12sp" />
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <!-- Live Circuit Route Box -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
-                    <Button android:id="@+id/newExit" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="New exit" />
-                    <Button android:id="@+id/relays" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="Relays" />
-                    <Button android:id="@+id/log" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="2dp" android:paddingEnd="2dp" android:textSize="12sp" android:maxLines="1" android:text="Log" />
+                    android:layout_marginTop="16dp"
+                    android:background="#090D14"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.12"
+                        android:text="ACTIVE CIRCUIT PATH"
+                        android:textColor="#14B8A6"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/path"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:fontFamily="monospace"
+                        android:text="—"
+                        android:textColor="#F8FAFC"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/traffic"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="monospace"
+                        android:lineSpacingMultiplier="1.2"
+                        android:text="↑ 0 B   ↓ 0 B"
+                        android:textColor="#94A3B8"
+                        android:textSize="11.5sp" />
+                </LinearLayout>
+
+                <!-- Circuit Quick Actions -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/newExit"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="2dp"
+                        android:paddingEnd="2dp"
+                        android:text="New Exit"
+                        android:textAllCaps="false"
+                        android:textColor="#5EEAD4"
+                        android:textSize="12.5sp" />
+
+                    <Button
+                        android:id="@+id/relays"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="2dp"
+                        android:paddingEnd="2dp"
+                        android:text="Relays"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12.5sp" />
+
+                    <Button
+                        android:id="@+id/log"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="2dp"
+                        android:paddingEnd="2dp"
+                        android:text="Live Log"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12.5sp" />
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- All Available Options Cockpit Grid (2x2 + Tour Banner) -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:layout_marginBottom="8dp"
+            android:letterSpacing="0.12"
+            android:text="ALL OPTIONS &amp; CONTROLS"
+            android:textColor="#14B8A6"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <!-- Card 1: Network Mode & My Relay -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/optModeCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:clickable="true"
+                android:focusable="true"
+                app:cardBackgroundColor="#0F172A"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#1E293B"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Network &amp; My Relay"
+                        android:textColor="#FFFFFF"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/optModeVal"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="My relays · 3 hops"
+                        android:textColor="#5EEAD4"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Card 2: Exit Country Exclusion -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/optExcludeCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:clickable="true"
+                android:focusable="true"
+                app:cardBackgroundColor="#0F172A"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#1E293B"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Exit Countries"
+                        android:textColor="#FFFFFF"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/optExcludeVal"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="All allowed"
+                        android:textColor="#94A3B8"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <!-- Card 3: Share Hotspot -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/optShareCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:clickable="true"
+                android:focusable="true"
+                app:cardBackgroundColor="#0F172A"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#1E293B"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Share Hotspot"
+                        android:textColor="#FFFFFF"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/optShareVal"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Off"
+                        android:textColor="#94A3B8"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Card 4: Bridges & Screen-Off -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/optBridgesCard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:clickable="true"
+                android:focusable="true"
+                app:cardBackgroundColor="#0F172A"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#1E293B"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Bridges &amp; Idle"
+                        android:textColor="#FFFFFF"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/optBridgesVal"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="3 built-in · Idle on"
+                        android:textColor="#94A3B8"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+        </LinearLayout>
+
+        <!-- Update Notice Card -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/updateCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:visibility="gone"
+            app:cardBackgroundColor="#132A2E"
             app:cardCornerRadius="12dp"
-            xmlns:app="http://schemas.android.com/apk/res-auto">
+            app:cardElevation="0dp"
+            app:strokeColor="#0D9488"
+            app:strokeWidth="1dp">
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp">
+                android:padding="16dp">
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Update available"
-                    android:textSize="18sp"
+                    android:textColor="#5EEAD4"
+                    android:textSize="16sp"
                     android:textStyle="bold" />
+
                 <TextView
                     android:id="@+id/updateText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:textSize="14sp" />
-                <Button android:id="@+id/update" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Download" />
+                    android:textColor="#E2E8F0"
+                    android:textSize="13.5sp" />
+
+                <Button
+                    android:id="@+id/update"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Download Update"
+                    android:textAllCaps="false"
+                    android:textColor="#5EEAD4" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- Fund This Wallet Card (shown when balance is low/empty) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/fundCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            app:cardCornerRadius="12dp"
-            xmlns:app="http://schemas.android.com/apk/res-auto">
+            app:cardBackgroundColor="#0F172A"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#1E293B"
+            app:strokeWidth="1dp">
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp">
+                android:padding="18dp">
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Fund this wallet"
-                    android:textSize="18sp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="17sp"
                     android:textStyle="bold" />
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:text="Relays are paid in XNO per megabyte. 0.01 XNO lasts weeks. Scan or copy the address from any Nano wallet."
-                    android:textSize="14sp" />
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="Get XNO: free from a faucet, or buy on an exchange. Links open in your browser."
-                    android:textSize="14sp" />
+                    android:textColor="#94A3B8"
+                    android:textSize="13.5sp" />
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
                     android:orientation="horizontal">
-                    <Button android:id="@+id/faucets" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Free faucets" />
-                    <Button android:id="@+id/binance" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Binance" />
-                    <Button android:id="@+id/kraken" style="?attr/borderlessButtonStyle" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minWidth="0dp" android:paddingStart="4dp" android:paddingEnd="4dp" android:textSize="12sp" android:maxLines="1" android:text="Kraken" />
+
+                    <Button
+                        android:id="@+id/faucets"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Free faucets"
+                        android:textAllCaps="false"
+                        android:textColor="#5EEAD4"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/binance"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Binance"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/kraken"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:maxLines="1"
+                        android:minWidth="0dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:text="Kraken"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12sp" />
                 </LinearLayout>
+
                 <ImageView
                     android:id="@+id/qr"
-                    android:layout_width="200dp"
-                    android:layout_height="200dp"
+                    android:layout_width="180dp"
+                    android:layout_height="180dp"
                     android:layout_gravity="center"
-                    android:layout_marginTop="12dp"
-                    android:contentDescription="Wallet QR code" />
+                    android:layout_marginTop="10dp"
+                    android:background="#FFFFFF"
+                    android:contentDescription="Wallet QR code"
+                    android:padding="6dp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Wallet"
-            android:textAllCaps="true"
-            android:textSize="11sp" />
-        <TextView
-            android:id="@+id/address"
+        <!-- Self-Custody Wallet Card -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textIsSelectable="true"
-            android:textSize="12sp" />
-        <TextView
-            android:id="@+id/balance"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="—"
-            android:textSize="16sp" />
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-            <Button android:id="@+id/copy" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Copy" />
-            <Button android:id="@+id/share" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Share" />
-            <Button android:id="@+id/refresh" style="?attr/borderlessButtonStyle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Refresh" />
-        </LinearLayout>
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="16dp"
+            app:cardBackgroundColor="#0F172A"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#1E293B"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:letterSpacing="0.12"
+                        android:text="WALLET"
+                        android:textColor="#14B8A6"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/balance"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/address"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="monospace"
+                    android:textColor="#94A3B8"
+                    android:textIsSelectable="true"
+                    android:textSize="11.5sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/copy"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="38dp"
+                        android:layout_weight="1"
+                        android:minWidth="0dp"
+                        android:text="Copy"
+                        android:textAllCaps="false"
+                        android:textColor="#5EEAD4"
+                        android:textSize="12.5sp" />
+
+                    <Button
+                        android:id="@+id/share"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="38dp"
+                        android:layout_weight="1"
+                        android:minWidth="0dp"
+                        android:text="Share"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12.5sp" />
+
+                    <Button
+                        android:id="@+id/refresh"
+                        style="?attr/borderlessButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="38dp"
+                        android:layout_weight="1"
+                        android:minWidth="0dp"
+                        android:text="Refresh"
+                        android:textAllCaps="false"
+                        android:textColor="#CBD5E1"
+                        android:textSize="12.5sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
 </ScrollView>

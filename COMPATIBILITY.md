@@ -276,3 +276,42 @@ If the answer is no, the change does not ship, whatever it improves.
   ledger's state after that) until a ledger read agreeing with its frontier
   records the height. A read agreeing with the cached frontier only ever raises the
   recorded height, never lowers it.
+- **2026-10-13, paired owners can end: `pair --until --wallet`, `unpair`.**
+  A pairing code can carry an end time and be bound to one wallet; the relay
+  stops carrying that wallet free at the end time, and `sailnode unpair
+  nano_…` ends it sooner. Open circuits on an ended owner tag stop within a
+  minute (the relay sweeps its owners once a minute). The gate and app wiring
+  that uses this (`--until`/`--wallet`, the `Pairing bound:` check,
+  `repair: true`, unpair on revoke) lives in the private sailnet-lite
+  repository.
+  - *Files.* `owners.json` gains an optional `expires` map, `{hex: unix}`, next
+    to the `owners` list; an owner missing from it rides free for good, which
+    is what every file an older relay wrote means. `pairing.json` gains
+    optional `owner_expires` (unix) and `wallet` (hex public key). Both files
+    are now replaced atomically (temporary file and rename), and every
+    read-modify-write of them, by the relay or by `sailnode pair` / `unpair`,
+    holds an exclusive lock on `owners.json.lock` / `pairing.json.lock` next
+    to them, so `unpair` is never written back by a pairing or a sweep. The
+    lock files are harmless to an older build. On Solaris, illumos, AIX and
+    Windows there is no flock and the lock is skipped.
+  - *CLI.* `sailnode pair --until <unix> --wallet nano_…` (both optional;
+    without them a code pairs any wallet for good, as before) also prints a
+    fixed line, `Pairing bound: wallet=<nano_…|any> until=<unix|0>`.
+    `sailnode unpair nano_…` is new.
+  - *Old relay, new caller.* An old `sailnode pair` ignores the flags and
+    mints a code that pairs any wallet for good; it prints no `Pairing
+    bound:` line, which is how a caller tells it apart. An old relay has no
+    `unpair` either. Upgrade the relay before anything that relies on these.
+  - *New relay, old caller.* `sailnode pair` with no flags gives what it
+    always gave: a code that pairs any wallet for good.
+  - *Wallets paired before this* have no end time and stay owners for good.
+    They are not migrated; the operator runs `sailnode unpair nano_…` on the
+    relay for any that should end, and the wallet can pair again with a
+    bounded code.
+  - *Rollback.* An older relay reads `owners.json` as a plain list and ignores
+    `expires`: every end-timed owner becomes a permanent one. It also ignores
+    the wallet binding of an active code. After downgrading, remove such
+    owners by editing `owners.json` by hand.
+  - *Known limit.* `pairing.json` holds one code. A second `sailnode pair`
+    within its five minutes overwrites the first, and the first code then
+    fails.

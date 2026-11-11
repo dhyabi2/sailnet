@@ -111,7 +111,67 @@ func TestDNSPipeReopensAfterTheResolverHangsUp(t *testing.T) {
 	if err := ask(); err != nil {
 		t.Fatalf("after the resolver hung up the pipe must reopen: %v", err)
 	}
+	if opens.Load() < 2 {
+		t.Fatalf("expected at least 2 connections, got %d", opens.Load())
+	}
+}
+
+func TestDNSPipeDropsHungConnectionAndConcurrentOpenersWait(t *testing.T) {
+	var opens atomic.Int32
+	var hang atomic.Bool
+	p := newDNSPipe(func() (io.ReadWriteCloser, error) {
+		opens.Add(1)
+		time.Sleep(30 * time.Millisecond)
+		a, b := net.Pipe()
+		go func() {
+			defer b.Close()
+			for {
+				var hdr [2]byte
+				if _, err := io.ReadFull(b, hdr[:]); err != nil {
+					return
+				}
+				q := make([]byte, binary.BigEndian.Uint16(hdr[:]))
+				if _, err := io.ReadFull(b, q); err != nil {
+					return
+				}
+				if hang.Load() {
+					continue // swallow without answering
+				}
+				q[2] |= 0x80
+				msg := make([]byte, 2+len(q))
+				binary.BigEndian.PutUint16(msg, uint16(len(q)))
+				copy(msg[2:], q)
+				b.Write(msg)
+			}
+		}()
+		return a, nil
+	})
+	// Ten concurrent lookups on a cold pipe must open one stream, not ten.
+	done := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			_, err := p.resolve(query(uint16(i+1), 'a'), 2*time.Second)
+			done <- err
+		}(i)
+	}
+	for i := 0; i < 10; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if opens.Load() != 1 {
+		t.Fatalf("10 concurrent lookups opened %d streams, want 1", opens.Load())
+	}
+	// A query that times out drops the hung connection so the next query gets a fresh one.
+	hang.Store(true)
+	if _, err := p.resolve(query(99, 'z'), 80*time.Millisecond); err == nil {
+		t.Fatal("expected timeout")
+	}
+	hang.Store(false)
+	if _, err := p.resolve(query(100, 'z'), 2*time.Second); err != nil {
+		t.Fatalf("pipe did not recover after timeout: %v", err)
+	}
 	if opens.Load() != 2 {
-		t.Fatalf("expected 2 connections, got %d", opens.Load())
+		t.Fatalf("expected a second connection after timeout, got %d", opens.Load())
 	}
 }
